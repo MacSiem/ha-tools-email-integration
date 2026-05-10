@@ -1,0 +1,94 @@
+send:
+  name: Send email
+  description: Send an email via built-in SMTP (no HA notify integration required)
+  fields:
+    to:
+      name: Recipients
+      description: Comma-separated email addresses
+      required: true
+      example: "user@example.com, other@example.com"
+      selector:
+        text:
+    subject:
+      name: Subject
+      description: Email subject line
+      required: true
+      example: "HA Tools Report"
+      selector:
+        text:
+    body:
+      name: Body
+      description: Email body (plain text)
+      required: true
+      selector:
+        text:
+          multiline: true
+    html:
+      name: HTML Body
+      description: Optional HTML body (overrides plain text body in email clients that support HTML)
+      selector:
+        text:
+          multiline: true
+
+test:
+  name: Test SMTP connection
+  description: Send a test email to verify SMTP settings
+
+save_config:
+  name: Save SMTP configuration
+  description: Save SMTP server settings to disk
+  fields:
+    server:
+      name: SMTP Server
+      description: SMTP server hostname
+      required: true
+      example: "smtp.gmail.com"
+      selector:
+        text:
+    port:
+      name: Port
+      description: SMTP server port
+      required: true
+      example: 587
+      selector:
+        number:
+          min: 1
+          max: 65535
+    username:
+      name: Username
+      description: SMTP login username
+      required: true
+      selector:
+        text:
+    password:
+      name: Password
+      description: SMTP login password or app password
+      required: true
+      selector:
+        text:
+    sender:
+      name: Sender
+      description: Sender email address (From field)
+      required: true
+      selector:
+        text:
+    encryption:
+      name: Encryption
+      description: "Encryption type: starttls, ssl, or none"
+      required: true
+      default: "starttls"
+      selector:
+        select:
+          options:
+            - "starttls"
+            - "ssl"
+            - "none"
+    default_recipient:
+      name: Default Recipient
+      description: Default recipient email (used when no 'to' specified in send)
+      selector:
+        text:
+
+get_config:
+  name: Get SMTP configuration
+  description: Returns current SMTP settings (password masked)

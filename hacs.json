@@ -1,0 +1,6 @@
+{
+  "name": "HA Tools Email",
+  "country": "all",
+  "homeassistant": "2024.1.0",
+  "render_readme": true
+}
