@@ -1,0 +1,14 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HA Tools Email",
+        "description": "Registers HA Tools Email. SMTP settings are saved through the existing services or HA Tools cards, and server-side schedules can be managed through the websocket API."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Only a single instance of this integration is allowed.",
+      "already_configured": "HA Tools Email is already configured."
+    }
+  }
+}

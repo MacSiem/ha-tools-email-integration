@@ -1,11 +1,19 @@
 {
   "domain": "ha_tools_email",
   "name": "HA Tools Email",
+  "codeowners": [
+    "@MacSiem"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "recorder",
+    "system_log",
+    "websocket_api"
+  ],
   "documentation": "https://github.com/MacSiem/ha-tools-email-integration",
+  "integration_type": "service",
+  "iot_class": "calculated",
   "issue_tracker": "https://github.com/MacSiem/ha-tools-email-integration/issues",
-  "version": "1.0.0",
-  "codeowners": ["@MacSiem"],
-  "config_flow": false,
-  "iot_class": "cloud_push",
-  "requirements": []
+  "requirements": [],
+  "version": "2.0.0"
 }

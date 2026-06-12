@@ -1,0 +1,14 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HA Tools Email",
+        "description": "Rejestruje integracje HA Tools Email. Ustawienia SMTP sa zapisywane przez istniejace uslugi albo karty HA Tools, a harmonogramy po stronie serwera mozna obslugiwac przez websocket API."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Dozwolona jest tylko jedna instancja tej integracji.",
+      "already_configured": "HA Tools Email jest juz skonfigurowany."
+    }
+  }
+}

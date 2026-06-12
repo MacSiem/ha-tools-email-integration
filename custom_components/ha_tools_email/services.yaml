@@ -92,3 +92,7 @@ save_config:
 get_config:
   name: Get SMTP configuration
   description: Returns current SMTP settings (password masked)
+
+list_secrets:
+  name: List secrets
+  description: Returns available secrets.yaml keys without secret values

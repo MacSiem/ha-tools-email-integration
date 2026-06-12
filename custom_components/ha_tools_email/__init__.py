@@ -14,12 +14,22 @@ from email.mime.text import MIMEText
 from pathlib import Path
 
 import voluptuous as vol
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 import homeassistant.helpers.config_validation as cv
 
+from .const import (
+    DATA_SERVICES_REGISTERED,
+    DATA_STORAGE,
+    DATA_WS_REGISTERED,
+    DOMAIN,
+)
+from .scheduler import async_start_scheduler, async_stop_scheduler
+from .storage import EmailStorage
+from .websocket_api import async_register_commands
+
 _LOGGER = logging.getLogger(__name__)
 
-DOMAIN = "ha_tools_email"
 CONFIG_DIR = "ha-tools"
 CONFIG_FILE = "smtp-config.json"
 
@@ -163,6 +173,55 @@ def _send_email(hass: HomeAssistant, cfg: dict, to: str, subject: str, body: str
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up HA Tools Email component."""
+    await _async_ensure_setup(hass)
+    return True
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up HA Tools Email from a config entry."""
+    await _async_ensure_setup(hass)
+    return True
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Unload the config entry."""
+    async_stop_scheduler(hass)
+    return True
+
+
+async def _async_ensure_setup(hass: HomeAssistant) -> None:
+    """Initialize storage, services, websocket API, and scheduler once."""
+    bucket = hass.data.setdefault(DOMAIN, {})
+    storage = await _async_get_storage(hass)
+    bucket["load_config"] = _load_config
+    bucket["send_email"] = _send_email
+
+    await _async_register_services(hass)
+
+    if not bucket.get(DATA_WS_REGISTERED):
+        async_register_commands(hass)
+        bucket[DATA_WS_REGISTERED] = True
+
+    await async_start_scheduler(hass, storage, _load_config, _send_email)
+    _LOGGER.info("HA Tools Email loaded")
+
+
+async def _async_get_storage(hass: HomeAssistant) -> EmailStorage:
+    """Return the Store wrapper, loading it on first use."""
+    bucket = hass.data.setdefault(DOMAIN, {})
+    storage = bucket.get(DATA_STORAGE)
+    if storage is None:
+        storage = EmailStorage(hass)
+        await storage.async_load()
+        bucket[DATA_STORAGE] = storage
+    return storage
+
+
+async def _async_register_services(hass: HomeAssistant) -> None:
+    """Register legacy services used by existing HA Tools cards."""
+    bucket = hass.data.setdefault(DOMAIN, {})
+    if bucket.get(DATA_SERVICES_REGISTERED):
+        return
 
     async def handle_send(call: ServiceCall) -> None:
         """Handle ha_tools_email.send service call."""
@@ -270,4 +329,4 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     )
 
     _LOGGER.info("HA Tools Email loaded — services: send, test, save_config, get_config, list_secrets")
-    return True
+    bucket[DATA_SERVICES_REGISTERED] = True
