@@ -23,6 +23,7 @@ from .const import (
     DATA_STORAGE,
     DATA_WS_REGISTERED,
     DOMAIN,
+    VERSION,
 )
 from .scheduler import async_start_scheduler, async_stop_scheduler
 from .storage import EmailStorage
@@ -248,12 +249,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         from datetime import datetime
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         subject = f"\u2705 HA Tools \u2014 SMTP Test ({now})"
-        body = f"SMTP jest poprawnie skonfigurowany.\nSerwer: {cfg.get('server')}:{cfg.get('port')}\nCzas: {now}"
+        body = f"SMTP is configured correctly.\nServer: {cfg.get('server')}:{cfg.get('port')}\nTime: {now}"
         html = (
             f"<h2 style='color:#10b981'>\u2705 SMTP Test OK</h2>"
-            f"<p>Serwer: <code>{cfg.get('server')}:{cfg.get('port')}</code></p>"
-            f"<p>Czas: {now}</p>"
-            f"<hr><p style='font-size:11px;color:#999'>HA Tools Email v1.0</p>"
+            f"<p>Server: <code>{cfg.get('server')}:{cfg.get('port')}</code></p>"
+            f"<p>Time: {now}</p>"
+            f"<hr><p style='font-size:11px;color:#999'>HA Tools Email v{VERSION}</p>"
         )
 
         await hass.async_add_executor_job(_send_email, hass, cfg, to, subject, body, html)

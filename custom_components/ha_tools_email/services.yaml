@@ -4,8 +4,8 @@ send:
   fields:
     to:
       name: Recipients
-      description: Comma-separated email addresses
-      required: true
+      description: Comma-separated email addresses. Optional — when omitted, the email is sent to the default recipient saved in the SMTP configuration. The call fails if neither is set.
+      required: false
       example: "user@example.com, other@example.com"
       selector:
         text:

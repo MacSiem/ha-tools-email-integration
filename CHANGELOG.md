@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.1
+
+- Fixed `send.to` service documentation: the field is optional (matching the actual service schema) and falls back to the default recipient saved in the SMTP configuration when omitted.
+- Translated the SMTP test email copy from Polish to English.
+- Test email footer now reports the current integration version instead of a hardcoded "v1.0".
+
 ## 2.0.0
 
 - Added a zero-input config flow for UI-based installation.
