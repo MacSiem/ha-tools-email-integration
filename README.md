@@ -2,53 +2,63 @@
 
 ![Preview](banner.png)
 
-Built-in SMTP integration for Home Assistant. It is used by HA Tools email cards and can also send scheduled server-side log and energy reports.
+Built-in SMTP integration for Home Assistant. It sends email for HA Tools
+cards through simple service calls, and it can also compose and send
+scheduled server-side log digests and energy reports — no `notify:` platform
+or external mail relay required.
 
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.1+-blue.svg?logo=homeassistant)](https://www.home-assistant.io/) [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Version](https://img.shields.io/github/v/release/MacSiem/ha-tools-email-integration)](https://github.com/MacSiem/ha-tools-email-integration/releases)
 
-## What It Provides
+Part of the [HA Tools](https://github.com/MacSiem) ecosystem.
 
-The integration keeps the original five services for existing HA Tools cards:
+## How it works
+
+**Short version: add the integration, save SMTP settings once, then send or
+schedule reports.**
+
+1. **Zero-input config flow.** Adding the integration creates a single config
+   entry with no form fields — SMTP credentials are not entered during setup.
+2. **SMTP settings via service call.** Call `ha_tools_email.save_config` (or
+   use the SMTP settings panel inside HA Tools cards, which calls the same
+   service) to persist server, port, username, password, sender and
+   encryption to `<config>/ha-tools/smtp-config.json`. The password field
+   accepts a literal value or an `!secret <key>` reference resolved from
+   `secrets.yaml` at send time.
+3. **Cards send through the existing services.** `ha-log-email` and
+   `ha-energy-email` (in the main HA Tools repo) call
+   `ha_tools_email.get_config`, `ha_tools_email.test` and
+   `ha_tools_email.send` directly — no changes needed for existing cards.
+4. **Server-side scheduling is optional.** Since v2.0.0 you can also store
+   schedules (`log_digest` or `energy_report`, daily/weekly/monthly) through
+   the `ha_tools_email/set_schedule` websocket command. The integration then
+   composes the report from Home Assistant's own `system_log` records or
+   recorder statistics and sends it through the same SMTP path, without any
+   card open in a browser.
+
+### What is automatic vs. manual
+
+| Automatic | Manual |
+|---|---|
+| Config entry creation (no fields to fill in) | Saving SMTP server/port/credentials once |
+| Report composition (log digest, energy report) once scheduled | Creating a schedule via the websocket API |
+| Duplicate-fire prevention across HA restarts | Sending an on-demand report (`send_now` / `send` service) |
+| `!secret` resolution at send time | Adding secrets to `secrets.yaml` |
+
+## Entities
+
+This integration does not create any entities. It is a `service`-type
+integration (`manifest.json` → `"integration_type": "service"`) that exposes
+services and a websocket API only.
+
+## Services
 
 | Service | Purpose |
 |---|---|
 | `ha_tools_email.send` | Send an email to one or many recipients with plain text and optional HTML. |
-| `ha_tools_email.test` | Send a test message to verify SMTP settings. |
+| `ha_tools_email.test` | Send a test message to the configured default recipient/sender to verify SMTP settings. |
 | `ha_tools_email.save_config` | Persist SMTP server, port, credentials, sender, encryption, and default recipient. |
-| `ha_tools_email.get_config` | Return current SMTP settings for existing cards. The password is masked or returned as its `!secret` reference. |
-| `ha_tools_email.list_secrets` | Return available `secrets.yaml` key names only. Secret values are never returned. |
-
-Configuration is stored in `<config>/ha-tools/smtp-config.json`. The password can be a literal value or an `!secret <key>` reference resolved from `secrets.yaml` at send time.
-
-Version 2.0.0 also adds:
-
-- Store-backed schedules for `log_digest` and `energy_report`.
-- Server-side log digest composition from Home Assistant `system_log`.
-- Server-side energy reports from recorder statistics for discovered energy sensors.
-- A websocket API for schedule management and immediate report sending.
-
-## Installation
-
-### HACS Custom Repository
-
-1. Open HACS.
-2. Open **Custom repositories**.
-3. Add `https://github.com/MacSiem/ha-tools-email-integration` with category **Integration**.
-4. Install **HA Tools Email**.
-5. Restart Home Assistant.
-6. Go to **Settings -> Devices & services -> Add integration** and add **HA Tools Email**.
-
-The config flow is zero-input. SMTP details are still saved through the existing HA Tools card UI or by calling `ha_tools_email.save_config`.
-
-### Manual
-
-1. Copy `custom_components/ha_tools_email/` to `<config>/custom_components/`.
-2. Restart Home Assistant.
-3. Add **HA Tools Email** from **Settings -> Devices & services**.
-
-## SMTP Configuration
-
-Call `ha_tools_email.save_config` from Developer Tools or use the HA Tools Email card:
+| `ha_tools_email.get_config` | Return current SMTP settings for cards. The password is masked (or returned as its `!secret` reference), and `available_secrets` lists known key names only. |
+| `ha_tools_email.list_secrets` | Return available `secrets.yaml` key names only — secret values are never returned. |
 
 ```yaml
 service: ha_tools_email.save_config
@@ -62,8 +72,6 @@ data:
   default_recipient: recipient@example.com
 ```
 
-Send an email manually:
-
 ```yaml
 service: ha_tools_email.send
 data:
@@ -73,9 +81,28 @@ data:
   html: "<h2>Optional HTML body</h2>"
 ```
 
-## Scheduler
+## Automation example
 
-Schedules are stored with Home Assistant `Store`, not YAML:
+```yaml
+alias: Email me when the freezer sensor goes offline
+trigger:
+  - platform: state
+    entity_id: sensor.freezer_temperature
+    to: "unavailable"
+    for: "00:15:00"
+action:
+  - service: ha_tools_email.send
+    data:
+      subject: "⚠️ Freezer sensor offline"
+      body: >
+        sensor.freezer_temperature has been unavailable for 15 minutes.
+        Check the device and the SMTP delivery in HA Tools → Settings → Email/SMTP.
+```
+
+## Scheduled reports
+
+Schedules are stored with Home Assistant's `Store` helper, not YAML, and are
+managed through the websocket API below. Each schedule looks like:
 
 ```json
 {
@@ -87,42 +114,34 @@ Schedules are stored with Home Assistant `Store`, not YAML:
 }
 ```
 
-Supported `kind` values:
+- `kind`: `log_digest` or `energy_report`.
+- `cadence`: `daily` (every day at `time`), `weekly` (Monday at `time`), or `monthly` (first day of the month at `time`).
+- If `recipients` is empty, the scheduler falls back to `default_recipient` from the saved SMTP config.
 
-- `log_digest`
-- `energy_report`
-
-Supported `cadence` values:
-
-- `daily` - every day at `time`
-- `weekly` - Monday at `time`
-- `monthly` - first day of the month at `time`
-
-If `recipients` is empty, the scheduler uses `default_recipient` from SMTP config.
-
-## Server-Side Reports
-
-Log digests read Home Assistant `system_log` records, aggregate counts by level and logger, deduplicate from the last digest state, and include the top recent errors and warnings.
-
-Energy reports auto-discover `sensor.*` entities with `device_class: energy` or kWh/Wh energy units, then use recorder `statistics_during_period` changes for the selected period. Reports include total kWh and a top-consumers table.
+Log digests read Home Assistant `system_log` records, aggregate counts by
+level and logger, deduplicate against the previous digest, and include the
+top 10 recent errors and warnings. Energy reports auto-discover `sensor.*`
+entities with `device_class: energy` or kWh/Wh units and pull recorder
+`statistics_during_period` changes for the period, then render total kWh and
+a top-consumers table.
 
 ## Websocket API
 
-All commands use the integration domain prefix.
+Commands use the integration domain as the `type` prefix.
 
-Read non-secret config and schedules:
+Read non-secret SMTP state and schedules (no admin required):
 
 ```json
 { "type": "ha_tools_email/get_config" }
 ```
 
-List schedules:
+List schedules (no admin required):
 
 ```json
 { "type": "ha_tools_email/list_schedules" }
 ```
 
-Create or update a schedule. Admin required:
+Create or update a schedule (admin required):
 
 ```json
 {
@@ -138,7 +157,7 @@ Create or update a schedule. Admin required:
 }
 ```
 
-Delete a schedule. Admin required:
+Delete a schedule (admin required):
 
 ```json
 {
@@ -148,7 +167,7 @@ Delete a schedule. Admin required:
 }
 ```
 
-Compose and send immediately. Admin required:
+Compose and send a report immediately (admin required):
 
 ```json
 {
@@ -159,21 +178,77 @@ Compose and send immediately. Admin required:
 }
 ```
 
-The websocket config response never returns the SMTP password.
+`get_config` and `list_schedules` are readable by any logged-in user;
+`set_schedule` and `send_now` require an admin connection.
 
-## Privacy And Security
+## Installation
 
-- SMTP credentials stay on the Home Assistant instance.
-- Websocket mutations require an admin connection.
-- Secret values from `secrets.yaml` are never listed or returned.
-- The integration sends email only through the SMTP server you configure.
+### HACS Custom Repository
 
-## Supported HA Tools Cards
+1. Open HACS.
+2. Open **Custom repositories**.
+3. Add `https://github.com/MacSiem/ha-tools-email-integration` with category **Integration**.
+4. Install **HA Tools Email**.
+5. Restart Home Assistant.
+6. Go to **Settings → Devices & services → Add integration** and add **HA Tools Email**. The setup form has no fields — just confirm.
+7. Save SMTP settings: call `ha_tools_email.save_config` from Developer Tools → Actions, or use the SMTP settings panel inside an HA Tools email card (`ha-log-email` / `ha-energy-email`).
+8. Optionally call `ha_tools_email.test` to confirm delivery.
 
-- `ha-energy-email`
-- `ha-log-email`
+### Manual
 
-Existing cards can continue using the original service calls.
+1. Copy `custom_components/ha_tools_email/` to `<config>/custom_components/`.
+2. Restart Home Assistant.
+3. Add **HA Tools Email** from **Settings → Devices & services**.
+4. Save SMTP settings as in step 7 above.
+
+## FAQ
+
+**Where does my email go?**
+Only to the SMTP server you configure in `ha_tools_email.save_config`. The
+integration does not relay through any third-party or Home Assistant Cloud
+service.
+
+**Is my SMTP password exposed to the frontend or other users?**
+No, and the two read paths are deliberately different:
+
+- The `ha_tools_email/get_config` **websocket** command returns a
+  `_safe_smtp_config` payload with only `server`, `port`, `username`,
+  `sender`, `encryption`, `default_recipient`, `uses_secret` and
+  `smtp_configured` — there is no `password` key in the response at all.
+- The `ha_tools_email.get_config` **service** (used by existing cards)
+  returns those same non-secret fields plus a `password` value that is
+  either masked (`us***rd` style) or, if it is an `!secret` reference,
+  returned as the `!secret <key>` reference string — never the resolved
+  secret value.
+
+**Can any logged-in user read or change my SMTP settings?**
+Any user can read the non-secret config and existing schedules
+(`get_config`, `list_schedules`). Creating, editing or deleting a schedule
+(`set_schedule`) and triggering an on-demand send (`send_now`) both require
+an admin-level websocket connection (`@websocket_api.require_admin`).
+
+**Do I need a `notify:` platform configured?**
+No. The integration talks to your SMTP server directly with `smtplib`.
+
+**What happens if `secrets.yaml` doesn't have the key I referenced?**
+The send fails with an explicit error identifying the missing key — nothing
+is sent silently.
+
+**Which cards use this integration?**
+`ha-log-email` and `ha-energy-email` from the main HA Tools repository call
+the services described above. Existing automations using
+`ha_tools_email.send` continue to work unchanged in v2.0.0.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
+
+## Support
+
+If this tool makes your Home Assistant life easier, consider supporting development:
+
+- [Buy Me a Coffee](https://buymeacoffee.com/macsiem)
+- [PayPal](https://www.paypal.com/donate/?hosted_button_id=Y967H4PLRBN8W)
 
 ## License
 
