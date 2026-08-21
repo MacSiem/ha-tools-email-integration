@@ -36,7 +36,7 @@ test:
 
 save_config:
   name: Save SMTP configuration
-  description: Save SMTP server settings to disk
+  description: Save SMTP server settings to Home Assistant Store (admin only)
   fields:
     server:
       name: SMTP Server
@@ -91,8 +91,8 @@ save_config:
 
 get_config:
   name: Get SMTP configuration
-  description: Returns current SMTP settings (password masked)
+  description: Returns non-secret SMTP state (admin only; no password data or secret-key names)
 
 list_secrets:
   name: List secrets
-  description: Returns available secrets.yaml keys without secret values
+  description: Returns available secrets.yaml keys without secret values (admin only)

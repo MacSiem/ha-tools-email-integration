@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.2
+
+- Moved SMTP credentials from the legacy JSON file to Home Assistant's Store helper, with save-before-delete migration for existing installations.
+- Restricted the legacy `save_config`, `get_config`, and `list_secrets` services to administrators.
+- Removed password fragments, `!secret` references, and secret-key discovery from `get_config` responses.
+- Raised the declared minimum Home Assistant version to 2024.7.0 and removed duplicate logo assets.
+
 ## 2.0.1
 
 - Fixed `send.to` service documentation: the field is optional (matching the actual service schema) and falls back to the default recipient saved in the SMTP configuration when omitted.

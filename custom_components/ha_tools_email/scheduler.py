@@ -5,7 +5,7 @@ from __future__ import annotations
 import calendar
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 try:
     from .const import (
@@ -106,7 +106,7 @@ def should_fire_schedule(schedule: dict[str, Any], now: datetime) -> bool:
 async def async_start_scheduler(
     hass: Any,
     storage: Any,
-    load_config: Callable[..., dict[str, Any]],
+    load_config: Callable[[], Awaitable[dict[str, Any]]],
     send_email: Callable[..., None],
 ) -> None:
     """Start or reload scheduler tracking."""
@@ -224,7 +224,7 @@ async def async_send_report(
 
     now = _aware(now or datetime.now(timezone.utc))
     bucket = hass.data[DOMAIN]
-    cfg = await hass.async_add_executor_job(bucket[DATA_LOAD_CONFIG], hass)
+    cfg = await bucket[DATA_LOAD_CONFIG]()
     to = ", ".join(recipients) if recipients else cfg.get("default_recipient", "")
     payload = await async_build_report_payload(
         hass, storage, kind=kind, cadence=cadence, now=now

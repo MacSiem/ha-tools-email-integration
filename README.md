@@ -7,7 +7,7 @@ cards through simple service calls, and it can also compose and send
 scheduled server-side log digests and energy reports — no `notify:` platform
 or external mail relay required.
 
-[![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.1+-blue.svg?logo=homeassistant)](https://www.home-assistant.io/) [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Version](https://img.shields.io/github/v/release/MacSiem/ha-tools-email-integration)](https://github.com/MacSiem/ha-tools-email-integration/releases)
+[![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.7+-blue.svg?logo=homeassistant)](https://www.home-assistant.io/) [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Version](https://img.shields.io/github/v/release/MacSiem/ha-tools-email-integration)](https://github.com/MacSiem/ha-tools-email-integration/releases)
 
 Part of the [HA Tools](https://github.com/MacSiem) ecosystem.
 
@@ -21,9 +21,11 @@ schedule reports.**
 2. **SMTP settings via service call.** Call `ha_tools_email.save_config` (or
    use the SMTP settings panel inside HA Tools cards, which calls the same
    service) to persist server, port, username, password, sender and
-   encryption to `<config>/ha-tools/smtp-config.json`. The password field
-   accepts a literal value or an `!secret <key>` reference resolved from
-   `secrets.yaml` at send time.
+   encryption with Home Assistant's Store helper. Existing
+   `<config>/ha-tools/smtp-config.json` settings are migrated automatically
+   and the plaintext legacy file is removed only after Store saves
+   successfully. The password field accepts a literal value or an
+   `!secret <key>` reference resolved from `secrets.yaml` at send time.
 3. **Cards send through the existing services.** `ha-log-email` and
    `ha-energy-email` (in the main HA Tools repo) call
    `ha_tools_email.get_config`, `ha_tools_email.test` and
@@ -56,9 +58,9 @@ services and a websocket API only.
 |---|---|
 | `ha_tools_email.send` | Send an email to one or many recipients with plain text and optional HTML. |
 | `ha_tools_email.test` | Send a test message to the configured default recipient/sender to verify SMTP settings. |
-| `ha_tools_email.save_config` | Persist SMTP server, port, credentials, sender, encryption, and default recipient. |
-| `ha_tools_email.get_config` | Return current SMTP settings for cards. The password is masked (or returned as its `!secret` reference), and `available_secrets` lists known key names only. |
-| `ha_tools_email.list_secrets` | Return available `secrets.yaml` key names only — secret values are never returned. |
+| `ha_tools_email.save_config` | Admin-only: persist SMTP server, port, credentials, sender, encryption, and default recipient. |
+| `ha_tools_email.get_config` | Admin-only: return non-secret SMTP state. Password data and secret-key names are never included. |
+| `ha_tools_email.list_secrets` | Admin-only: return available `secrets.yaml` key names only — secret values are never returned. |
 
 ```yaml
 service: ha_tools_email.save_config
@@ -178,8 +180,10 @@ Compose and send a report immediately (admin required):
 }
 ```
 
-`get_config` and `list_schedules` are readable by any logged-in user;
-`set_schedule` and `send_now` require an admin connection.
+`get_config` and `list_schedules` are readable by any logged-in user and
+return non-secret state; `set_schedule` and `send_now` require an admin
+connection. The similarly named legacy services that save/read SMTP settings
+or list secret-key names are admin-only.
 
 ## Installation
 
@@ -215,17 +219,17 @@ No, and the two read paths are deliberately different:
   `_safe_smtp_config` payload with only `server`, `port`, `username`,
   `sender`, `encryption`, `default_recipient`, `uses_secret` and
   `smtp_configured` — there is no `password` key in the response at all.
-- The `ha_tools_email.get_config` **service** (used by existing cards)
-  returns those same non-secret fields plus a `password` value that is
-  either masked (`us***rd` style) or, if it is an `!secret` reference,
-  returned as the `!secret <key>` reference string — never the resolved
-  secret value.
+- The admin-only `ha_tools_email.get_config` **service** returns the same
+  non-secret SMTP state. It never returns a password, password fragment,
+  `!secret` reference, or list of available secret-key names.
 
 **Can any logged-in user read or change my SMTP settings?**
-Any user can read the non-secret config and existing schedules
-(`get_config`, `list_schedules`). Creating, editing or deleting a schedule
-(`set_schedule`) and triggering an on-demand send (`send_now`) both require
-an admin-level websocket connection (`@websocket_api.require_admin`).
+Any logged-in user can read non-secret config and existing schedules through
+the websocket API (`get_config`, `list_schedules`). Creating, editing or
+deleting a schedule (`set_schedule`) and triggering an on-demand send
+(`send_now`) require an admin-level websocket connection. The legacy
+`save_config`, `get_config`, and `list_secrets` services also require an
+administrator.
 
 **Do I need a `notify:` platform configured?**
 No. The integration talks to your SMTP server directly with `smtplib`.
@@ -237,7 +241,7 @@ is sent silently.
 **Which cards use this integration?**
 `ha-log-email` and `ha-energy-email` from the main HA Tools repository call
 the services described above. Existing automations using
-`ha_tools_email.send` continue to work unchanged in v2.0.0.
+`ha_tools_email.send` continue to work unchanged in v2.0.2.
 
 ## Changelog
 

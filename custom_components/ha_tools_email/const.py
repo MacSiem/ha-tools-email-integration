@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "ha_tools_email"
 NAME = "HA Tools Email"
-VERSION = "2.0.1"
+VERSION = "2.0.2"
 
 STORAGE_KEY = f"{DOMAIN}.storage"
 STORAGE_VERSION = 1
@@ -32,3 +32,13 @@ DEFAULT_WEEKLY_WEEKDAY = 0
 DEFAULT_MONTHLY_DAY = 1
 DEFAULT_CURRENCY = "PLN"
 DEFAULT_PRICE_PER_KWH = 0.0
+
+SMTP_DEFAULTS = {
+    "server": "",
+    "port": 587,
+    "username": "",
+    "password": "",
+    "sender": "",
+    "encryption": "starttls",
+    "default_recipient": "",
+}

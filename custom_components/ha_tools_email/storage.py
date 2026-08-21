@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import re
 import uuid
 from copy import deepcopy
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -15,18 +18,23 @@ from homeassistant.helpers.storage import Store
 from .const import (
     DEFAULT_SCHEDULE_TIME,
     KIND_LOG_DIGEST,
+    SMTP_DEFAULTS,
     STORAGE_KEY,
     STORAGE_VERSION,
     VALID_CADENCES,
     VALID_KINDS,
 )
 
+_LOGGER = logging.getLogger(__name__)
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+_SMTP_KEYS = frozenset(SMTP_DEFAULTS)
+_LEGACY_CONFIG_PARTS = ("ha-tools", "smtp-config.json")
 
 
 def _default_state() -> dict[str, Any]:
     """Return the default persisted shape."""
     return {
+        "smtp_config": None,
         "schedules": [],
         "digest_state": {},
         "scheduler_state": {},
@@ -57,11 +65,48 @@ class EmailStorage:
                 self._data["schedules"] = self._clean_schedule_list(
                     self._data.get("schedules", [])
                 )
+                await self._async_migrate_legacy_smtp_config_locked(loaded)
             return deepcopy(self._data)
 
     async def async_get_state(self) -> dict[str, Any]:
         """Return the full persisted state."""
         return await self.async_load()
+
+    async def async_get_smtp_config(self) -> dict[str, Any]:
+        """Return the SMTP configuration from Store with defaults applied."""
+        data = await self.async_load()
+        return self._clean_smtp_config(data.get("smtp_config"))
+
+    async def async_save_smtp_config(self, config: dict[str, Any]) -> None:
+        """Persist the SMTP configuration in Home Assistant Store."""
+        clean = self._clean_smtp_config(config)
+        async with self._lock:
+            data = await self._ensure_loaded_locked()
+            data["smtp_config"] = clean
+            await self._store.async_save(data)
+
+    async def _async_migrate_legacy_smtp_config_locked(
+        self, loaded: dict[str, Any]
+    ) -> None:
+        """Migrate the old JSON file after Store has loaded successfully."""
+        legacy_path = Path(self.hass.config.path(*_LEGACY_CONFIG_PARTS))
+        stored_config = loaded.get("smtp_config")
+
+        if isinstance(stored_config, dict):
+            await self.hass.async_add_executor_job(_remove_legacy_config, legacy_path)
+            return
+
+        legacy_config = await self.hass.async_add_executor_job(
+            _read_legacy_config, legacy_path
+        )
+        if legacy_config is None:
+            return
+
+        clean = self._clean_smtp_config(legacy_config)
+        self._data["smtp_config"] = clean
+        await self._store.async_save(self._data)
+        await self.hass.async_add_executor_job(_remove_legacy_config, legacy_path)
+        _LOGGER.info("Migrated SMTP configuration to Home Assistant Store")
 
     async def async_list_schedules(self) -> list[dict[str, Any]]:
         """Return configured schedules."""
@@ -165,6 +210,19 @@ class EmailStorage:
         return self._data
 
     @staticmethod
+    def _clean_smtp_config(config: Any) -> dict[str, Any]:
+        """Return only supported SMTP fields with stable defaults."""
+        if not isinstance(config, dict):
+            return dict(SMTP_DEFAULTS)
+        clean = {key: config[key] for key in _SMTP_KEYS if key in config}
+        merged = {**SMTP_DEFAULTS, **clean}
+        try:
+            merged["port"] = int(merged["port"])
+        except (TypeError, ValueError):
+            merged["port"] = SMTP_DEFAULTS["port"]
+        return merged
+
+    @staticmethod
     def _clean_schedule(
         schedule: dict[str, Any], existing_id: str | None = None
     ) -> dict[str, Any]:
@@ -222,3 +280,27 @@ class EmailStorage:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _read_legacy_config(path: Path) -> dict[str, Any] | None:
+    """Read a legacy SMTP JSON file off the event loop."""
+    if not path.is_file():
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as file_handle:
+            loaded = json.load(file_handle)
+    except (OSError, json.JSONDecodeError) as err:
+        _LOGGER.warning("Could not migrate legacy SMTP configuration: %s", err)
+        return None
+    if not isinstance(loaded, dict):
+        _LOGGER.warning("Could not migrate legacy SMTP configuration: invalid data")
+        return None
+    return loaded
+
+
+def _remove_legacy_config(path: Path) -> None:
+    """Remove the plaintext legacy file after Store persistence succeeds."""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as err:
+        _LOGGER.warning("Could not remove migrated legacy SMTP configuration: %s", err)

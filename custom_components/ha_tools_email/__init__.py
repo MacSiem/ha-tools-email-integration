@@ -4,25 +4,33 @@ Supports !secret references in password field — if the saved password
 value starts with '!secret ', the actual password is resolved from
 secrets.yaml at send time.
 """
-import json
+import inspect
 import logging
-import os
 import smtplib
-import yaml
+from collections.abc import Awaitable, Callable
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 
 import voluptuous as vol
+import yaml
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
+from homeassistant.core import (
+    HomeAssistant,
+    ServiceCall,
+    ServiceResponse,
+    SupportsResponse,
+)
+from homeassistant.exceptions import Unauthorized, UnknownUser
 import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers.service import async_register_admin_service
 
 from .const import (
     DATA_SERVICES_REGISTERED,
     DATA_STORAGE,
     DATA_WS_REGISTERED,
     DOMAIN,
+    SMTP_DEFAULTS,
     VERSION,
 )
 from .scheduler import async_start_scheduler, async_stop_scheduler
@@ -30,57 +38,6 @@ from .storage import EmailStorage
 from .websocket_api import async_register_commands
 
 _LOGGER = logging.getLogger(__name__)
-
-CONFIG_DIR = "ha-tools"
-CONFIG_FILE = "smtp-config.json"
-
-DEFAULTS = {
-    "server": "",
-    "port": 587,
-    "username": "",
-    "password": "",
-    "sender": "",
-    "encryption": "starttls",
-    "default_recipient": "",
-}
-
-
-def _config_path(hass: HomeAssistant) -> Path:
-    """Return path to smtp-config.json inside HA config dir."""
-    p = Path(hass.config.path(CONFIG_DIR))
-    p.mkdir(parents=True, exist_ok=True)
-    return p / CONFIG_FILE
-
-
-def _load_config(hass: HomeAssistant) -> dict:
-    """Load SMTP config from disk, return defaults if missing."""
-    path = _config_path(hass)
-    if path.exists():
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            # Merge with defaults for any missing keys
-            merged = {**DEFAULTS, **data}
-            return merged
-        except Exception as exc:
-            _LOGGER.warning("Failed to read SMTP config: %s", exc)
-    return dict(DEFAULTS)
-
-
-def _save_config(hass: HomeAssistant, data: dict) -> None:
-    """Persist SMTP config to disk."""
-    path = _config_path(hass)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-    _LOGGER.info("SMTP config saved to %s", path)
-
-
-def _mask_password(pwd: str) -> str:
-    """Mask password for display: show first 2 and last 2 chars."""
-    if not pwd or len(pwd) <= 4:
-        return "****"
-    return pwd[:2] + "*" * (len(pwd) - 4) + pwd[-2:]
-
 
 def _resolve_secret(hass: HomeAssistant, value: str) -> str:
     """Resolve !secret references from secrets.yaml.
@@ -194,7 +151,7 @@ async def _async_ensure_setup(hass: HomeAssistant) -> None:
     """Initialize storage, services, websocket API, and scheduler once."""
     bucket = hass.data.setdefault(DOMAIN, {})
     storage = await _async_get_storage(hass)
-    bucket["load_config"] = _load_config
+    bucket["load_config"] = storage.async_get_smtp_config
     bucket["send_email"] = _send_email
 
     await _async_register_services(hass)
@@ -203,7 +160,9 @@ async def _async_ensure_setup(hass: HomeAssistant) -> None:
         async_register_commands(hass)
         bucket[DATA_WS_REGISTERED] = True
 
-    await async_start_scheduler(hass, storage, _load_config, _send_email)
+    await async_start_scheduler(
+        hass, storage, storage.async_get_smtp_config, _send_email
+    )
     _LOGGER.info("HA Tools Email loaded")
 
 
@@ -223,10 +182,11 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     bucket = hass.data.setdefault(DOMAIN, {})
     if bucket.get(DATA_SERVICES_REGISTERED):
         return
+    storage = await _async_get_storage(hass)
 
     async def handle_send(call: ServiceCall) -> None:
         """Handle ha_tools_email.send service call."""
-        cfg = await hass.async_add_executor_job(_load_config, hass)
+        cfg = await storage.async_get_smtp_config()
 
         to = call.data.get("to", "") or cfg.get("default_recipient", "")
         subject = call.data.get("subject", "HA Tools Email")
@@ -240,8 +200,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
     async def handle_test(call: ServiceCall) -> None:
         """Send a test email to verify SMTP config."""
-        cfg = await hass.async_add_executor_job(_load_config, hass)
-        to = cfg.get("default_recipient", "") or cfg.get("sender", "") or cfg.get("username", "")
+        cfg = await storage.async_get_smtp_config()
+        to = (
+            cfg.get("default_recipient", "")
+            or cfg.get("sender", "")
+            or cfg.get("username", "")
+        )
 
         if not to:
             raise ValueError("No default_recipient or sender configured — save SMTP settings first")
@@ -257,10 +221,12 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             f"<hr><p style='font-size:11px;color:#999'>HA Tools Email v{VERSION}</p>"
         )
 
-        await hass.async_add_executor_job(_send_email, hass, cfg, to, subject, body, html)
+        await hass.async_add_executor_job(
+            _send_email, hass, cfg, to, subject, body, html
+        )
 
     async def handle_save_config(call: ServiceCall) -> None:
-        """Save SMTP configuration to disk."""
+        """Save SMTP configuration to Home Assistant Store."""
         data = {
             "server": call.data.get("server", ""),
             "port": int(call.data.get("port", 587)),
@@ -270,18 +236,24 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             "encryption": call.data.get("encryption", "starttls"),
             "default_recipient": call.data.get("default_recipient", ""),
         }
-        await hass.async_add_executor_job(_save_config, hass, data)
+        await storage.async_save_smtp_config(data)
 
     async def handle_get_config(call: ServiceCall) -> ServiceResponse:
-        """Return current SMTP config (password masked)."""
-        cfg = await hass.async_add_executor_job(_load_config, hass)
-        safe = dict(cfg)
-        raw_pwd = safe.get("password", "")
-        safe["uses_secret"] = raw_pwd.startswith("!secret ")
-        safe["password"] = _mask_password(raw_pwd) if not safe["uses_secret"] else raw_pwd
-        safe["configured"] = bool(cfg.get("server") and cfg.get("username") and raw_pwd)
-        safe["available_secrets"] = await hass.async_add_executor_job(_list_secrets, hass)
-        return safe
+        """Return non-secret SMTP state to an administrator."""
+        cfg = await storage.async_get_smtp_config()
+        raw_pwd = str(cfg.get("password", ""))
+        return {
+            "server": cfg.get("server", ""),
+            "port": cfg.get("port", SMTP_DEFAULTS["port"]),
+            "username": cfg.get("username", ""),
+            "sender": cfg.get("sender", ""),
+            "encryption": cfg.get("encryption", SMTP_DEFAULTS["encryption"]),
+            "default_recipient": cfg.get("default_recipient", ""),
+            "uses_secret": raw_pwd.startswith("!secret "),
+            "configured": bool(
+                cfg.get("server") and cfg.get("username") and raw_pwd
+            ),
+        }
 
     async def handle_list_secrets(call: ServiceCall) -> ServiceResponse:
         """Return list of available secret keys from secrets.yaml."""
@@ -304,8 +276,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         schema=vol.Schema({}),
     )
 
-    hass.services.async_register(
-        DOMAIN, "save_config", handle_save_config,
+    async_register_admin_service(
+        hass, DOMAIN, "save_config", handle_save_config,
         schema=vol.Schema({
             vol.Required("server"): cv.string,
             vol.Required("port"): vol.Coerce(int),
@@ -317,17 +289,59 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         }),
     )
 
-    hass.services.async_register(
-        DOMAIN, "get_config", handle_get_config,
+    _register_admin_response_service(
+        hass, DOMAIN, "get_config", handle_get_config,
         schema=vol.Schema({}),
-        supports_response=SupportsResponse.ONLY,
     )
 
-    hass.services.async_register(
-        DOMAIN, "list_secrets", handle_list_secrets,
+    _register_admin_response_service(
+        hass, DOMAIN, "list_secrets", handle_list_secrets,
         schema=vol.Schema({}),
-        supports_response=SupportsResponse.ONLY,
     )
 
-    _LOGGER.info("HA Tools Email loaded — services: send, test, save_config, get_config, list_secrets")
+    _LOGGER.info(
+        "HA Tools Email loaded — services: send, test, save_config, "
+        "get_config, list_secrets"
+    )
     bucket[DATA_SERVICES_REGISTERED] = True
+
+
+def _register_admin_response_service(
+    hass: HomeAssistant,
+    domain: str,
+    service: str,
+    handler: Callable[[ServiceCall], Awaitable[ServiceResponse]],
+    *,
+    schema: vol.Schema,
+) -> None:
+    """Register an admin response service across supported HA versions."""
+    if "supports_response" in inspect.signature(
+        async_register_admin_service
+    ).parameters:
+        async_register_admin_service(
+            hass,
+            domain,
+            service,
+            handler,
+            schema=schema,
+            supports_response=SupportsResponse.ONLY,
+        )
+        return
+
+    async def admin_handler(call: ServiceCall) -> ServiceResponse:
+        """Backport the helper's fail-closed gate while preserving responses."""
+        if call.context.user_id:
+            user = await hass.auth.async_get_user(call.context.user_id)
+            if user is None:
+                raise UnknownUser(context=call.context)
+            if not user.is_admin:
+                raise Unauthorized(context=call.context)
+        return await handler(call)
+
+    hass.services.async_register(
+        domain,
+        service,
+        admin_handler,
+        schema=schema,
+        supports_response=SupportsResponse.ONLY,
+    )

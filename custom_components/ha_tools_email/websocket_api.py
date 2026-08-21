@@ -23,7 +23,7 @@ def _storage(hass: HomeAssistant) -> EmailStorage:
 
 
 async def _safe_smtp_config(hass: HomeAssistant) -> dict[str, Any]:
-    cfg = await hass.async_add_executor_job(_bucket(hass)["load_config"], hass)
+    cfg = await _bucket(hass)["load_config"]()
     raw_password = cfg.get("password", "")
     return {
         "server": cfg.get("server", ""),
