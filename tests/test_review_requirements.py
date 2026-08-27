@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 INIT_PATH = ROOT / "custom_components/ha_tools_email/__init__.py"
 STORAGE_PATH = ROOT / "custom_components/ha_tools_email/storage.py"
 BRAND_PATH = ROOT / "custom_components/ha_tools_email/brand"
+AGENT_REPORT_PATH = ROOT / "codex-runs/email-integration-report.md"
 
 
 def _load_storage_module():
@@ -144,6 +145,18 @@ class ReviewRequirementTests(unittest.TestCase):
         self.assertEqual(hacs["homeassistant"], "2024.7.0")
         self.assertFalse((BRAND_PATH / "logo.png").exists())
         self.assertFalse((BRAND_PATH / "logo@2x.png").exists())
+
+    def test_mail_sending_services_are_admin_only(self) -> None:
+        source = INIT_PATH.read_text(encoding="utf-8")
+
+        for service in ("send", "test"):
+            self.assertIn(
+                f'async_register_admin_service(\n        hass, DOMAIN, "{service}"',
+                source,
+            )
+
+    def test_agent_run_log_is_not_shipped(self) -> None:
+        self.assertFalse(AGENT_REPORT_PATH.exists())
 
 
 if __name__ == "__main__":

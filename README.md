@@ -229,7 +229,9 @@ the websocket API (`get_config`, `list_schedules`). Creating, editing or
 deleting a schedule (`set_schedule`) and triggering an on-demand send
 (`send_now`) require an admin-level websocket connection. The legacy
 `save_config`, `get_config`, and `list_secrets` services also require an
-administrator.
+administrator. Sending mail through `ha_tools_email.send` and testing the
+household SMTP account also require an administrator for interactive calls.
+Home Assistant automations without a user context continue to work.
 
 **Do I need a `notify:` platform configured?**
 No. The integration talks to your SMTP server directly with `smtplib`.
@@ -241,7 +243,8 @@ is sent silently.
 **Which cards use this integration?**
 `ha-log-email` and `ha-energy-email` from the main HA Tools repository call
 the services described above. Existing automations using
-`ha_tools_email.send` continue to work unchanged in v2.0.2.
+`ha_tools_email.send` continue to work in v2.0.3; interactive calls from a
+logged-in user require administrator access.
 
 ## Changelog
 

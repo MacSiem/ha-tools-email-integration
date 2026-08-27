@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.3
+
+- Verify SMTP server certificates and hostnames for both implicit TLS and STARTTLS using Home Assistant's client SSL context.
+- Restrict the `send` and `test` services to administrators while preserving internal automation calls without a user context.
+- Remove the accidentally committed agent run log and ignore future `codex-runs` output.
+
 ## 2.0.2
 
 - Moved SMTP credentials from the legacy JSON file to Home Assistant's Store helper, with save-before-delete migration for existing installations.

@@ -6,7 +6,6 @@ secrets.yaml at send time.
 """
 import inspect
 import logging
-import smtplib
 from collections.abc import Awaitable, Callable
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -24,6 +23,7 @@ from homeassistant.core import (
 from homeassistant.exceptions import Unauthorized, UnknownUser
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.service import async_register_admin_service
+from homeassistant.util.ssl import client_context
 
 from .const import (
     DATA_SERVICES_REGISTERED,
@@ -34,6 +34,7 @@ from .const import (
     VERSION,
 )
 from .scheduler import async_start_scheduler, async_stop_scheduler
+from .smtp import open_smtp_connection
 from .storage import EmailStorage
 from .websocket_api import async_register_commands
 
@@ -109,16 +110,9 @@ def _send_email(hass: HomeAssistant, cfg: dict, to: str, subject: str, body: str
     # Connect and send
     _LOGGER.debug("Connecting to %s:%d (encryption=%s)", server, port, encryption)
 
-    if encryption == "ssl":
-        smtp = smtplib.SMTP_SSL(server, port, timeout=30)
-    else:
-        smtp = smtplib.SMTP(server, port, timeout=30)
+    smtp = open_smtp_connection(server, port, encryption, client_context())
 
     try:
-        smtp.ehlo()
-        if encryption == "starttls":
-            smtp.starttls()
-            smtp.ehlo()
         smtp.login(username, password)
         smtp.sendmail(sender, recipients, msg.as_string())
         _LOGGER.info("Email sent to %s via %s", recipients, server)
@@ -261,8 +255,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         return {"secrets": keys}
 
     # Register services
-    hass.services.async_register(
-        DOMAIN, "send", handle_send,
+    async_register_admin_service(
+        hass, DOMAIN, "send", handle_send,
         schema=vol.Schema({
             vol.Optional("to"): cv.string,
             vol.Required("subject"): cv.string,
@@ -271,8 +265,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         }),
     )
 
-    hass.services.async_register(
-        DOMAIN, "test", handle_test,
+    async_register_admin_service(
+        hass, DOMAIN, "test", handle_test,
         schema=vol.Schema({}),
     )
 
