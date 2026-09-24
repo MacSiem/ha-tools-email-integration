@@ -36,7 +36,7 @@ test:
 
 save_config:
   name: Save SMTP configuration
-  description: Save SMTP server settings to Home Assistant Store (admin only)
+  description: Save non-secret SMTP settings to Home Assistant Store (admin only). The password is set in the integration options.
   fields:
     server:
       name: SMTP Server
@@ -60,10 +60,10 @@ save_config:
       required: true
       selector:
         text:
-    password:
-      name: Password
-      description: SMTP login password or app password
-      required: true
+    password_secret:
+      name: Password secret
+      description: Name of a secrets.yaml key that holds the SMTP password. Passwords themselves are not accepted as action data (Home Assistant records action data in its database); set the password in Settings → Devices & services → HA Tools Email → Configure. When omitted, the current password is kept.
+      required: false
       selector:
         text:
     sender:

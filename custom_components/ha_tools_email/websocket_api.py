@@ -40,6 +40,7 @@ async def _safe_smtp_config(hass: HomeAssistant) -> dict[str, Any]:
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/get_config"})
+@websocket_api.require_admin
 @websocket_api.async_response
 async def _ws_get_config(
     hass: HomeAssistant,
@@ -53,6 +54,7 @@ async def _ws_get_config(
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/list_schedules"})
+@websocket_api.require_admin
 @websocket_api.async_response
 async def _ws_list_schedules(
     hass: HomeAssistant,

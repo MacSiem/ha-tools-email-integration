@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "ha_tools_email"
 NAME = "HA Tools Email"
-VERSION = "2.0.3"
+VERSION = "2.1.0"
 
 STORAGE_KEY = f"{DOMAIN}.storage"
 STORAGE_VERSION = 1
@@ -42,3 +42,9 @@ SMTP_DEFAULTS = {
     "encryption": "starttls",
     "default_recipient": "",
 }
+
+ISSUE_PASSWORD_IN_HISTORY = "smtp_password_in_history"
+CONF_PASSWORD_SECRET = "password_secret"
+CONF_SEND_TEST = "send_test"
+VALID_ENCRYPTION = ("starttls", "ssl", "none")
+SETTINGS_HINT = "Settings → Devices & services → HA Tools Email → Configure"
