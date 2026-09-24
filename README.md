@@ -13,19 +13,20 @@ Part of the [HA Tools](https://github.com/MacSiem) ecosystem.
 
 ## How it works
 
-**Short version: add the integration, save SMTP settings once, then send or
-schedule reports.**
+**Short version: add the integration, open Configure, enter your SMTP
+settings once, then send or schedule reports.**
 
 1. **Zero-input config flow.** Adding the integration creates a single config
-   entry with no form fields — SMTP credentials are not entered during setup.
-2. **SMTP settings via service call.** Call `ha_tools_email.save_config` (or
-   use the SMTP settings panel inside HA Tools cards, which calls the same
-   service) to persist server, port, username, password, sender and
-   encryption with Home Assistant's Store helper. Existing
+   entry with no form fields.
+2. **SMTP settings in the integration options.** Open **Settings → Devices &
+   services → HA Tools Email → Configure** and enter server, port, encryption,
+   username, password (or the name of a `secrets.yaml` key), sender and default
+   recipients. You can send a test email before saving. Settings are kept with
+   Home Assistant's Store helper; the password is never shown again and is never
+   stored in the config entry options. Existing
    `<config>/ha-tools/smtp-config.json` settings are migrated automatically
    and the plaintext legacy file is removed only after Store saves
-   successfully. The password field accepts a literal value or an
-   `!secret <key>` reference resolved from `secrets.yaml` at send time.
+   successfully.
 3. **Cards send through the existing services.** `ha-log-email` and
    `ha-energy-email` (in the main HA Tools repo) call
    `ha_tools_email.get_config`, `ha_tools_email.test` and
@@ -41,7 +42,7 @@ schedule reports.**
 
 | Automatic | Manual |
 |---|---|
-| Config entry creation (no fields to fill in) | Saving SMTP server/port/credentials once |
+| Config entry creation (no fields to fill in) | Entering SMTP settings once in **Configure** |
 | Report composition (log digest, energy report) once scheduled | Creating a schedule via the websocket API |
 | Duplicate-fire prevention across HA restarts | Sending an on-demand report (`send_now` / `send` service) |
 | `!secret` resolution at send time | Adding secrets to `secrets.yaml` |
@@ -58,7 +59,7 @@ services and a websocket API only.
 |---|---|
 | `ha_tools_email.send` | Send an email to one or many recipients with plain text and optional HTML. |
 | `ha_tools_email.test` | Send a test message to the configured default recipient/sender to verify SMTP settings. |
-| `ha_tools_email.save_config` | Admin-only: persist SMTP server, port, credentials, sender, encryption, and default recipient. |
+| `ha_tools_email.save_config` | Admin-only: persist non-secret SMTP settings. Passwords are not accepted as action data; use **Configure** or `password_secret`. |
 | `ha_tools_email.get_config` | Admin-only: return non-secret SMTP state. Password data and secret-key names are never included. |
 | `ha_tools_email.list_secrets` | Admin-only: return available `secrets.yaml` key names only — secret values are never returned. |
 
@@ -68,7 +69,7 @@ data:
   server: smtp.example.com
   port: 587
   username: user@example.com
-  password: "!secret smtp_app_password"
+  password_secret: smtp_app_password   # name of a secrets.yaml key; optional
   sender: user@example.com
   encryption: starttls
   default_recipient: recipient@example.com
@@ -98,7 +99,7 @@ action:
       subject: "⚠️ Freezer sensor offline"
       body: >
         sensor.freezer_temperature has been unavailable for 15 minutes.
-        Check the device and the SMTP delivery in HA Tools → Settings → Email/SMTP.
+        Check the device and the SMTP settings in Settings → Devices & services → HA Tools Email → Configure.
 ```
 
 ## Scheduled reports
@@ -195,20 +196,19 @@ or list secret-key names are admin-only.
 4. Install **HA Tools Email**.
 5. Restart Home Assistant.
 6. Go to **Settings → Devices & services → Add integration** and add **HA Tools Email**. The setup form has no fields — just confirm.
-7. Save SMTP settings: call `ha_tools_email.save_config` from Developer Tools → Actions, or use the SMTP settings panel inside an HA Tools email card (`ha-log-email` / `ha-energy-email`).
-8. Optionally call `ha_tools_email.test` to confirm delivery.
+7. Open **Configure** on the HA Tools Email integration and enter your SMTP settings. Tick **Send a test email after saving** to confirm delivery.
 
 ### Manual
 
 1. Copy `custom_components/ha_tools_email/` to `<config>/custom_components/`.
 2. Restart Home Assistant.
 3. Add **HA Tools Email** from **Settings → Devices & services**.
-4. Save SMTP settings as in step 7 above.
+4. Enter SMTP settings as in step 7 above.
 
 ## FAQ
 
 **Where does my email go?**
-Only to the SMTP server you configure in `ha_tools_email.save_config`. The
+Only to the SMTP server you configure in the integration options. The
 integration does not relay through any third-party or Home Assistant Cloud
 service.
 
@@ -224,14 +224,24 @@ No, and the two read paths are deliberately different:
   `!secret` reference, or list of available secret-key names.
 
 **Can any logged-in user read or change my SMTP settings?**
-Any logged-in user can read non-secret config and existing schedules through
-the websocket API (`get_config`, `list_schedules`). Creating, editing or
+No. Since 2.1.0 reading non-secret config and schedules through the websocket
+API (`get_config`, `list_schedules`) requires an administrator. Creating, editing or
 deleting a schedule (`set_schedule`) and triggering an on-demand send
 (`send_now`) require an admin-level websocket connection. The legacy
 `save_config`, `get_config`, and `list_secrets` services also require an
 administrator. Sending mail through `ha_tools_email.send` and testing the
 household SMTP account also require an administrator for interactive calls.
 Home Assistant automations without a user context continue to work.
+
+<a id="smtp-password-security"></a>
+**Why can't I pass the password to `save_config` any more?**
+Home Assistant records the data of every action call in its database. A
+password passed to `ha_tools_email.save_config` before 2.1.0 was therefore
+also kept in the recorder database and in backups that include it. Since
+2.1.0 the password is entered only in **Configure**, and the action rejects a
+`password` field. If you saved a password through the action before, Home
+Assistant shows a repair notice: create a new app password with your email
+provider, enter it in **Configure**, and revoke the old one.
 
 **Do I need a `notify:` platform configured?**
 No. The integration talks to your SMTP server directly with `smtplib`.

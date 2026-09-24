@@ -3,12 +3,62 @@
     "step": {
       "user": {
         "title": "HA Tools Email",
-        "description": "Rejestruje integracje HA Tools Email. Ustawienia SMTP sa zapisywane przez istniejace uslugi albo karty HA Tools, a harmonogramy po stronie serwera mozna obslugiwac przez websocket API."
+        "description": "Dodaje HA Tools Email. Po dodaniu otwórz Konfiguruj przy tej integracji, aby podać serwer SMTP i hasło."
       }
     },
     "abort": {
       "single_instance_allowed": "Dozwolona jest tylko jedna instancja tej integracji.",
-      "already_configured": "HA Tools Email jest juz skonfigurowany."
+      "already_configured": "HA Tools Email jest już skonfigurowany."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Ustawienia SMTP",
+        "description": "Hasło: {password_state}. Zostaw hasło puste, aby zachować obecne, albo podaj nazwę klucza z secrets.yaml. Hasło jest zapisywane w magazynie Home Assistanta i nie jest ponownie wyświetlane.",
+        "data": {
+          "server": "Serwer SMTP",
+          "port": "Port",
+          "encryption": "Szyfrowanie",
+          "username": "Nazwa użytkownika",
+          "password": "Hasło lub hasło aplikacji",
+          "password_secret": "Klucz z secrets.yaml (opcjonalnie)",
+          "sender": "Adres nadawcy",
+          "default_recipient": "Domyślni odbiorcy",
+          "send_test": "Wyślij testowy e-mail po zapisaniu"
+        },
+        "data_description": {
+          "default_recipient": "Oddzieleni przecinkami. Używani, gdy raport lub akcja nie ma odbiorcy.",
+          "send_test": "Ustawienia zostaną zapisane tylko wtedy, gdy serwer przyjmie testowy e-mail."
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Serwer SMTP odrzucił nazwę użytkownika lub hasło.",
+      "cannot_connect": "Nie można połączyć się z serwerem SMTP (sprawdź serwer, port, szyfrowanie i certyfikat).",
+      "invalid_config": "Ustawienia są niekompletne.",
+      "invalid_email": "Podaj poprawny adres e-mail.",
+      "unknown_secret": "W secrets.yaml nie ma klucza o tej nazwie.",
+      "password_required": "Podaj hasło albo klucz z secrets.yaml.",
+      "unknown": "Nieoczekiwany błąd. Sprawdź log Home Assistanta."
+    },
+    "abort": {
+      "not_loaded": "HA Tools Email nie jest załadowany. Przeładuj integrację i spróbuj ponownie."
+    }
+  },
+  "selector": {
+    "encryption": {
+      "options": {
+        "starttls": "STARTTLS (zwykle port 587)",
+        "ssl": "SSL/TLS (zwykle port 465)",
+        "none": "Brak (niezalecane)"
+      }
+    }
+  },
+  "issues": {
+    "smtp_password_in_history": {
+      "title": "Zmień hasło SMTP",
+      "description": "Przed HA Tools Email 2.1.0 hasło SMTP było zapisywane akcją `ha_tools_email.save_config`. Home Assistant przechowuje dane akcji w swojej bazie danych, więc to hasło może znajdować się także w bazie i w kopiach zapasowych, które ją zawierają.\n\nUtwórz nowe hasło aplikacji u dostawcy poczty, wpisz je w Ustawienia → Urządzenia i usługi → HA Tools Email → Konfiguruj, a stare unieważnij. Ten komunikat zniknie po zapisaniu hasła w tym miejscu."
     }
   }
 }

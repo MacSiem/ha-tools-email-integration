@@ -38,6 +38,9 @@ def _default_state() -> dict[str, Any]:
         "schedules": [],
         "digest_state": {},
         "scheduler_state": {},
+        # Set once a password has been entered through the options flow. Passwords
+        # saved before 2.1.0 went through action data, which the recorder keeps.
+        "security": {"password_via_options": False},
     }
 
 
@@ -77,13 +80,23 @@ class EmailStorage:
         data = await self.async_load()
         return self._clean_smtp_config(data.get("smtp_config"))
 
-    async def async_save_smtp_config(self, config: dict[str, Any]) -> None:
+    async def async_save_smtp_config(
+        self, config: dict[str, Any], *, password_via_options: bool | None = None
+    ) -> None:
         """Persist the SMTP configuration in Home Assistant Store."""
         clean = self._clean_smtp_config(config)
         async with self._lock:
             data = await self._ensure_loaded_locked()
             data["smtp_config"] = clean
+            if password_via_options is not None:
+                security = data.setdefault("security", {})
+                security["password_via_options"] = bool(password_via_options)
             await self._store.async_save(data)
+
+    async def async_password_via_options(self) -> bool:
+        """Return True when the stored password was entered through the options flow."""
+        data = await self.async_load()
+        return bool((data.get("security") or {}).get("password_via_options"))
 
     async def _async_migrate_legacy_smtp_config_locked(
         self, loaded: dict[str, Any]

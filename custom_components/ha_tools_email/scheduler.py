@@ -159,9 +159,9 @@ async def async_reload_schedules(hass: Any) -> None:
                 schedule_id, period_key, _aware(now).isoformat()
             )
 
-        unsub = async_track_time_change(
-            hass, _fire, hour=hour, minute=minute, second=0, local=True
-        )
+        # async_track_time_change already matches local time; it has no `local`
+        # argument, and passing one made setup fail whenever a schedule existed.
+        unsub = async_track_time_change(hass, _fire, hour=hour, minute=minute, second=0)
         bucket[DATA_SCHEDULER_UNSUBS].append(unsub)
 
 
