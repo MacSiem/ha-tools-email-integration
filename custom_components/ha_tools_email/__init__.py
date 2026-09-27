@@ -58,12 +58,12 @@ def _resolve_secret(hass: HomeAssistant, value: str) -> str:
         return value
     secrets_path = Path(hass.config.path("secrets.yaml"))
     if not secrets_path.exists():
-        raise ValueError(f"secrets.yaml not found — cannot resolve !secret {secret_key}")
+        raise ValueError("secrets.yaml not found for SMTP secret reference")
     try:
         with open(secrets_path, "r", encoding="utf-8") as f:
             secrets = yaml.safe_load(f) or {}
         if secret_key not in secrets:
-            raise ValueError(f"Key '{secret_key}' not found in secrets.yaml")
+            raise ValueError("Referenced SMTP secret not found in secrets.yaml")
         return str(secrets[secret_key])
     except yaml.YAMLError as exc:
         raise ValueError(f"Failed to parse secrets.yaml: {exc}")
@@ -97,7 +97,7 @@ def _send_email(hass: HomeAssistant, cfg: dict, to: str, subject: str, body: str
     # Parse recipients
     recipients = [r.strip() for r in to.split(",") if r.strip() and "@" in r.strip()]
     if not recipients:
-        raise ValueError(f"No valid recipients in: {to}")
+        raise ValueError("No valid recipients")
 
     # Build message
     msg = MIMEMultipart("alternative")
@@ -113,14 +113,16 @@ def _send_email(hass: HomeAssistant, cfg: dict, to: str, subject: str, body: str
         msg.attach(MIMEText(html, "html", "utf-8"))
 
     # Connect and send
-    _LOGGER.debug("Connecting to %s:%d (encryption=%s)", server, port, encryption)
+    _LOGGER.debug("Connecting to configured SMTP server (encryption=%s)", encryption)
 
     smtp = open_smtp_connection(server, port, encryption, client_context())
 
     try:
         smtp.login(username, password)
-        smtp.sendmail(sender, recipients, msg.as_string())
-        _LOGGER.info("Email sent to %s via %s", recipients, server)
+        refused = smtp.sendmail(sender, recipients, msg.as_string())
+        if refused:
+            raise ValueError("SMTP refused one or more recipients; some may already have been accepted")
+        _LOGGER.info("SMTP accepted the HA Tools Email message for %d recipient(s)", len(recipients))
     finally:
         try:
             smtp.quit()

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Report successful scheduled sends as `accepted_by_smtp`; detect partial SMTP recipient refusal without logging addresses.
+- Serialize schedule callbacks under a lock before checking and persisting the per-period send key; redact recipient and secret-key details from logs and errors.
+
 ## 2.1.0
 
 - **Security:** the SMTP password is no longer accepted as action data. Home Assistant records action data in its database, so a password passed to `ha_tools_email.save_config` was also kept in the recorder database and in backups. The action now rejects `password` with a clear error and accepts `password_secret` (a `secrets.yaml` key name); omitting both keeps the current password.
@@ -10,7 +15,6 @@
 - Error messages point to the integration options instead of the retired HA Tools panel; the integration allows only one config entry.
 - **Fix:** server-side schedules work again. Setup failed with a `TypeError` whenever a schedule was stored, because the scheduler passed an unsupported `local` argument to Home Assistant's time tracker; creating a schedule failed the same way.
 - CI: the integration is now tested inside a real Home Assistant core (options flow, repair, admin gates, diagnostics, schedules).
-
 ## 2.0.3
 
 - Verify SMTP server certificates and hostnames for both implicit TLS and STARTTLS using Home Assistant's client SSL context.

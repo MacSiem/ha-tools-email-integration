@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import calendar
 import logging
 from datetime import datetime, timedelta, timezone
@@ -125,6 +126,7 @@ async def async_reload_schedules(hass: Any) -> None:
         return
 
     bucket = hass.data.setdefault(DOMAIN, {})
+    fire_lock = bucket.setdefault("schedule_fire_lock", asyncio.Lock())
     for unsub in bucket.get(DATA_SCHEDULER_UNSUBS, []):
         unsub()
     bucket[DATA_SCHEDULER_UNSUBS] = []
@@ -140,24 +142,25 @@ async def async_reload_schedules(hass: Any) -> None:
         try:
             hour, minute = parse_schedule_time(schedule["time"])
         except (KeyError, TypeError, ValueError) as err:
-            _LOGGER.warning("Skipping invalid email schedule %s: %s", schedule, err)
+            _LOGGER.warning("Skipping invalid email schedule (id=%s): %s", schedule.get("id", "unknown"), err)
             continue
 
         async def _fire(now: datetime, schedule_id: str = schedule["id"]) -> None:
-            current = await storage.async_get_schedule(schedule_id)
-            if not current or not should_fire_schedule(current, now):
-                return
-            period_key = fire_period_key(current, now)
-            if await storage.async_get_last_fired(schedule_id) == period_key:
-                return
-            try:
-                await async_send_schedule(hass, current, now=now)
-            except Exception as err:  # noqa: BLE001
-                _LOGGER.exception("Scheduled HA Tools Email report failed: %s", err)
-                return
-            await storage.async_set_last_fired(
-                schedule_id, period_key, _aware(now).isoformat()
-            )
+            async with fire_lock:
+                current = await storage.async_get_schedule(schedule_id)
+                if not current or not should_fire_schedule(current, now):
+                    return
+                period_key = fire_period_key(current, now)
+                if await storage.async_get_last_fired(schedule_id) == period_key:
+                    return
+                try:
+                    await async_send_schedule(hass, current, now=now)
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.error("Scheduled HA Tools Email report failed (%s)", type(err).__name__)
+                    return
+                await storage.async_set_last_fired(
+                    schedule_id, period_key, _aware(now).isoformat()
+                )
 
         # async_track_time_change already matches local time; it has no `local`
         # argument, and passing one made setup fail whenever a schedule existed.
@@ -249,6 +252,7 @@ async def async_send_report(
         )
     return {
         "ok": True,
+        "status": "accepted_by_smtp",
         "kind": kind,
         "cadence": cadence,
         "subject": payload["subject"],
