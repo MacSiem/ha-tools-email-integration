@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.1.2 (2026-09-30)
+
+- Energy reports use unique configured Energy Dashboard grid-import sources and Recorder metadata units, with exact completed-hour windows for the last 24 hours, 7 days or 30 days.
+- Withhold totals for missing, incomplete or unsupported statistics; preserve measured zero and reject nonfinite values. Costs remain unavailable without a tariff.
+- Add administrator-only read-only `preview_energy_report`, using the same composer as manual sends and schedules without sending mail or updating schedule state.
+
 ## 2.1.1 (2026-09-30)
 
 - Report successful scheduled sends as `accepted_by_smtp`; detect partial SMTP recipient refusal without logging addresses.

@@ -102,6 +102,20 @@ action:
         Check the device and the SMTP settings in Settings → Devices & services → HA Tools Email → Configure.
 ```
 
+## Energy data and previews
+
+Energy reports measure grid import from the unique `stat_energy_from` sources configured
+in Home Assistant's Energy Dashboard. Arbitrary discovered device meters are excluded.
+Daily, weekly and monthly reports cover the last 24, 168 and 720 completed UTC hours;
+the exact start and end are included in the report. Recorder metadata determines Wh/kWh
+conversion. Missing hours or unsupported metadata withhold the period total; measured
+zero stays zero. No tariff is assumed, so server report costs are unavailable.
+
+Administrators can read `ha_tools_email/preview_energy_report` with `cadence` set to
+`daily`, `weekly` or `monthly`. It returns the same summary model used by `send_now`
+and schedules, without sending email or changing schedules. Energy Email cards need
+a version supporting this endpoint to show the server preview.
+
 ## Scheduled reports
 
 Schedules are stored with Home Assistant's `Store` helper, not YAML, and are
