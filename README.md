@@ -275,3 +275,9 @@ If this tool makes your Home Assistant life easier, consider supporting developm
 ## License
 
 MIT - see [LICENSE](LICENSE).
+
+## Privacy and data
+
+SMTP settings, recipients and reports are processed on your Home Assistant server. Sending a message transmits its content to the configured SMTP provider and recipients. Review those destinations and report content before enabling a schedule. Do not share passwords, addresses or raw configuration in public issues.
+
+See [SECURITY.md](SECURITY.md) for safe vulnerability reporting and [NOTICE](NOTICE) for licensing notices.
