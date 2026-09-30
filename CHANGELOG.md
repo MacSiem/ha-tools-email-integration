@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.1.1 (2026-09-30)
 
 - Report successful scheduled sends as `accepted_by_smtp`; detect partial SMTP recipient refusal without logging addresses.
 - Serialize schedule callbacks under a lock before checking and persisting the per-period send key; redact recipient and secret-key details from logs and errors.
