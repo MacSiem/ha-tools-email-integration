@@ -1,6 +1,9 @@
 {
   "domain": "ha_tools_email",
   "name": "HA Tools Email",
+  "after_dependencies": [
+    "energy"
+  ],
   "codeowners": [
     "@MacSiem"
   ],
@@ -16,8 +19,5 @@
   "issue_tracker": "https://github.com/MacSiem/ha-tools-email-integration/issues",
   "requirements": [],
   "single_config_entry": true,
-  "version": "2.1.2",
-  "after_dependencies": [
-    "energy"
-  ]
+  "version": "2.1.2"
 }
