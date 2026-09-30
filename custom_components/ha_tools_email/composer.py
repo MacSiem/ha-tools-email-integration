@@ -337,17 +337,35 @@ async def async_build_energy_report_payload(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Compose an energy report from recorder statistics."""
-    now = _aware(now or datetime.now(timezone.utc))
-    start = _period_start(cadence, now)
-    sensors = discover_energy_sensors(hass)
-    devices = await async_get_energy_usage(hass, sensors, start, now, cadence)
-    return build_energy_report_payload(
-        devices,
-        cadence=cadence,
-        now=now,
-        currency=DEFAULT_CURRENCY,
+    end = _aware(now or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    start = _period_start(cadence, end)
+    sensors = []
+    try:
+        from homeassistant.components.energy.data import async_get_manager
+        manager = await async_get_manager(hass)
+        prefs = manager.data or {}
+        ids = dict.fromkeys(source.get("stat_energy_from") for source in prefs.get("energy_sources", [])
+                            if source.get("type") == "grid" and source.get("stat_energy_from"))
+        for sid in ids:
+            state = hass.states.get(sid) if hasattr(hass.states, "get") else None
+            sensors.append({"entity_id": sid, "name": (getattr(state, "attributes", {}) or {}).get("friendly_name") or sid})
+    except Exception:
+        # Unavailable preferences must not turn every discovered meter into a grid source.
+        pass
+    snapshot = await async_get_energy_usage(hass, sensors, start, end, cadence)
+    payload = build_energy_report_payload(
+        snapshot["devices"], cadence=cadence, now=end,
+        currency=getattr(getattr(hass, "config", None), "currency", "") or "",
         price_per_kwh=None,
     )
+    payload["summary"].update({key: value for key, value in snapshot.items() if key != "devices"})
+    payload["summary"]["period"] = {"start": start.isoformat(), "end": end.isoformat(), "cadence": cadence}
+    context = f"Grid import from Energy Dashboard. Recorder window: {start.isoformat()} → {end.isoformat()} (completed hours)."
+    if snapshot["status"] == "partial":
+        context = "Incomplete energy statistics; period total withheld. " + context
+    payload["body"] += "\n\n" + context
+    payload["html"] = payload["html"].replace("</body>", f"<p>{escape(context)}</p></body>")
+    return payload
 
 
 def discover_energy_sensors(hass: Any) -> list[dict[str, Any]]:
@@ -395,53 +413,49 @@ async def async_get_energy_usage(
     start: datetime,
     end: datetime,
     cadence: str,
-) -> list[dict[str, Any]]:
-    """Fetch recorder statistics for energy sensors."""
-    if not sensors:
-        return []
-
+) -> dict[str, Any]:
+    """Return complete hourly Recorder grid-import series, or a truthful unavailable state."""
+    ids = list(dict.fromkeys(sensor["entity_id"] for sensor in sensors))
+    snapshot = {"status": "no_data", "devices": [], "source_ids": ids}
+    if not ids:
+        return snapshot
     try:
-        from homeassistant.components.recorder.statistics import statistics_during_period
+        from homeassistant.components.recorder.statistics import get_metadata, statistics_during_period
         from homeassistant.components.recorder.util import get_instance
-    except Exception:
-        return []
-
-    statistic_ids = [sensor["entity_id"] for sensor in sensors]
-    sensor_by_id = {sensor["entity_id"]: sensor for sensor in sensors}
-    period = "hour" if cadence == CADENCE_DAILY else "day"
-
-    try:
-        result = await get_instance(hass).async_add_executor_job(
-            statistics_during_period,
-            hass,
-            start,
-            end,
-            set(statistic_ids),
-            period,
-            {},
-            {"change"},
+        recorder = get_instance(hass)
+        metadata = await recorder.async_add_executor_job(lambda: get_metadata(hass, statistic_ids=set(ids)))
+        result = await recorder.async_add_executor_job(
+            statistics_during_period, hass, start, end, set(ids), "hour", {}, {"change"},
         )
     except Exception:
-        return []
-
-    devices: list[dict[str, Any]] = []
-    for entity_id, points in (result or {}).items():
-        sensor = sensor_by_id.get(entity_id)
-        if not sensor or not points:
-            continue
-        total_change = sum(float(point.get("change") or 0) for point in points)
-        if sensor.get("unit") == "Wh":
-            total_change = total_change / 1000
-        if not isfinite(total_change) or total_change < 0:
-            continue
-        devices.append(
-            {
-                "name": sensor["name"],
-                "entity_id": entity_id,
-                "kwh": total_change,
-            }
-        )
-    return devices
+        return snapshot
+    names = {sensor["entity_id"]: sensor["name"] for sensor in sensors}
+    expected = set(range(int(start.timestamp()), int(end.timestamp()), 3600))
+    devices = []
+    any_samples = any((result or {}).get(sid) for sid in ids)
+    for sid in ids:
+        raw_meta = metadata.get(sid)
+        meta = raw_meta[1] if isinstance(raw_meta, tuple) else raw_meta
+        if not meta or not meta.get("has_sum") or meta.get("unit_of_measurement") not in {"Wh", "kWh"} or meta.get("unit_class") not in {None, "energy"}:
+            return {**snapshot, "status": "unsupported"}
+        points = (result or {}).get(sid) or []
+        buckets = {}
+        for point in points:
+            try:
+                stamp = _entry_time({"timestamp": point.get("start")})
+                key = int(stamp.timestamp()) if stamp else None
+                change = float(point["change"]) if point.get("change") is not None else None
+            except (TypeError, ValueError, OverflowError):
+                change = None
+                key = None
+            if key not in expected or key in buckets or change is None or not isfinite(change) or change < 0:
+                return {**snapshot, "status": "partial"}
+            buckets[key] = change
+        if set(buckets) != expected or not expected:
+            return {**snapshot, "status": "partial" if any_samples else "no_data"}
+        value = sum(buckets.values()) / (1000 if meta["unit_of_measurement"] == "Wh" else 1)
+        devices.append({"name": names[sid], "entity_id": sid, "kwh": value})
+    return {**snapshot, "status": "ready", "devices": devices}
 
 
 def _energy_rate(value: float | None) -> float | None:
