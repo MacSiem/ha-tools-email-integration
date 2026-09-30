@@ -150,8 +150,11 @@ async def test_no_repair_for_secret_reference(hass, hass_storage):
 async def test_websocket_reads_require_admin(hass, hass_storage, hass_ws_client, hass_read_only_access_token):
     await _setup(hass)
     client = await hass_ws_client(hass, hass_read_only_access_token)
-    for command in ("get_config", "list_schedules"):
-        await client.send_json_auto_id({"type": f"{DOMAIN}/{command}"})
+    for command in ("get_config", "list_schedules", "preview_energy_report"):
+        payload = {"type": f"{DOMAIN}/{command}"}
+        if command == "preview_energy_report":
+            payload["cadence"] = "daily"
+        await client.send_json_auto_id(payload)
         response = await client.receive_json()
         assert response["success"] is False
         assert response["error"]["code"] == "unauthorized"
@@ -160,6 +163,22 @@ async def test_websocket_reads_require_admin(hass, hass_storage, hass_ws_client,
     response = await admin.receive_json()
     assert response["success"] is True
     assert "password" not in response["result"]
+
+
+async def test_admin_energy_preview_does_not_send_or_change_schedules(hass, hass_storage, hass_ws_client):
+    _, storage = await _setup(hass)
+    schedules = await storage.async_list_schedules()
+    client = await hass_ws_client(hass)
+    with patch("custom_components.ha_tools_email.scheduler.async_send_report") as send:
+        await client.send_json_auto_id({"type": f"{DOMAIN}/preview_energy_report", "cadence": "daily"})
+        response = await client.receive_json()
+    assert response["success"] is True
+    assert response["result"]["status"] == "no_data"
+    assert response["result"]["total_kwh"] is None
+    assert response["result"]["total_cost"] is None
+    assert response["result"]["period"]["cadence"] == "daily"
+    assert await storage.async_list_schedules() == schedules
+    send.assert_not_called()
 
 
 async def test_diagnostics_are_redacted(hass, hass_storage):

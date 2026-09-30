@@ -44,7 +44,7 @@ settings once, then send or schedule reports.**
 |---|---|
 | Config entry creation (no fields to fill in) | Entering SMTP settings once in **Configure** |
 | Report composition (log digest, energy report) once scheduled | Creating a schedule via the websocket API |
-| Duplicate-fire prevention across HA restarts | Sending an on-demand report (`send_now` / `send` service) |
+| Per-period duplicate-fire guard across normal callbacks and restarts | Sending an on-demand report (`send_now` / `send` service) |
 | `!secret` resolution at send time | Adding secrets to `secrets.yaml` |
 
 ## Entities
@@ -102,6 +102,20 @@ action:
         Check the device and the SMTP settings in Settings → Devices & services → HA Tools Email → Configure.
 ```
 
+## Energy data and previews
+
+Energy reports measure grid import from the unique `stat_energy_from` sources configured
+in Home Assistant's Energy Dashboard. Arbitrary discovered device meters are excluded.
+Daily, weekly and monthly reports cover the last 24, 168 and 720 completed UTC hours;
+the exact start and end are included in the report. Recorder metadata determines Wh/kWh
+conversion. Missing hours or unsupported metadata withhold the period total; measured
+zero stays zero. No tariff is assumed, so server report costs are unavailable.
+
+Administrators can read `ha_tools_email/preview_energy_report` with `cadence` set to
+`daily`, `weekly` or `monthly`. It returns the same summary model used by `send_now`
+and schedules, without sending email or changing schedules. Energy Email cards need
+a version supporting this endpoint to show the server preview.
+
 ## Scheduled reports
 
 Schedules are stored with Home Assistant's `Store` helper, not YAML, and are
@@ -138,7 +152,7 @@ Read non-secret SMTP state and schedules (no admin required):
 { "type": "ha_tools_email/get_config" }
 ```
 
-List schedules (no admin required):
+List schedules (admin required):
 
 ```json
 { "type": "ha_tools_email/list_schedules" }
@@ -181,10 +195,8 @@ Compose and send a report immediately (admin required):
 }
 ```
 
-`get_config` and `list_schedules` are readable by any logged-in user and
-return non-secret state; `set_schedule` and `send_now` require an admin
-connection. The similarly named legacy services that save/read SMTP settings
-or list secret-key names are admin-only.
+All four websocket commands require an admin connection. The legacy services
+that save/read SMTP settings or list secret-key names are admin-only too.
 
 ## Installation
 
@@ -215,7 +227,7 @@ service.
 **Is my SMTP password exposed to the frontend or other users?**
 No, and the two read paths are deliberately different:
 
-- The `ha_tools_email/get_config` **websocket** command returns a
+- The admin-only `ha_tools_email/get_config` **websocket** command returns a
   `_safe_smtp_config` payload with only `server`, `port`, `username`,
   `sender`, `encryption`, `default_recipient`, `uses_secret` and
   `smtp_configured` — there is no `password` key in the response at all.
@@ -232,6 +244,13 @@ deleting a schedule (`set_schedule`) and triggering an on-demand send
 administrator. Sending mail through `ha_tools_email.send` and testing the
 household SMTP account also require an administrator for interactive calls.
 Home Assistant automations without a user context continue to work.
+
+**Does a successful send mean delivery to the inbox?**
+No. `accepted_by_smtp` means the configured SMTP server accepted the message.
+Final delivery and any later bounce must be checked at the SMTP provider.
+The per-period schedule guard prevents concurrent callbacks and normal
+restart duplicates. A crash between SMTP acceptance and persistence can
+still result in a duplicate after restart.
 
 <a id="smtp-password-security"></a>
 **Why can't I pass the password to `save_config` any more?**
@@ -270,3 +289,9 @@ If this tool makes your Home Assistant life easier, consider supporting developm
 ## License
 
 MIT - see [LICENSE](LICENSE).
+
+## Privacy and data
+
+SMTP settings, recipients and reports are processed on your Home Assistant server. Sending a message transmits its content to the configured SMTP provider and recipients. Review those destinations and report content before enabling a schedule. Do not share passwords, addresses or raw configuration in public issues.
+
+See [SECURITY.md](SECURITY.md) for safe vulnerability reporting and [NOTICE](NOTICE) for licensing notices.

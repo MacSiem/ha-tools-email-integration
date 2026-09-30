@@ -78,6 +78,31 @@ class ComposerRenderingTest(unittest.TestCase):
         self.assertIn("12.60 PLN", payload["html"])
         self.assertNotIn("EV <charger>", payload["html"])
 
+    def test_missing_energy_data_is_not_a_measured_zero(self) -> None:
+        payload = build_energy_report_payload([], cadence="daily")
+        self.assertIsNone(payload["summary"]["total_kwh"])
+        self.assertIsNone(payload["summary"]["total_cost"])
+        self.assertIn("No energy statistics", payload["body"])
+        self.assertNotIn("0.00 kWh", payload["html"])
+
+    def test_measured_zero_keeps_its_source_without_inventing_a_tariff(self) -> None:
+        payload = build_energy_report_payload(
+            [{"name": "Meter", "entity_id": "sensor.meter", "kwh": 0}],
+            cadence="daily",
+        )
+        self.assertEqual(0, payload["summary"]["total_kwh"])
+        self.assertEqual(1, len(payload["summary"]["devices"]))
+        self.assertIsNone(payload["summary"]["total_cost"])
+        self.assertIn("Tariff not configured", payload["body"])
+
+    def test_nonfinite_energy_cannot_poison_report_totals(self) -> None:
+        payload = build_energy_report_payload(
+            [{"name": "Bad", "kwh": float("nan")}, {"name": "Good", "kwh": 2}],
+            cadence="daily", price_per_kwh=0.5,
+        )
+        self.assertEqual(2, payload["summary"]["total_kwh"])
+        self.assertEqual(1, payload["summary"]["total_cost"])
+
 
 if __name__ == "__main__":
     unittest.main()
