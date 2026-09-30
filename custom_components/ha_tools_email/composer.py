@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from html import escape
+from math import isfinite
 from typing import Any, Iterable
 
 try:
@@ -195,23 +196,25 @@ def build_energy_report_payload(
     cadence: str,
     now: datetime | None = None,
     currency: str = DEFAULT_CURRENCY,
-    price_per_kwh: float = DEFAULT_PRICE_PER_KWH,
+    price_per_kwh: float | None = None,
 ) -> dict[str, Any]:
     """Build an energy report email payload from device usage rows."""
     now = _aware(now or datetime.now(timezone.utc))
     rows = _clean_energy_devices(devices, price_per_kwh)
-    total_kwh = sum(row["kwh"] for row in rows)
-    total_cost = total_kwh * price_per_kwh
+    total_kwh = sum(row["kwh"] for row in rows) if rows else None
+    rate = _energy_rate(price_per_kwh)
+    total_cost = total_kwh * rate if total_kwh is not None and rate is not None else None
     title = f"{_cadence_label(cadence)} Energy Report"
     subject = f"{title} - {now.date().isoformat()}"
     body_lines = [
         f"{title} - {now.date().isoformat()}",
-        f"Total: {total_kwh:.2f} kWh / {total_cost:.2f} {currency}",
+        (f"Total: {total_kwh:.2f} kWh / {_energy_cost_text(total_cost, currency)}"
+         if total_kwh is not None else "No energy statistics found for this period."),
         "",
         "Top consumers:",
     ]
     body_lines.extend(
-        f"{row['name']}: {row['kwh']:.2f} kWh / {row['cost']:.2f} {currency}"
+        f"{row['name']}: {row['kwh']:.2f} kWh / {_energy_cost_text(row['cost'], currency)}"
         for row in rows[:10]
     )
     html = render_energy_report_html(
@@ -232,8 +235,8 @@ def build_energy_report_payload(
 def render_energy_report_html(
     title: str,
     devices: list[dict[str, Any]],
-    total_kwh: float,
-    total_cost: float,
+    total_kwh: float | None,
+    total_cost: float | None,
     currency: str,
     now: datetime | None = None,
 ) -> str:
@@ -243,13 +246,15 @@ def render_energy_report_html(
         "<tr>"
         f"<td style=\"padding:9px 12px;border-bottom:1px solid #e2e8f0\">{escape(row['name'])}</td>"
         f"<td style=\"padding:9px 12px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:700\">{row['kwh']:.2f}</td>"
-        f"<td style=\"padding:9px 12px;border-bottom:1px solid #e2e8f0;text-align:right\">{row['cost']:.2f} {escape(currency)}</td>"
+        f"<td style=\"padding:9px 12px;border-bottom:1px solid #e2e8f0;text-align:right\">{escape(_energy_cost_text(row['cost'], currency))}</td>"
         f"<td style=\"padding:9px 12px;border-bottom:1px solid #e2e8f0;text-align:right;color:#64748b\">{row['share']:.0f}%</td>"
         "</tr>"
         for row in devices[:25]
     )
     if not rows:
         rows = '<tr><td colspan="4" style="padding:12px">No energy statistics found.</td></tr>'
+    total_text = (f"Total: {total_kwh:.2f} kWh / {_energy_cost_text(total_cost, currency)}"
+                  if total_kwh is not None else "No energy statistics found for this period.")
 
     return f"""<!doctype html>
 <html><body style="margin:0;background:#f8fafc;color:#0f172a;font-family:Arial,sans-serif">
@@ -259,7 +264,7 @@ def render_energy_report_html(
       <p style="margin:6px 0 0;color:#dbeafe;font-size:13px">{escape(now.isoformat())}</p>
     </div>
     <div style="padding:18px 22px">
-      <p style="font-size:15px;margin:0 0 14px">Total: <strong>{total_kwh:.2f} kWh</strong> / <strong>{total_cost:.2f} {escape(currency)}</strong></p>
+      <p style="font-size:15px;margin:0 0 14px">{escape(total_text)}</p>
       <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0">
         <thead><tr style="background:#f1f5f9">
           <th style="padding:9px 12px;text-align:left">Consumer</th>
@@ -341,7 +346,7 @@ async def async_build_energy_report_payload(
         cadence=cadence,
         now=now,
         currency=DEFAULT_CURRENCY,
-        price_per_kwh=DEFAULT_PRICE_PER_KWH,
+        price_per_kwh=None,
     )
 
 
@@ -427,7 +432,7 @@ async def async_get_energy_usage(
         total_change = sum(float(point.get("change") or 0) for point in points)
         if sensor.get("unit") == "Wh":
             total_change = total_change / 1000
-        if total_change <= 0:
+        if not isfinite(total_change) or total_change < 0:
             continue
         devices.append(
             {
@@ -439,23 +444,31 @@ async def async_get_energy_usage(
     return devices
 
 
+def _energy_rate(value: float | None) -> float | None:
+    return value if isinstance(value, (int, float)) and isfinite(value) and value >= 0 else None
+
+
+def _energy_cost_text(value: float | None, currency: str) -> str:
+    return f"{value:.2f} {currency}" if value is not None else "Tariff not configured"
+
+
 def _clean_energy_devices(
-    devices: Iterable[dict[str, Any]], price_per_kwh: float
+    devices: Iterable[dict[str, Any]], price_per_kwh: float | None
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for device in devices:
         try:
-            kwh = float(device.get("kwh", device.get("month", 0)) or 0)
+            kwh = float(device.get("kwh", device.get("month")))
         except (TypeError, ValueError):
             continue
-        if kwh <= 0:
+        if not isfinite(kwh) or kwh < 0:
             continue
         rows.append(
             {
                 "name": str(device.get("name") or device.get("entity_id") or "Unknown"),
                 "entity_id": str(device.get("entity_id") or ""),
                 "kwh": kwh,
-                "cost": kwh * price_per_kwh,
+                "cost": kwh * _energy_rate(price_per_kwh) if _energy_rate(price_per_kwh) is not None else None,
                 "share": 0.0,
             }
         )
