@@ -330,6 +330,28 @@ async def async_get_system_log_entries(hass: Any) -> list[dict[str, Any]]:
     return []
 
 
+def _energy_grid_import_ids(prefs: dict[str, Any]) -> list[str]:
+    """Read unique grid imports with the frontend's flat-before-flow rule."""
+    sources = prefs.get("energy_sources", [])
+    if not isinstance(sources, list):
+        return []
+    ids: dict[str, None] = {}
+    for source in sources:
+        if not isinstance(source, dict) or source.get("type") != "grid":
+            continue
+        flat = source.get("stat_energy_from")
+        if flat:
+            candidates = [flat]
+        else:
+            flows = source.get("flow_from", [])
+            candidates = [flow.get("stat_energy_from") for flow in flows
+                          if isinstance(flow, dict)] if isinstance(flows, list) else []
+        for sid in candidates:
+            if isinstance(sid, str) and sid.strip():
+                ids.setdefault(sid, None)
+    return list(ids)
+
+
 async def async_build_energy_report_payload(
     hass: Any,
     *,
@@ -344,8 +366,7 @@ async def async_build_energy_report_payload(
         from homeassistant.components.energy.data import async_get_manager
         manager = await async_get_manager(hass)
         prefs = manager.data or {}
-        ids = dict.fromkeys(source.get("stat_energy_from") for source in prefs.get("energy_sources", [])
-                            if source.get("type") == "grid" and source.get("stat_energy_from"))
+        ids = _energy_grid_import_ids(prefs)
         for sid in ids:
             state = hass.states.get(sid) if hasattr(hass.states, "get") else None
             sensors.append({"entity_id": sid, "name": (getattr(state, "attributes", {}) or {}).get("friendly_name") or sid})
@@ -436,7 +457,8 @@ async def async_get_energy_usage(
     for sid in ids:
         raw_meta = metadata.get(sid)
         meta = raw_meta[1] if isinstance(raw_meta, tuple) else raw_meta
-        if not meta or not meta.get("has_sum") or meta.get("unit_of_measurement") not in {"Wh", "kWh"} or meta.get("unit_class") not in {None, "energy"}:
+        factor = {"Wh": 0.001, "kWh": 1.0, "MWh": 1000.0}.get(meta.get("unit_of_measurement")) if meta else None
+        if not meta or not meta.get("has_sum") or factor is None or meta.get("unit_class") not in {None, "energy"}:
             return {**snapshot, "status": "unsupported"}
         points = (result or {}).get(sid) or []
         buckets = {}
@@ -453,7 +475,7 @@ async def async_get_energy_usage(
             buckets[key] = change
         if set(buckets) != expected or not expected:
             return {**snapshot, "status": "partial" if any_samples else "no_data"}
-        value = sum(buckets.values()) / (1000 if meta["unit_of_measurement"] == "Wh" else 1)
+        value = sum(buckets.values()) * factor
         devices.append({"name": names[sid], "entity_id": sid, "kwh": value})
     return {**snapshot, "status": "ready", "devices": devices}
 

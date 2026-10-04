@@ -104,11 +104,13 @@ action:
 
 ## Energy data and previews
 
-Energy reports measure grid import from the unique `stat_energy_from` sources configured
-in Home Assistant's Energy Dashboard. Arbitrary discovered device meters are excluded.
+Energy reports measure the unique grid-import `stat_energy_from` sources configured
+in Home Assistant's Energy Dashboard. Each grid source uses its nonempty flat
+`stat_energy_from` when present, otherwise imports from `flow_from` are used.
+Exports, solar sources and arbitrary discovered device meters are excluded.
 Daily, weekly and monthly reports cover the last 24, 168 and 720 completed UTC hours;
-the exact start and end are included in the report. Recorder metadata determines Wh/kWh
-conversion. Missing hours or unsupported metadata withhold the period total; measured
+the exact start and end are included in the report. Recorder metadata determines Wh/kWh/MWh
+conversion to kWh (Wh × 0.001, kWh × 1, MWh × 1000). Missing hours or unsupported metadata withhold the period total; measured
 zero stays zero. No tariff is assumed, so server report costs are unavailable.
 
 Administrators can read `ha_tools_email/preview_energy_report` with `cadence` set to
@@ -137,10 +139,10 @@ managed through the websocket API below. Each schedule looks like:
 
 Log digests read Home Assistant `system_log` records, aggregate counts by
 level and logger, deduplicate against the previous digest, and include the
-top 10 recent errors and warnings. Energy reports auto-discover `sensor.*`
-entities with `device_class: energy` or kWh/Wh units and pull recorder
-`statistics_during_period` changes for the period, then render total kWh and
-a top-consumers table.
+top 10 recent errors and warnings. Energy reports use only configured Energy Dashboard grid imports and read
+Recorder `statistics_during_period` changes with Wh/kWh/MWh metadata. Complete
+hourly coverage across every source is required before rendering total kWh and
+a grid-source breakdown; unrelated appliance counters are not added.
 
 ## Websocket API
 
