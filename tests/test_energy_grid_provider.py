@@ -190,3 +190,35 @@ class EnergyGridProviderTest(unittest.TestCase):
         self.assertEqual([], summary["devices"])
         self.assertEqual([], summary["source_ids"])
         self.assertEqual({}, calls)
+
+    def test_finite_mwh_buckets_overflow_normalization_with_valid_second_provider(self):
+        prefs = {"energy_sources": [{"type": "grid", "stat_energy_from": sid}
+                                    for sid in ["sensor.mwh", "sensor.valid"]]}
+        rows = {"sensor.mwh": {"unit": "MWh", "change": 1e304},
+                "sensor.valid": {"unit": "kWh", "change": 1}}
+        for cadence in ["daily", "weekly"]:
+            with self.subTest(cadence=cadence):
+                summary, calls = self.compose(prefs, rows, cadence=cadence)
+                self.assertEqual("partial", summary["status"])
+                self.assertEqual([], summary["devices"])
+                self.assertIsNone(summary["total_kwh"])
+                self.assertIsNone(summary["total_cost"])
+                self.assertEqual(list(rows), summary["source_ids"])
+                self.assertEqual(set(rows), calls["statistics_ids"])
+
+    def test_finite_provider_totals_overflow_aggregate_withholds_entire_period(self):
+        prefs = {"energy_sources": [{"type": "grid", "stat_energy_from": sid}
+                                    for sid in ["sensor.a", "sensor.b"]]}
+        # Each daily total is 9.6e307; each weekly total is 1.008e308.
+        # Every bucket and individual provider total is finite, but two totals overflow.
+        for cadence, change in [("daily", 4e306), ("weekly", 6e305)]:
+            with self.subTest(cadence=cadence):
+                rows = {"sensor.a": {"unit": "kWh", "change": change},
+                        "sensor.b": {"unit": "kWh", "change": change}}
+                summary, calls = self.compose(prefs, rows, cadence=cadence)
+                self.assertEqual("partial", summary["status"])
+                self.assertEqual([], summary["devices"])
+                self.assertIsNone(summary["total_kwh"])
+                self.assertIsNone(summary["total_cost"])
+                self.assertEqual(list(rows), summary["source_ids"])
+                self.assertEqual(set(rows), calls["statistics_ids"])

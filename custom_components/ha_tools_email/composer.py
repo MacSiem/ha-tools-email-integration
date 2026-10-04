@@ -476,7 +476,11 @@ async def async_get_energy_usage(
         if set(buckets) != expected or not expected:
             return {**snapshot, "status": "partial" if any_samples else "no_data"}
         value = sum(buckets.values()) * factor
+        if not isfinite(value):
+            return {**snapshot, "status": "partial"}
         devices.append({"name": names[sid], "entity_id": sid, "kwh": value})
+    if not isfinite(sum(device["kwh"] for device in devices)):
+        return {**snapshot, "status": "partial"}
     return {**snapshot, "status": "ready", "devices": devices}
 
 
