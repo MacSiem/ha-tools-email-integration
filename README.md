@@ -148,7 +148,7 @@ a grid-source breakdown; unrelated appliance counters are not added.
 
 Commands use the integration domain as the `type` prefix.
 
-Read non-secret SMTP state and schedules (no admin required):
+Read non-secret SMTP state and schedules (admin required):
 
 ```json
 { "type": "ha_tools_email/get_config" }
