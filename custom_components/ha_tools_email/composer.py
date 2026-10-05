@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from html import escape
+from math import isfinite
 from typing import Any, Iterable
 
 try:
@@ -195,23 +196,25 @@ def build_energy_report_payload(
     cadence: str,
     now: datetime | None = None,
     currency: str = DEFAULT_CURRENCY,
-    price_per_kwh: float = DEFAULT_PRICE_PER_KWH,
+    price_per_kwh: float | None = None,
 ) -> dict[str, Any]:
     """Build an energy report email payload from device usage rows."""
     now = _aware(now or datetime.now(timezone.utc))
     rows = _clean_energy_devices(devices, price_per_kwh)
-    total_kwh = sum(row["kwh"] for row in rows)
-    total_cost = total_kwh * price_per_kwh
+    total_kwh = sum(row["kwh"] for row in rows) if rows else None
+    rate = _energy_rate(price_per_kwh)
+    total_cost = total_kwh * rate if total_kwh is not None and rate is not None else None
     title = f"{_cadence_label(cadence)} Energy Report"
     subject = f"{title} - {now.date().isoformat()}"
     body_lines = [
         f"{title} - {now.date().isoformat()}",
-        f"Total: {total_kwh:.2f} kWh / {total_cost:.2f} {currency}",
+        (f"Total: {total_kwh:.2f} kWh / {_energy_cost_text(total_cost, currency)}"
+         if total_kwh is not None else "No energy statistics found for this period."),
         "",
         "Top consumers:",
     ]
     body_lines.extend(
-        f"{row['name']}: {row['kwh']:.2f} kWh / {row['cost']:.2f} {currency}"
+        f"{row['name']}: {row['kwh']:.2f} kWh / {_energy_cost_text(row['cost'], currency)}"
         for row in rows[:10]
     )
     html = render_energy_report_html(
@@ -232,8 +235,8 @@ def build_energy_report_payload(
 def render_energy_report_html(
     title: str,
     devices: list[dict[str, Any]],
-    total_kwh: float,
-    total_cost: float,
+    total_kwh: float | None,
+    total_cost: float | None,
     currency: str,
     now: datetime | None = None,
 ) -> str:
@@ -243,13 +246,15 @@ def render_energy_report_html(
         "<tr>"
         f"<td style=\"padding:9px 12px;border-bottom:1px solid #e2e8f0\">{escape(row['name'])}</td>"
         f"<td style=\"padding:9px 12px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:700\">{row['kwh']:.2f}</td>"
-        f"<td style=\"padding:9px 12px;border-bottom:1px solid #e2e8f0;text-align:right\">{row['cost']:.2f} {escape(currency)}</td>"
+        f"<td style=\"padding:9px 12px;border-bottom:1px solid #e2e8f0;text-align:right\">{escape(_energy_cost_text(row['cost'], currency))}</td>"
         f"<td style=\"padding:9px 12px;border-bottom:1px solid #e2e8f0;text-align:right;color:#64748b\">{row['share']:.0f}%</td>"
         "</tr>"
         for row in devices[:25]
     )
     if not rows:
         rows = '<tr><td colspan="4" style="padding:12px">No energy statistics found.</td></tr>'
+    total_text = (f"Total: {total_kwh:.2f} kWh / {_energy_cost_text(total_cost, currency)}"
+                  if total_kwh is not None else "No energy statistics found for this period.")
 
     return f"""<!doctype html>
 <html><body style="margin:0;background:#f8fafc;color:#0f172a;font-family:Arial,sans-serif">
@@ -259,7 +264,7 @@ def render_energy_report_html(
       <p style="margin:6px 0 0;color:#dbeafe;font-size:13px">{escape(now.isoformat())}</p>
     </div>
     <div style="padding:18px 22px">
-      <p style="font-size:15px;margin:0 0 14px">Total: <strong>{total_kwh:.2f} kWh</strong> / <strong>{total_cost:.2f} {escape(currency)}</strong></p>
+      <p style="font-size:15px;margin:0 0 14px">{escape(total_text)}</p>
       <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0">
         <thead><tr style="background:#f1f5f9">
           <th style="padding:9px 12px;text-align:left">Consumer</th>
@@ -325,6 +330,28 @@ async def async_get_system_log_entries(hass: Any) -> list[dict[str, Any]]:
     return []
 
 
+def _energy_grid_import_ids(prefs: dict[str, Any]) -> list[str]:
+    """Read unique grid imports with the frontend's flat-before-flow rule."""
+    sources = prefs.get("energy_sources", [])
+    if not isinstance(sources, list):
+        return []
+    ids: dict[str, None] = {}
+    for source in sources:
+        if not isinstance(source, dict) or source.get("type") != "grid":
+            continue
+        flat = source.get("stat_energy_from")
+        if flat:
+            candidates = [flat]
+        else:
+            flows = source.get("flow_from", [])
+            candidates = [flow.get("stat_energy_from") for flow in flows
+                          if isinstance(flow, dict)] if isinstance(flows, list) else []
+        for sid in candidates:
+            if isinstance(sid, str) and sid.strip():
+                ids.setdefault(sid, None)
+    return list(ids)
+
+
 async def async_build_energy_report_payload(
     hass: Any,
     *,
@@ -332,17 +359,34 @@ async def async_build_energy_report_payload(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Compose an energy report from recorder statistics."""
-    now = _aware(now or datetime.now(timezone.utc))
-    start = _period_start(cadence, now)
-    sensors = discover_energy_sensors(hass)
-    devices = await async_get_energy_usage(hass, sensors, start, now, cadence)
-    return build_energy_report_payload(
-        devices,
-        cadence=cadence,
-        now=now,
-        currency=DEFAULT_CURRENCY,
-        price_per_kwh=DEFAULT_PRICE_PER_KWH,
+    end = _aware(now or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    start = _period_start(cadence, end)
+    sensors = []
+    try:
+        from homeassistant.components.energy.data import async_get_manager
+        manager = await async_get_manager(hass)
+        prefs = manager.data or {}
+        ids = _energy_grid_import_ids(prefs)
+        for sid in ids:
+            state = hass.states.get(sid) if hasattr(hass.states, "get") else None
+            sensors.append({"entity_id": sid, "name": (getattr(state, "attributes", {}) or {}).get("friendly_name") or sid})
+    except Exception:
+        # Unavailable preferences must not turn every discovered meter into a grid source.
+        pass
+    snapshot = await async_get_energy_usage(hass, sensors, start, end, cadence)
+    payload = build_energy_report_payload(
+        snapshot["devices"], cadence=cadence, now=end,
+        currency=getattr(getattr(hass, "config", None), "currency", "") or "",
+        price_per_kwh=None,
     )
+    payload["summary"].update({key: value for key, value in snapshot.items() if key != "devices"})
+    payload["summary"]["period"] = {"start": start.isoformat(), "end": end.isoformat(), "cadence": cadence}
+    context = f"Grid import from Energy Dashboard. Recorder window: {start.isoformat()} → {end.isoformat()} (completed hours)."
+    if snapshot["status"] == "partial":
+        context = "Incomplete energy statistics; period total withheld. " + context
+    payload["body"] += "\n\n" + context
+    payload["html"] = payload["html"].replace("</body>", f"<p>{escape(context)}</p></body>")
+    return payload
 
 
 def discover_energy_sensors(hass: Any) -> list[dict[str, Any]]:
@@ -390,72 +434,81 @@ async def async_get_energy_usage(
     start: datetime,
     end: datetime,
     cadence: str,
-) -> list[dict[str, Any]]:
-    """Fetch recorder statistics for energy sensors."""
-    if not sensors:
-        return []
-
+) -> dict[str, Any]:
+    """Return complete hourly Recorder grid-import series, or a truthful unavailable state."""
+    ids = list(dict.fromkeys(sensor["entity_id"] for sensor in sensors))
+    snapshot = {"status": "no_data", "devices": [], "source_ids": ids}
+    if not ids:
+        return snapshot
     try:
-        from homeassistant.components.recorder.statistics import statistics_during_period
+        from homeassistant.components.recorder.statistics import get_metadata, statistics_during_period
         from homeassistant.components.recorder.util import get_instance
-    except Exception:
-        return []
-
-    statistic_ids = [sensor["entity_id"] for sensor in sensors]
-    sensor_by_id = {sensor["entity_id"]: sensor for sensor in sensors}
-    period = "hour" if cadence == CADENCE_DAILY else "day"
-
-    try:
-        result = await get_instance(hass).async_add_executor_job(
-            statistics_during_period,
-            hass,
-            start,
-            end,
-            set(statistic_ids),
-            period,
-            {},
-            {"change"},
+        recorder = get_instance(hass)
+        metadata = await recorder.async_add_executor_job(lambda: get_metadata(hass, statistic_ids=set(ids)))
+        result = await recorder.async_add_executor_job(
+            statistics_during_period, hass, start, end, set(ids), "hour", {}, {"change"},
         )
     except Exception:
-        return []
+        return snapshot
+    names = {sensor["entity_id"]: sensor["name"] for sensor in sensors}
+    expected = set(range(int(start.timestamp()), int(end.timestamp()), 3600))
+    devices = []
+    any_samples = any((result or {}).get(sid) for sid in ids)
+    for sid in ids:
+        raw_meta = metadata.get(sid)
+        meta = raw_meta[1] if isinstance(raw_meta, tuple) else raw_meta
+        factor = {"Wh": 0.001, "kWh": 1.0, "MWh": 1000.0}.get(meta.get("unit_of_measurement")) if meta else None
+        if not meta or not meta.get("has_sum") or factor is None or meta.get("unit_class") not in {None, "energy"}:
+            return {**snapshot, "status": "unsupported"}
+        points = (result or {}).get(sid) or []
+        buckets = {}
+        for point in points:
+            try:
+                stamp = _entry_time({"timestamp": point.get("start")})
+                key = int(stamp.timestamp()) if stamp else None
+                change = float(point["change"]) if point.get("change") is not None else None
+            except (TypeError, ValueError, OverflowError):
+                change = None
+                key = None
+            if key not in expected or key in buckets or change is None or not isfinite(change) or change < 0:
+                return {**snapshot, "status": "partial"}
+            buckets[key] = change
+        if set(buckets) != expected or not expected:
+            return {**snapshot, "status": "partial" if any_samples else "no_data"}
+        value = sum(buckets.values()) * factor
+        if not isfinite(value):
+            return {**snapshot, "status": "partial"}
+        devices.append({"name": names[sid], "entity_id": sid, "kwh": value})
+    if not isfinite(sum(device["kwh"] for device in devices)):
+        return {**snapshot, "status": "partial"}
+    return {**snapshot, "status": "ready", "devices": devices}
 
-    devices: list[dict[str, Any]] = []
-    for entity_id, points in (result or {}).items():
-        sensor = sensor_by_id.get(entity_id)
-        if not sensor or not points:
-            continue
-        total_change = sum(float(point.get("change") or 0) for point in points)
-        if sensor.get("unit") == "Wh":
-            total_change = total_change / 1000
-        if total_change <= 0:
-            continue
-        devices.append(
-            {
-                "name": sensor["name"],
-                "entity_id": entity_id,
-                "kwh": total_change,
-            }
-        )
-    return devices
+
+def _energy_rate(value: float | None) -> float | None:
+    return value if isinstance(value, (int, float)) and isfinite(value) and value >= 0 else None
+
+
+def _energy_cost_text(value: float | None, currency: str) -> str:
+    return f"{value:.2f} {currency}" if value is not None else "Tariff not configured"
 
 
 def _clean_energy_devices(
-    devices: Iterable[dict[str, Any]], price_per_kwh: float
+    devices: Iterable[dict[str, Any]], price_per_kwh: float | None
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for device in devices:
         try:
-            kwh = float(device.get("kwh", device.get("month", 0)) or 0)
+            kwh = float(device.get("kwh", device.get("month")))
         except (TypeError, ValueError):
             continue
-        if kwh <= 0:
+        if not isfinite(kwh) or kwh < 0:
             continue
         rows.append(
             {
                 "name": str(device.get("name") or device.get("entity_id") or "Unknown"),
                 "entity_id": str(device.get("entity_id") or ""),
                 "kwh": kwh,
-                "cost": kwh * price_per_kwh,
+                "cost": kwh * _energy_rate(price_per_kwh) if _energy_rate(price_per_kwh) is not None else None,
                 "share": 0.0,
             }
         )

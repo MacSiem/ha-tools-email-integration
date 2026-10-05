@@ -10,6 +10,7 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN, EVENT_SCHEDULES_CHANGED, VALID_CADENCES, VALID_KINDS
+from .composer import async_build_energy_report_payload
 from .scheduler import async_reload_schedules, async_send_now
 from .storage import EmailStorage
 
@@ -141,6 +142,24 @@ async def _ws_send_now(
     connection.send_result(msg["id"], result)
 
 
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/preview_energy_report",
+        vol.Required("cadence"): vol.In(sorted(VALID_CADENCES)),
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def _ws_preview_energy_report(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Read the same Recorder model used by send_now and schedules, without sending."""
+    payload = await async_build_energy_report_payload(hass, cadence=msg["cadence"])
+    connection.send_result(msg["id"], payload["summary"])
+
+
 def async_register_commands(hass: HomeAssistant) -> None:
     """Register all websocket commands."""
     for handler in (
@@ -148,5 +167,6 @@ def async_register_commands(hass: HomeAssistant) -> None:
         _ws_list_schedules,
         _ws_set_schedule,
         _ws_send_now,
+        _ws_preview_energy_report,
     ):
         websocket_api.async_register_command(hass, handler)

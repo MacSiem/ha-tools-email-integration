@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ast
 import importlib.util
 import json
 import sys
@@ -16,6 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INIT_PATH = ROOT / "custom_components/ha_tools_email/__init__.py"
 STORAGE_PATH = ROOT / "custom_components/ha_tools_email/storage.py"
+WS_PATH = ROOT / "custom_components/ha_tools_email/websocket_api.py"
 BRAND_PATH = ROOT / "custom_components/ha_tools_email/brand"
 AGENT_REPORT_PATH = ROOT / "codex-runs/email-integration-report.md"
 
@@ -157,6 +159,18 @@ class ReviewRequirementTests(unittest.TestCase):
 
     def test_agent_run_log_is_not_shipped(self) -> None:
         self.assertFalse(AGENT_REPORT_PATH.exists())
+
+    def test_smtp_account_and_schedule_reads_are_admin_only(self) -> None:
+        tree = ast.parse(WS_PATH.read_text(encoding="utf-8"))
+        functions = {node.name: node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)}
+        for name in ("_ws_get_config", "_ws_list_schedules"):
+            decorators = [ast.unparse(node) for node in functions[name].decorator_list]
+            self.assertIn("websocket_api.require_admin", decorators)
+
+    def test_smtp_log_does_not_include_recipient_or_secret_name(self) -> None:
+        source = INIT_PATH.read_text(encoding="utf-8")
+        self.assertNotIn('"Email sent to %s via %s"', source)
+        self.assertNotIn("Key '{secret_key}' not found", source)
 
 
 if __name__ == "__main__":
