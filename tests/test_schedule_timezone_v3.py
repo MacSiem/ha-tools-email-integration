@@ -249,7 +249,7 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], self.sends)
 
 
-def load_websocket():
+def load_websocket(testcase):
     """Use actual methods with a deny-capable trusted admin guard stub."""
     mod, unused = store()
     package = types.ModuleType('schedule_v3_ws_package')
@@ -274,10 +274,14 @@ def load_websocket():
     vol = types.ModuleType('voluptuous')
     vol.Required = vol.Optional = lambda key, **kw: key
     vol.Any = vol.All = vol.In = vol.Range = lambda *a, **kw: object()
-    with patch.dict(sys.modules, {package.__name__: package, package.__name__ + '.storage': mod,
+    modules = {package.__name__: package, package.__name__ + '.storage': mod,
                                   package.__name__ + '.tariff': mod._tariff_test_module,
                                   core.__name__: core, components.__name__: components,
-                                  ws.__name__: ws, vol.__name__: vol}):
+                                  ws.__name__: ws, vol.__name__: vol}
+    stubs = patch.dict(sys.modules, modules)
+    stubs.start()
+    testcase.addCleanup(stubs.stop)
+    if True:
         spec = importlib.util.spec_from_file_location(package.__name__ + '.websocket_api', ROOT / 'websocket_api.py')
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -286,7 +290,7 @@ def load_websocket():
 
 class ReadonlyAPITests(unittest.IsolatedAsyncioTestCase):
     async def test_actual_list_metadata_and_preview_zero_writes_sends(self):
-        ws = load_websocket()
+        ws = load_websocket(self)
         _, s = store()
         rows = [schedule(timezone='Asia/Tokyo'), dict(schedule(kind='energy_report'), id='energy')]
         state = {'schedules': rows, 'digest_state': {'keep': True}, 'smtp_config': {'keep': True},
@@ -328,7 +332,7 @@ class ReadonlyAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((0, 0), (smtp_send.call_count, smtp_config.call_count))
 
     async def test_list_skips_consumed_period_and_disabled_is_null(self):
-        ws = load_websocket()
+        ws = load_websocket(self)
         _, s = store()
         s._store.loaded = {'schedules': [schedule(timezone='Asia/Tokyo'),
                                        dict(schedule(enabled=False), id='off')],
@@ -346,7 +350,7 @@ class ReadonlyAPITests(unittest.IsolatedAsyncioTestCase):
 
 class DispatchCalendarTests(unittest.IsolatedAsyncioTestCase):
     async def test_actual_single_dispatch_calendar_bounds_history_and_late_delete(self):
-        ws = load_websocket()
+        ws = load_websocket(self)
         package_name = ws.__package__
         package = types.ModuleType(package_name)
         package.__path__ = [str(ROOT)]
@@ -370,6 +374,8 @@ class DispatchCalendarTests(unittest.IsolatedAsyncioTestCase):
             composed.append(kw)
             if getattr(self, 'delete_during_compose', False):
                 await s.async_delete_schedule('one')
+            if getattr(self, 'stop_during_compose', False):
+                scheduler.async_stop_scheduler(hass)
             return {'subject': 'fixture', 'body': 'fixture', 'html': 'fixture', 'dedup_keys': []}
         with patch.dict(sys.modules, {package_name: package}), patch.object(composer, 'async_build_report_payload', build):
             result = await scheduler.async_send_schedule(hass, row, now=datetime(2026, 3, 30, 7, 30, tzinfo=ZoneInfo('Europe/Warsaw')))
@@ -378,18 +384,23 @@ class DispatchCalendarTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(1, len(smtp_calls))
             kw = composed[0]
             self.assertEqual(23, (kw['window_end'] - kw['window_start']).total_seconds() / 3600)
+            self.stop_during_compose = True
+            with self.assertRaises(ValueError):
+                await scheduler.async_send_schedule(hass, row, now=datetime(2026, 10, 25, 7, 30, tzinfo=ZoneInfo('Europe/Warsaw')))
+            self.assertEqual(1, len(smtp_calls))
+            self.stop_during_compose = False
             self.delete_during_compose = True
             with self.assertRaises(ValueError):
                 await scheduler.async_send_schedule(hass, row, now=datetime(2026, 10, 26, 7, 30, tzinfo=ZoneInfo('Europe/Warsaw')))
             self.assertEqual(1, len(smtp_calls))
         entries = (await s.async_get_attempt_history(now=datetime(2026, 10, 27, tzinfo=UTC)))['attempts']
-        self.assertEqual(1, len(entries))  # March record aged out under existing retention.
+        self.assertEqual(2, len(entries))  # March record aged out; stop/delete preparations retained.
         self.assertEqual('preparation_failed', entries[0]['outcome'])
 
 
 class PreviewCalendarTests(unittest.IsolatedAsyncioTestCase):
     async def test_explicit_preview_timezone_boundary_and_missing_timestamps(self):
-        ws = load_websocket()
+        ws = load_websocket(self)
         hass = types.SimpleNamespace(data={'system_log': types.SimpleNamespace(records=[
             {'level': 'ERROR', 'name': 'fixture', 'message': ['start'], 'count': 2,
              'timestamp': datetime(2026, 3, 28, 23, tzinfo=UTC).timestamp()},

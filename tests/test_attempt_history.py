@@ -182,7 +182,8 @@ class DispatchTests(unittest.IsolatedAsyncioTestCase):
             scheduler = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(scheduler)
             manual = await scheduler.async_send_now(hass, kind='energy_report', cadence='daily')
-            scheduled = await scheduler.async_send_schedule(hass, {'id': 'private schedule name', 'kind': 'energy_report', 'cadence': 'daily'}, now=datetime.now(timezone.utc))
+            await s.async_upsert_schedule({'id': 'private schedule name', 'kind': 'energy_report', 'cadence': 'daily'})
+            scheduled = await scheduler.async_send_schedule(hass, await s.async_get_schedule('private schedule name'), now=datetime.now(timezone.utc))
         attempts = (await s.async_get_attempt_history())['attempts']
         self.assertEqual(4, len(attempts))
         self.assertEqual(4, len(calls))
