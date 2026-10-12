@@ -33,4 +33,21 @@ class RetainedCounts(unittest.TestCase):
   a=row(id='a');a['count']=2**53-1;b={**row(id='b'),'level':'WARNING'};p=self.payload([a,b]);self.assertIsNone(p['summary']['total']);self.assertFalse(p['summary']['counts_complete'])
  def test_epoch_zero_is_a_real_timestamp(self):
   self.assertEqual(datetime(1970,1,1,tzinfo=timezone.utc),c._entry_time({'timestamp':0}))
+class ReadonlyCounts(unittest.IsolatedAsyncioTestCase):
+ async def test_preview_preserves_zero_and_unknown_and_returns_json_without_sending(self):
+  import types,json
+  from unittest.mock import patch
+  try:
+   from tests.test_schedule_timezone_v3 import load_websocket
+  except ImportError:
+   from test_schedule_timezone_v3 import load_websocket
+  ws=load_websocket(self)
+  zero=row();zero.update(timestamp=(NOW-timedelta(days=1)).timestamp(),count=0)
+  unknown={**zero,'name':'unknown','level':'WARNING','count':None}
+  hass=types.SimpleNamespace(data={'system_log':types.SimpleNamespace(records=[zero,unknown])},config=types.SimpleNamespace(time_zone='UTC'))
+  results=[]
+  conn=types.SimpleNamespace(user=types.SimpleNamespace(is_admin=True),send_result=lambda *a:results.append(a),send_error=lambda *a:self.fail(str(a)))
+  with patch.object(ws,'_utcnow',lambda:NOW):
+   await ws._ws_preview_log_digest(hass,conn,{'id':1,'cadence':'daily'})
+  payload=results[0][1];self.assertIsNone(payload['total']);self.assertFalse(payload['counts_complete']);self.assertEqual(2,payload['unique_problems']);self.assertEqual(0,payload['recent_errors'][0]['count']);self.assertIsNone(payload['recent_warnings'][0]['count']);json.dumps(payload,allow_nan=False)
 if __name__=='__main__':unittest.main()
