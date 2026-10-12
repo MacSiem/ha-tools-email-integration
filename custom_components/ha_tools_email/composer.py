@@ -400,8 +400,11 @@ async def async_build_energy_report_payload(
             breakdown = {}
             if costs["complete"]:
                 for row in costs["rows"]:
-                    zone = breakdown.setdefault(row["zone"], {"zone": row["zone"], "kwh": 0,
-                                                             "energyCost": 0, "variableCost": 0})
+                    key = (tuple(row["zones"]), row["energyRate"], row["variableRate"])
+                    zone = breakdown.setdefault(key, {"zone": row["zone"], "zones": row["zones"],
+                                                      "zoneAttribution": row["zoneAttribution"], "kwh": 0,
+                                                      "energyRate": row["energyRate"], "variableRate": row["variableRate"],
+                                                      "energyCost": 0, "variableCost": 0})
                     zone["kwh"] += row["kwh"]
                     zone["energyCost"] += row["energyCost"]
                     zone["variableCost"] = (None if zone["variableCost"] is None or row["variableCost"] is None
