@@ -167,6 +167,24 @@ class StorageTests(unittest.IsolatedAsyncioTestCase):
             await s.async_upsert_schedule({'id': 'one', 'time': '10:00'})
         self.assertEqual(before, s._data)
 
+    async def test_explicit_timezone_can_return_to_following_home_assistant(self):
+        _, s = store()
+        s._store.loaded = {'schedules': [schedule(timezone='Asia/Tokyo', future=1)], 'future': {'keep': True}}
+        saved = await s.async_upsert_schedule({'id': 'one', 'use_ha_timezone': True})
+        self.assertNotIn('timezone', saved)
+        self.assertNotIn('use_ha_timezone', saved)
+        self.assertEqual(1, saved['future'])
+        self.assertEqual({'keep': True}, s._store.saved[-1]['future'])
+        self.assertNotIn('timezone', (await s.async_get_schedule('one')))
+
+    async def test_ha_timezone_choice_rejects_conflicts_and_malformed_flags_before_save(self):
+        for changes in ({'use_ha_timezone': 'true'}, {'use_ha_timezone': None},
+                        {'use_ha_timezone': 1}, {'use_ha_timezone': True, 'timezone': 'Asia/Tokyo'}):
+            _, s = store()
+            with self.assertRaises(ValueError):
+                await s.async_upsert_schedule(schedule(**changes))
+            self.assertEqual([], s._store.saved)
+
 
 class RuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
