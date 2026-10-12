@@ -348,6 +348,7 @@ async def async_send_report(
     bucket = hass.data[DOMAIN]
     payload = {}
     to = ""
+    schedule_generation = bucket.get("schedule_generation", 0)
     async def prepare():
         nonlocal payload, to
         cfg = await bucket[DATA_LOAD_CONFIG]()
@@ -358,8 +359,10 @@ async def async_send_report(
         )
         # Recorder/config awaits can allow an administrator's edit/delete.
         # Re-read immediately before the shared dispatcher crosses into SMTP.
-        if expected_schedule is not None and await storage.async_get_schedule(schedule_id) != expected_schedule:
-            raise ValueError("schedule_changed_before_dispatch")
+        if expected_schedule is not None:
+            current = await storage.async_get_schedule(schedule_id)
+            if current != expected_schedule or bucket.get("schedule_generation", 0) != schedule_generation:
+                raise ValueError("schedule_changed_before_dispatch")
         return cfg, to, payload["subject"], payload["body"], payload["html"]
     dispatch = await async_dispatch_attempt(
         hass, storage, bucket[DATA_SEND_EMAIL], prepare,

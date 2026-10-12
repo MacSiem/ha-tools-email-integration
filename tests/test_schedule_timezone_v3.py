@@ -281,10 +281,9 @@ def load_websocket(testcase):
     stubs = patch.dict(sys.modules, modules)
     stubs.start()
     testcase.addCleanup(stubs.stop)
-    if True:
-        spec = importlib.util.spec_from_file_location(package.__name__ + '.websocket_api', ROOT / 'websocket_api.py')
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+    spec = importlib.util.spec_from_file_location(package.__name__ + '.websocket_api', ROOT / 'websocket_api.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
     return module
 
 
