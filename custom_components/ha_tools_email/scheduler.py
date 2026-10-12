@@ -191,6 +191,7 @@ async def async_send_schedule(
         cadence=schedule["cadence"],
         recipients=schedule.get("recipients") or [],
         now=now,
+        schedule_id=schedule.get("id"),
     )
 
 
@@ -221,25 +222,30 @@ async def async_send_report(
     cadence: str,
     recipients: list[str],
     now: datetime | None = None,
+    schedule_id: str | None = None,
 ) -> dict[str, Any]:
     """Compose and send one report through the existing SMTP send path."""
     from .composer import async_build_report_payload
+    from .history import async_dispatch_attempt
 
     now = _aware(now or datetime.now(timezone.utc))
     bucket = hass.data[DOMAIN]
-    cfg = await bucket[DATA_LOAD_CONFIG]()
-    to = ", ".join(recipients) if recipients else cfg.get("default_recipient", "")
-    payload = await async_build_report_payload(
-        hass, storage, kind=kind, cadence=cadence, now=now
-    )
-    await hass.async_add_executor_job(
-        bucket[DATA_SEND_EMAIL],
-        hass,
-        cfg,
-        to,
-        payload["subject"],
-        payload["body"],
-        payload["html"],
+    payload = {}
+    to = ""
+    async def prepare():
+        nonlocal payload, to
+        cfg = await bucket[DATA_LOAD_CONFIG]()
+        to = ", ".join(recipients) if recipients else cfg.get("default_recipient", "")
+        payload = await async_build_report_payload(
+            hass, storage, kind=kind, cadence=cadence, now=now
+        )
+        return cfg, to, payload["subject"], payload["body"], payload["html"]
+    dispatch = await async_dispatch_attempt(
+        hass, storage, bucket[DATA_SEND_EMAIL], prepare,
+        source="schedule" if schedule_id is not None else "manual",
+        kind=kind, cadence=cadence,
+        period=fire_period_key({"cadence": cadence}, now),
+        schedule_id=schedule_id, now=now,
     )
     if kind == KIND_LOG_DIGEST:
         await storage.async_set_digest_state(
@@ -251,8 +257,7 @@ async def async_send_report(
             },
         )
     return {
-        "ok": True,
-        "status": "accepted_by_smtp",
+        **dispatch,
         "kind": kind,
         "cadence": cadence,
         "subject": payload["subject"],

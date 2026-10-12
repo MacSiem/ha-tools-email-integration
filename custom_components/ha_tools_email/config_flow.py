@@ -113,10 +113,15 @@ class HAToolsEmailOptionsFlow(config_entries.OptionsFlow):
             }
 
             if not errors and user_input.get(CONF_SEND_TEST):
-                to, subject, body, html = build_test_message(cfg)
+                from .history import async_dispatch_attempt
+
+                async def prepare_test():
+                    to, subject, body, html = build_test_message(cfg)
+                    return cfg, to, subject, body, html
+
                 try:
-                    await self.hass.async_add_executor_job(
-                        _send_email, self.hass, cfg, to, subject, body, html
+                    await async_dispatch_attempt(
+                        self.hass, storage, _send_email, prepare_test, kind="test"
                     )
                 except smtplib.SMTPAuthenticationError:
                     errors["base"] = "invalid_auth"

@@ -78,6 +78,19 @@ async def _ws_set_tariff(hass, connection, msg) -> None:
     connection.send_result(msg["id"], result)
 
 
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/get_attempt_history"})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def _ws_get_attempt_history(hass, connection, msg) -> None:
+    """Read bounded metadata only; history is never a content export."""
+    try:
+        result = await _storage(hass).async_get_attempt_history()
+    except Exception:
+        connection.send_error(msg["id"], "history_unavailable", "Email attempt history is unavailable.")
+        return
+    connection.send_result(msg["id"], result)
+
+
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/get_config"})
 @websocket_api.require_admin
 @websocket_api.async_response
@@ -204,6 +217,7 @@ def async_register_commands(hass: HomeAssistant) -> None:
         _ws_get_tariff,
         _ws_set_tariff,
         _ws_get_config,
+        _ws_get_attempt_history,
         _ws_list_schedules,
         _ws_set_schedule,
         _ws_send_now,

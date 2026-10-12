@@ -16,6 +16,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 from .tariff import TariffValidationError, validate_tariff_profile
+from .history import HISTORY_SCHEMA, HISTORY_LIMIT, HISTORY_DAYS, clean_attempt, retained_attempts
 
 from .const import (
     DEFAULT_SCHEDULE_TIME,
@@ -137,6 +138,38 @@ class EmailStorage:
         stamp = data.get("tariff_updated_at")
         return {"profile": profile, "revision": revision,
                 "updated_at": stamp if isinstance(stamp, str) and len(stamp) <= 64 else None}
+
+    async def async_get_attempt_history(self, *, now: datetime | None = None) -> dict[str, Any]:
+        """Admin metadata read, with age/count filtering and no SMTP migration."""
+        async with self._lock:
+            data = await self._async_tariff_data_locked()
+            entries = retained_attempts(data.get("attempt_history"), now or datetime.now(timezone.utc))
+            return {"schema": HISTORY_SCHEMA, "limit": HISTORY_LIMIT,
+                    "retention_days": HISTORY_DAYS, "attempts": deepcopy(list(reversed(entries)))}
+
+    async def async_append_attempt(self, attempt: dict[str, Any], *, now: datetime | None = None) -> None:
+        """Copy-on-write, serialized Store save; publish only after atomic persistence.
+
+        Additive sub-schema migration keeps SMTP/tariff/schedules/unknown keys
+        verbatim. Home Assistant Store owns executor I/O and atomic replacement.
+        No filesystem work occurs on the event loop here.
+        """
+        async with self._lock:
+            data = await self._async_tariff_data_locked()
+            clock = now or datetime.now(timezone.utc)
+            entries = retained_attempts(data.get("attempt_history"), clock)
+            clean = clean_attempt(attempt)
+            if clean is None:
+                raise ValueError("invalid_attempt")
+            entries = [entry for entry in entries if entry["id"] != clean["id"]]
+            entries.append(clean)
+            candidate = deepcopy(data)
+            section = deepcopy(data.get("attempt_history") or {})
+            section.update(schema=HISTORY_SCHEMA, attempts=entries)
+            section["attempts"] = retained_attempts(section, clock)
+            candidate["attempt_history"] = section
+            await self._store.async_save(candidate)
+            self._data = candidate
 
     async def async_get_state(self) -> dict[str, Any]:
         """Return the full persisted state."""

@@ -40,6 +40,7 @@ from .const import (
 )
 from .scheduler import async_start_scheduler, async_stop_scheduler
 from .smtp import open_smtp_connection
+from .history import PartialSMTPAcceptance, async_dispatch_attempt
 from .storage import EmailStorage
 from .websocket_api import async_register_commands
 
@@ -121,7 +122,7 @@ def _send_email(hass: HomeAssistant, cfg: dict, to: str, subject: str, body: str
         smtp.login(username, password)
         refused = smtp.sendmail(sender, recipients, msg.as_string())
         if refused:
-            raise ValueError("SMTP refused one or more recipients; some may already have been accepted")
+            raise PartialSMTPAcceptance("SMTP refused one or more recipients; some may already have been accepted")
         _LOGGER.info("SMTP accepted the HA Tools Email message for %d recipient(s)", len(recipients))
     finally:
         try:
@@ -238,29 +239,24 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
     async def handle_send(call: ServiceCall) -> None:
         """Handle ha_tools_email.send service call."""
-        cfg = await storage.async_get_smtp_config()
-
-        to = call.data.get("to", "") or cfg.get("default_recipient", "")
-        subject = call.data.get("subject", "HA Tools Email")
-        body = call.data.get("body", "")
-        html = call.data.get("html")
-
-        if not to:
-            raise ValueError("No recipient specified and no default_recipient configured")
-
-        await hass.async_add_executor_job(_send_email, hass, cfg, to, subject, body, html)
+        async def prepare():
+            cfg = await storage.async_get_smtp_config()
+            to = call.data.get("to", "") or cfg.get("default_recipient", "")
+            if not to:
+                raise ValueError("No recipient specified and no default_recipient configured")
+            return (cfg, to, call.data.get("subject", "HA Tools Email"),
+                    call.data.get("body", ""), call.data.get("html"))
+        await async_dispatch_attempt(hass, storage, _send_email, prepare, kind="manual")
 
     async def handle_test(call: ServiceCall) -> None:
         """Send a test email to verify SMTP config."""
-        cfg = await storage.async_get_smtp_config()
-        to, subject, body, html = build_test_message(cfg)
-        if not to:
-            raise ValueError(
-                f"No default_recipient or sender configured — open {SETTINGS_HINT}"
-            )
-        await hass.async_add_executor_job(
-            _send_email, hass, cfg, to, subject, body, html
-        )
+        async def prepare():
+            cfg = await storage.async_get_smtp_config()
+            to, subject, body, html = build_test_message(cfg)
+            if not to:
+                raise ValueError(f"No default_recipient or sender configured — open {SETTINGS_HINT}")
+            return cfg, to, subject, body, html
+        await async_dispatch_attempt(hass, storage, _send_email, prepare, kind="test")
 
     async def handle_save_config(call: ServiceCall) -> None:
         """Save non-secret SMTP settings; passwords are never accepted as action data.
