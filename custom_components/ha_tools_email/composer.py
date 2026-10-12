@@ -64,7 +64,7 @@ def summarize_log_entries(
     dedup_keys = set(seen)
     since = _aware(since) if since else None
 
-    for raw in _group_retained_logs(entries):
+    for raw in _group_retained_logs(entries, until=until):
         when = _entry_time(raw)
         if until and when and when > _aware(until):
             continue
@@ -110,7 +110,7 @@ def summarize_log_entries(
     return {
         "total": _log_count_total(level_counts.values()),
         "unique_problems": len(accepted),
-        "counts_complete": all(entry["count"] is not None for entry in accepted),
+        "counts_complete": all(entry["count"] is not None for entry in accepted) and _log_count_total(level_counts.values()) is not None,
         "source": {"name": "system_log", "complete": False, "count_semantics": "retained_aggregates",
                    "unknown_counts": sum(entry["count"] is None for entry in accepted)},
         "level_counts": level_counts,
@@ -331,7 +331,7 @@ async def async_build_log_digest_payload(
         since=since,
         seen_keys=[] if window_start is not None else state.get("seen_keys") or [],
     )
-    source = {"name": "system_log", "count_semantics": "retained_aggregates",
+    source = {**payload["summary"].get("source", {}), "name": "system_log", "count_semantics": "retained_aggregates",
               "complete": False, "retained_entries": len(entries),
               "reason": "retained_last_observed_aggregates_not_full_event_history"}
     payload["summary"]["source"] = source
@@ -714,10 +714,13 @@ def _log_exact(value: Any) -> tuple:
     return ("unsupported", type(value).__name__)
 
 
-def _group_retained_logs(entries: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+def _group_retained_logs(entries: Iterable[dict[str, Any]], *, until: datetime | None = None) -> list[dict[str, Any]]:
     groups = {}
     for raw in entries:
         if not isinstance(raw, dict):
+            continue
+        when = _entry_time(raw)
+        if until and when and when > _aware(until):
             continue
         supplied = next((key for key in ("id", "entry_id", "key", "hash") if
                          isinstance(raw.get(key), str) or type(raw.get(key)) in (int, float)
