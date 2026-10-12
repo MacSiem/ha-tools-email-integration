@@ -27,6 +27,10 @@ class RetainedCounts(unittest.TestCase):
   for t in [float('nan'),float('inf'),10**100,True,'garbage']:
    with self.subTest(t=t):
     r=row();r['timestamp']=t;p=self.payload([r]);self.assertTrue(p['summary']['source']['complete'] is False)
+ def test_future_duplicate_does_not_hide_a_valid_retained_aggregate(self):
+  a=row(id='same');a['count']=3;b={**a,'count':999,'timestamp':(NOW+timedelta(days=1)).timestamp()};self.assertEqual(3,self.payload([a,b])['summary']['total'])
+ def test_total_overflow_across_levels_is_not_a_complete_measured_count(self):
+  a=row(id='a');a['count']=2**53-1;b={**row(id='b'),'level':'WARNING'};p=self.payload([a,b]);self.assertIsNone(p['summary']['total']);self.assertFalse(p['summary']['counts_complete'])
  def test_epoch_zero_is_a_real_timestamp(self):
   self.assertEqual(datetime(1970,1,1,tzinfo=timezone.utc),c._entry_time({'timestamp':0}))
 if __name__=='__main__':unittest.main()
