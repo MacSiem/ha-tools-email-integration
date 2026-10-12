@@ -9,6 +9,12 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 from unittest.mock import Mock
+import importlib.util
+
+_spec = importlib.util.spec_from_file_location("send_history_test", Path(__file__).resolve().parents[1] / "custom_components/ha_tools_email/history.py")
+_history = importlib.util.module_from_spec(_spec)
+if _spec.origin and Path(_spec.origin).is_file():
+    _spec.loader.exec_module(_history)
 
 
 SOURCE = Path(__file__).resolve().parents[1] / "custom_components/ha_tools_email/__init__.py"
@@ -22,6 +28,7 @@ class SendSemanticsTests(unittest.TestCase):
         fake_smtp.sendmail.return_value = refused
         namespace = {
             "HomeAssistant": object,
+            "PartialSMTPAcceptance": getattr(_history, "PartialSMTPAcceptance", ValueError),
             "_resolve_secret": lambda hass, value: value,
             "MIMEMultipart": MIMEMultipart,
             "MIMEText": MIMEText,
