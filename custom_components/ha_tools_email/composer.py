@@ -379,7 +379,62 @@ async def async_build_energy_report_payload(
         currency=getattr(getattr(hass, "config", None), "currency", "") or "",
         price_per_kwh=None,
     )
-    payload["summary"].update({key: value for key, value in snapshot.items() if key != "devices"})
+    payload["summary"].update({key: value for key, value in snapshot.items() if key not in {"devices", "hourly_buckets"}})
+    storage = (getattr(hass, "data", {}) or {}).get("ha_tools_email", {}).get("storage")
+    if storage is not None:
+        try:
+            tariff_state = await storage.async_get_tariff()
+            tariff_profile = tariff_state["profile"]
+        except Exception:
+            tariff_profile = {"schema": 0}
+        if tariff_profile is not None:
+            from .tariff import EnergyTariff
+            costs = EnergyTariff(tariff_profile).price_buckets(
+                snapshot.get("hourly_buckets", []),
+                {"from": start.isoformat(), "to": end.isoformat()},
+            )
+            if snapshot["status"] != "ready":
+                costs.update(complete=False, kwh=None, energyCost=None, variableCost=None, usageCost=None)
+            # The report only renders known measured usage charges; monthly fees
+            # remain separate metadata, never a prorated or total household bill.
+            breakdown = {}
+            if costs["complete"]:
+                for row in costs["rows"]:
+                    zone = breakdown.setdefault(row["zone"], {"zone": row["zone"], "kwh": 0,
+                                                             "energyCost": 0, "variableCost": 0})
+                    zone["kwh"] += row["kwh"]
+                    zone["energyCost"] += row["energyCost"]
+                    zone["variableCost"] = (None if zone["variableCost"] is None or row["variableCost"] is None
+                                            else zone["variableCost"] + row["variableCost"])
+                for zone in breakdown.values():
+                    zone["usageCost"] = (zone["energyCost"] + zone["variableCost"]
+                                         if zone["variableCost"] is not None else None)
+            safe_currency = costs["currency"] if isinstance(costs["currency"], str) and len(costs["currency"]) == 3 and costs["currency"].isascii() and costs["currency"].isupper() and costs["currency"].isalpha() else ""
+            fields = {key: costs[key] for key in ("energyCost", "variableCost", "usageCost", "fixedMonthly", "priceBasis")}
+            fields.update(currency=safe_currency, tariff_complete=costs["complete"],
+                          tariff_issues=costs["issues"], zoneBreakdown=list(breakdown.values()))
+            payload["summary"].update(fields)
+            payload["summary"]["total_cost"] = costs["usageCost"]
+            charge = _energy_cost_text(costs["usageCost"], safe_currency) if costs["usageCost"] is not None else "Usage cost unavailable"
+            payload["body"] = payload["body"].replace("Tariff not configured", "Usage cost unavailable")
+            payload["html"] = payload["html"].replace("Tariff not configured", "Usage cost unavailable")
+            total_kwh = payload["summary"]["total_kwh"]
+            if total_kwh is not None:
+                previous_total = f"Total: {total_kwh:.2f} kWh / Usage cost unavailable"
+                actual_total = f"Total: {total_kwh:.2f} kWh / {charge}"
+                payload["body"] = payload["body"].replace(previous_total, actual_total, 1)
+                payload["html"] = payload["html"].replace(escape(previous_total), escape(actual_total), 1)
+            energy_text = (_energy_cost_text(costs["energyCost"], safe_currency)
+                           if costs["energyCost"] is not None else "unavailable")
+            variable_text = (_energy_cost_text(costs["variableCost"], safe_currency)
+                             if costs["variableCost"] is not None else "unavailable")
+            fixed_text = (_energy_cost_text(costs["fixedMonthly"], safe_currency)
+                          if costs["fixedMonthly"] is not None else "unknown")
+            line = (f"Measured tariff ({costs['priceBasis'] or 'unknown'}): energy {energy_text}; "
+                    f"variable fees {variable_text}; usage cost {charge}. "
+                    f"Fixed monthly fee: {fixed_text}, shown separately without proration.")
+            payload["body"] += "\n\n" + line
+            payload["html"] = payload["html"].replace("</body>", f"<p>{escape(line)}</p></body>")
     payload["summary"]["period"] = {"start": start.isoformat(), "end": end.isoformat(), "cadence": cadence}
     context = f"Grid import from Energy Dashboard. Recorder window: {start.isoformat()} → {end.isoformat()} (completed hours)."
     if snapshot["status"] == "partial":
@@ -453,6 +508,7 @@ async def async_get_energy_usage(
     names = {sensor["entity_id"]: sensor["name"] for sensor in sensors}
     expected = set(range(int(start.timestamp()), int(end.timestamp()), 3600))
     devices = []
+    measured = {key: 0.0 for key in expected}
     any_samples = any((result or {}).get(sid) for sid in ids)
     for sid in ids:
         raw_meta = metadata.get(sid)
@@ -466,7 +522,8 @@ async def async_get_energy_usage(
             try:
                 stamp = _entry_time({"timestamp": point.get("start")})
                 key = int(stamp.timestamp()) if stamp else None
-                change = float(point["change"]) if point.get("change") is not None else None
+                raw_change = point.get("change")
+                change = raw_change if type(raw_change) in (int, float) else None
             except (TypeError, ValueError, OverflowError):
                 change = None
                 key = None
@@ -478,10 +535,14 @@ async def async_get_energy_usage(
         value = sum(buckets.values()) * factor
         if not isfinite(value):
             return {**snapshot, "status": "partial"}
+        for key, change in buckets.items():
+            measured[key] += change * factor
         devices.append({"name": names[sid], "entity_id": sid, "kwh": value})
     if not isfinite(sum(device["kwh"] for device in devices)):
         return {**snapshot, "status": "partial"}
-    return {**snapshot, "status": "ready", "devices": devices}
+    hourly = [{"from": key * 1000, "to": (key + 3600) * 1000, "kwh": measured[key]}
+              for key in sorted(measured)]
+    return {**snapshot, "status": "ready", "devices": devices, "hourly_buckets": hourly}
 
 
 def _energy_rate(value: float | None) -> float | None:

@@ -15,6 +15,8 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
+from .tariff import TariffValidationError, validate_tariff_profile
+
 from .const import (
     DEFAULT_SCHEDULE_TIME,
     KIND_LOG_DIGEST,
@@ -31,10 +33,17 @@ _SMTP_KEYS = frozenset(SMTP_DEFAULTS)
 _LEGACY_CONFIG_PARTS = ("ha-tools", "smtp-config.json")
 
 
+class TariffRevisionConflict(ValueError):
+    """The caller must reload settings before making a new explicit save."""
+
+
 def _default_state() -> dict[str, Any]:
     """Return the default persisted shape."""
     return {
         "smtp_config": None,
+        "tariff_profile": None,
+        "tariff_revision": 0,
+        "tariff_updated_at": None,
         "schedules": [],
         "digest_state": {},
         "scheduler_state": {},
@@ -55,6 +64,7 @@ class EmailStorage:
         )
         self._lock = asyncio.Lock()
         self._data: dict[str, Any] | None = None
+        self._tariff_only_loaded: dict[str, Any] | None = None
 
     async def async_load(self) -> dict[str, Any]:
         """Load storage, creating defaults when absent."""
@@ -69,7 +79,64 @@ class EmailStorage:
                     self._data.get("schedules", [])
                 )
                 await self._async_migrate_legacy_smtp_config_locked(loaded)
+            if self._tariff_only_loaded is not None:
+                loaded = deepcopy(self._data)
+                self._data["schedules"] = self._clean_schedule_list(self._data.get("schedules", []))
+                await self._async_migrate_legacy_smtp_config_locked(loaded)
+                self._tariff_only_loaded = None
             return deepcopy(self._data)
+
+    async def async_get_tariff(self) -> dict[str, Any]:
+        """Authenticated household settings read; never migrates or reads SMTP files."""
+        async with self._lock:
+            data = await self._async_tariff_data_locked()
+            return self._tariff_state(data)
+
+    async def async_save_tariff(self, profile: Any, *, expected_revision: int) -> dict[str, Any]:
+        """Validate, compare revision, save a copy, then publish confirmed state.
+
+        No retry: a stale editor must explicitly reload. None clears the profile.
+        SMTP, schedules and unknown Store keys are retained verbatim.
+        """
+        clean = validate_tariff_profile(profile)
+        if type(expected_revision) is not int or expected_revision < 0:
+            raise TariffValidationError([{"path": "expected_revision", "reason": "invalid_revision"}])
+        async with self._lock:
+            data = await self._async_tariff_data_locked()
+            current = self._tariff_state(data)
+            if current["revision"] != expected_revision:
+                raise TariffRevisionConflict("tariff_revision_conflict")
+            candidate = deepcopy(data)
+            candidate.update(tariff_profile=clean, tariff_revision=expected_revision + 1,
+                             tariff_updated_at=_now_iso())
+            await self._store.async_save(candidate)
+            self._data = candidate
+            return self._tariff_state(candidate)
+
+    async def _async_tariff_data_locked(self) -> dict[str, Any]:
+        """Load Store verbatim for tariffs, deferring the legacy SMTP migration."""
+        if self._data is None:
+            loaded = await self._store.async_load()
+            loaded = loaded if isinstance(loaded, dict) else {}
+            self._data = _default_state()
+            self._deep_merge(self._data, loaded)
+            self._tariff_only_loaded = deepcopy(loaded)
+        return self._data
+
+    @staticmethod
+    def _tariff_state(data: dict[str, Any]) -> dict[str, Any]:
+        revision = data.get("tariff_revision", 0)
+        revision = revision if type(revision) is int and revision >= 0 else 0
+        profile = data.get("tariff_profile")
+        try:
+            profile = validate_tariff_profile(profile)
+        except TariffValidationError:
+            # Keep the persisted value untouched, but expose a bounded invalid
+            # marker rather than unknown historical fields to household readers.
+            profile = {"schema": 0}
+        stamp = data.get("tariff_updated_at")
+        return {"profile": profile, "revision": revision,
+                "updated_at": stamp if isinstance(stamp, str) and len(stamp) <= 64 else None}
 
     async def async_get_state(self) -> dict[str, Any]:
         """Return the full persisted state."""

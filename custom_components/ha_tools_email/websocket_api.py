@@ -12,7 +12,8 @@ from homeassistant.core import HomeAssistant
 from .const import DOMAIN, EVENT_SCHEDULES_CHANGED, VALID_CADENCES, VALID_KINDS
 from .composer import async_build_energy_report_payload
 from .scheduler import async_reload_schedules, async_send_now
-from .storage import EmailStorage
+from .storage import EmailStorage, TariffRevisionConflict
+from .tariff import TariffValidationError
 
 
 def _bucket(hass: HomeAssistant) -> dict[str, Any]:
@@ -38,6 +39,43 @@ async def _safe_smtp_config(hass: HomeAssistant) -> dict[str, Any]:
             cfg.get("server") and cfg.get("username") and raw_password
         ),
     }
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/get_tariff"})
+@websocket_api.async_response
+async def _ws_get_tariff(hass, connection, msg) -> None:
+    """Read tariff-only settings for an authenticated household connection."""
+    try:
+        result = await _storage(hass).async_get_tariff()
+    except Exception:
+        connection.send_error(msg["id"], "tariff_read_failed", "Tariff settings could not be read.")
+        return
+    connection.send_result(msg["id"], result)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): f"{DOMAIN}/set_tariff",
+    vol.Required("profile"): vol.Any(dict, None),
+    vol.Required("expected_revision"): vol.All(int, vol.Range(min=0)),
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def _ws_set_tariff(hass, connection, msg) -> None:
+    """Admin save with optimistic revision and confirmed persisted readback."""
+    try:
+        result = await _storage(hass).async_save_tariff(
+            msg["profile"], expected_revision=msg["expected_revision"])
+    except TariffRevisionConflict:
+        connection.send_error(msg["id"], "tariff_revision_conflict", "Tariff settings changed. Reload before saving.")
+        return
+    except TariffValidationError:
+        connection.send_error(msg["id"], "invalid_tariff_profile", "Tariff profile or revision is invalid.")
+        return
+    except Exception:
+        # Do not expose Store paths, SMTP state, or private exception messages.
+        connection.send_error(msg["id"], "tariff_save_failed", "Tariff settings could not be saved.")
+        return
+    connection.send_result(msg["id"], result)
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/get_config"})
@@ -163,6 +201,8 @@ async def _ws_preview_energy_report(
 def async_register_commands(hass: HomeAssistant) -> None:
     """Register all websocket commands."""
     for handler in (
+        _ws_get_tariff,
+        _ws_set_tariff,
         _ws_get_config,
         _ws_list_schedules,
         _ws_set_schedule,
