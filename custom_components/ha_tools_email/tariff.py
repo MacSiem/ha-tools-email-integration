@@ -53,7 +53,7 @@ def _stamp(value):
         if _finite(value):
             # Date truncates fractional milliseconds toward zero.
             result = int(value)
-        elif isinstance(value, str) and re.search(r'T.*(?:Z|[+-]\d{2}:\d{2})$', value):
+        elif isinstance(value, str) and re.fullmatch(r'\d{4}-\d{2}-\d{2}T([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?(Z|[+-]([01]\d|2[0-3]):[0-5]\d)', value):
             instant = datetime.fromisoformat(value.replace('Z', '+00:00'))
             instant = instant.replace(microsecond=(instant.microsecond // 1000) * 1000)
             delta = instant.astimezone(timezone.utc) - datetime(1970, 1, 1, tzinfo=timezone.utc)
@@ -290,17 +290,24 @@ class EnergyTariff:
         checkpoints = {end - 1, *range((floor(start / 60000) + 1) * 60000, end, 60000)}
         low, high = bisect_right(self._boundaries, start), bisect_right(self._boundaries, end - 1)
         checkpoints.update(self._boundaries[low:high])
+        zone_ids = {first['zone']}
         for stamp in sorted(checkpoints):
             next_rate = self.rate_at(stamp)
             if not next_rate['available']:
                 return dict(next_rate, **frame)
             if (first['energyRate'], first['variableRate']) != (next_rate['energyRate'], next_rate['variableRate']):
                 return dict(self._unavailable('mixed_rate_bucket'), **frame)
+            zone_ids.add(next_rate['zone'])
         energy = kwh * first['energyRate']
         variable = None if first['variableRate'] is None else kwh * first['variableRate']
-        return dict(available=True, **frame, kwh=kwh, zone=first['zone'], energyRate=first['energyRate'],
+        usage = None if variable is None else energy + variable
+        if any(v is not None and not _finite(v) for v in (energy, variable, usage)):
+            return dict(self._unavailable('nonfinite_cost'), **frame)
+        ids = sorted(zone_ids)
+        return dict(available=True, **frame, kwh=kwh, zone=ids[0] if len(ids) == 1 else None,
+                    zones=ids, zoneAttribution='single' if len(ids) == 1 else 'multiple', energyRate=first['energyRate'],
                     variableRate=first['variableRate'], energyCost=energy, variableCost=variable,
-                    usageCost=None if variable is None else energy + variable)
+                    usageCost=usage)
 
     def price_buckets(self, rows, coverage=None):
         issues, priced = [], []
@@ -327,9 +334,14 @@ class EnergyTariff:
         complete = not issues
         energy = sum(r['energyCost'] for r in priced) if complete else None
         variable = sum(r['variableCost'] for r in priced) if complete and all(r['variableCost'] is not None for r in priced) else None
+        kwh = sum(r['kwh'] for r in priced) if complete else None
+        usage = energy + variable if energy is not None and variable is not None else None
+        if complete and any(v is not None and not _finite(v) for v in (kwh, energy, variable, usage)):
+            issues.append({'reason': 'nonfinite_total'})
+            complete = False
+            kwh = energy = variable = usage = None
         p = self.profile
         return dict(complete=complete, issues=issues, rows=priced,
-                    kwh=sum(r['kwh'] for r in priced) if complete else None,
-                    energyCost=energy, variableCost=variable, usageCost=energy + variable if energy is not None and variable is not None else None,
+                    kwh=kwh, energyCost=energy, variableCost=variable, usageCost=usage,
                     currency=p.get('currency'), priceBasis=p.get('priceBasis') if p.get('priceBasis') in ('gross', 'net') else None, timezone=p.get('timezone'),
                     clock=deepcopy(self.clock), fixedMonthly=p.get('fixedMonthly') if self.valid and _finite(p.get('fixedMonthly')) else None)
