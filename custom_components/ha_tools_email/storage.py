@@ -249,6 +249,8 @@ class EmailStorage:
                           if isinstance(row, dict) and self._stored_schedule_id(row) == schedule_id), None)
             existing = rows[index] if index is not None else {}
             merged = {**existing, **schedule}
+            if schedule.get("use_ha_timezone") is True:
+                merged.pop("timezone", None)
             # Canonical edits supersede inherited aliases, explicit conflicts fail.
             for canonical, aliases in (("weekday", ("weekly_day",)),
                                        ("month_day", ("day", "monthday"))):

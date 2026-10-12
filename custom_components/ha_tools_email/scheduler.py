@@ -62,6 +62,10 @@ _WEEKDAY_ALIASES = {
 def normalize_schedule_calendar(schedule: dict[str, Any]) -> dict[str, Any]:
     """Validate new fields, accepting established legacy day aliases on read."""
     clean = dict(schedule)
+    if "use_ha_timezone" in clean:
+        use_ha = clean.pop("use_ha_timezone")
+        if type(use_ha) is not bool or use_ha and "timezone" in clean:
+            raise ValueError("use_ha_timezone must be boolean and cannot conflict with timezone")
     if "timezone" in clean:
         value = clean["timezone"]
         if (not isinstance(value, str) or not value or len(value) > 128
