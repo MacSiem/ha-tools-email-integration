@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import voluptuous as vol
@@ -10,8 +12,10 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN, EVENT_SCHEDULES_CHANGED, VALID_CADENCES, VALID_KINDS
-from .composer import async_build_energy_report_payload
-from .scheduler import async_reload_schedules, async_send_now
+from .composer import async_build_energy_report_payload, async_get_system_log_entries, build_log_digest_payload
+from .scheduler import (async_reload_schedules, async_send_now, calculate_next_fire,
+                        calendar_report_window, effective_schedule_timezone, fire_period_key,
+                        normalize_schedule_calendar)
 from .storage import EmailStorage, TariffRevisionConflict
 from .tariff import TariffValidationError
 
@@ -105,6 +109,11 @@ async def _ws_get_config(
     connection.send_result(msg["id"], config)
 
 
+def _utcnow() -> datetime:
+    """Trusted server clock; client timestamps are not accepted."""
+    return datetime.now(timezone.utc)
+
+
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/list_schedules"})
 @websocket_api.require_admin
 @websocket_api.async_response
@@ -113,10 +122,28 @@ async def _ws_list_schedules(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Return configured schedules."""
-    connection.send_result(
-        msg["id"], {"schedules": await _storage(hass).async_list_schedules()}
-    )
+    """Legacy envelope plus computed metadata; never save or inspect SMTP."""
+    storage = _storage(hass)
+    rows = await storage.async_list_schedules()
+    now = _utcnow()
+    local_zone = getattr(getattr(hass, "config", None), "time_zone", None)
+    result = []
+    for row in rows:
+        metadata = {"next_fire": None, "effective_timezone": None}
+        try:
+            zone = effective_schedule_timezone(row, now, local_zone)
+            metadata["effective_timezone"] = getattr(zone, "key", str(zone))
+            if row.get("enabled", True):
+                next_fire = calculate_next_fire(row, now, local_timezone=local_zone)
+                last = await storage.async_get_last_fired(row["id"])
+                if fire_period_key(row, next_fire, local_timezone=local_zone) == last:
+                    next_fire = calculate_next_fire(row, next_fire, local_timezone=local_zone)
+                metadata["next_fire"] = next_fire.isoformat()
+        except (ValueError, TypeError, KeyError):
+            # No private parser errors or stored credentials in metadata.
+            pass
+        result.append({**row, **metadata})
+    connection.send_result(msg["id"], {"schedules": result})
 
 
 @websocket_api.websocket_command(
@@ -211,6 +238,52 @@ async def _ws_preview_energy_report(
     connection.send_result(msg["id"], payload["summary"])
 
 
+@websocket_api.websocket_command({
+    vol.Required("type"): f"{DOMAIN}/preview_log_digest",
+    vol.Required("cadence"): vol.In(sorted(VALID_CADENCES)),
+    vol.Optional("timezone"): str,
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def _ws_preview_log_digest(hass, connection, msg) -> None:
+    """Readonly retained log aggregate preview for a completed HA calendar period."""
+    now = _utcnow()
+    cadence = msg["cadence"]
+    local_zone = getattr(getattr(hass, "config", None), "time_zone", None)
+    context = {"cadence": cadence}
+    if "timezone" in msg:
+        context["timezone"] = msg["timezone"]
+    try:
+        await asyncio.to_thread(normalize_schedule_calendar, context)
+        zone = effective_schedule_timezone(context, now, local_zone)
+        start, end = calendar_report_window(context, now, local_timezone=local_zone)
+    except (ValueError, TypeError, KeyError):
+        connection.send_error(msg["id"], "invalid_payload", "Invalid calendar timezone.")
+        return
+    entries = await async_get_system_log_entries(hass)
+    # Reuse the existing pure composer, with a bounded timestamp filter. Missing
+    # timestamps remain explicitly incomplete; counts are lifetime aggregates.
+    from .composer import _entry_time
+    entries = [row for row in entries if _entry_time(row) is None or _entry_time(row) < end]
+    payload = build_log_digest_payload(entries, cadence=cadence, now=now, since=start - timedelta(microseconds=1))
+    summary = payload["summary"]
+    result = {key: summary[key] for key in
+              ("total", "level_counts", "logger_counts", "recent_errors", "recent_warnings")}
+    # Internal datetime objects are not a WebSocket JSON contract.
+    for key in ("recent_errors", "recent_warnings"):
+        result[key] = [{"level": row.get("level"), "name": row.get("name"),
+                        "message": row["_message"], "count": row.get("count") or 1,
+                        "timestamp": row["_timestamp_dt"].isoformat() if row["_timestamp_dt"] else None}
+                       for row in result[key]]
+    result.update(cadence=cadence, effective_timezone=getattr(zone, "key", str(zone)),
+                  period={"from": start.isoformat(), "to": end.isoformat(),
+                          "semantics": "previous_completed_calendar_period"},
+                  source={"name": "system_log", "count_semantics": "retained_aggregates",
+                          "complete": False, "retained_entries": len(entries),
+                          "reason": "retained_last_observed_aggregates_not_full_event_history"})
+    connection.send_result(msg["id"], result)
+
+
 def async_register_commands(hass: HomeAssistant) -> None:
     """Register all websocket commands."""
     for handler in (
@@ -222,5 +295,6 @@ def async_register_commands(hass: HomeAssistant) -> None:
         _ws_set_schedule,
         _ws_send_now,
         _ws_preview_energy_report,
+        _ws_preview_log_digest,
     ):
         websocket_api.async_register_command(hass, handler)

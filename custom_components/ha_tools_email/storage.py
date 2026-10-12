@@ -16,6 +16,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 from .tariff import TariffValidationError, validate_tariff_profile
+from .scheduler import normalize_schedule_calendar
 from .history import HISTORY_SCHEMA, HISTORY_LIMIT, HISTORY_DAYS, clean_attempt, retained_attempts
 
 from .const import (
@@ -76,13 +77,9 @@ class EmailStorage:
                     loaded = {}
                 self._data = _default_state()
                 self._deep_merge(self._data, loaded)
-                self._data["schedules"] = self._clean_schedule_list(
-                    self._data.get("schedules", [])
-                )
                 await self._async_migrate_legacy_smtp_config_locked(loaded)
             if self._tariff_only_loaded is not None:
                 loaded = deepcopy(self._data)
-                self._data["schedules"] = self._clean_schedule_list(self._data.get("schedules", []))
                 await self._async_migrate_legacy_smtp_config_locked(loaded)
                 self._tariff_only_loaded = None
             return deepcopy(self._data)
@@ -223,91 +220,112 @@ class EmailStorage:
 
     async def async_list_schedules(self) -> list[dict[str, Any]]:
         """Return configured schedules."""
-        data = await self.async_load()
-        return data["schedules"]
+        async with self._lock:
+            data = await self._async_tariff_data_locked()
+            # Cold ZoneInfo lookup reads tzdata; keep validation off HA's loop.
+            return await asyncio.to_thread(self._clean_schedule_list, deepcopy(data.get("schedules", [])))
 
     async def async_get_schedule(self, schedule_id: str) -> dict[str, Any] | None:
         """Return a schedule by id."""
-        data = await self.async_load()
-        for schedule in data["schedules"]:
+        for schedule in await self.async_list_schedules():
             if schedule.get("id") == schedule_id:
                 return deepcopy(schedule)
         return None
 
     async def async_upsert_schedule(self, schedule: dict[str, Any]) -> dict[str, Any]:
-        """Create or update one schedule."""
+        """Validate an explicit save, preserving other Store sections verbatim."""
         if not isinstance(schedule, dict):
             raise ValueError("schedule must be an object")
-
+        # Reject calendar fields before any load/save or SMTP side effect.
+        await asyncio.to_thread(normalize_schedule_calendar, schedule)
         async with self._lock:
-            data = await self._ensure_loaded_locked()
+            data = await self._async_tariff_data_locked()
+            candidate = deepcopy(data)
             schedule_id = str(schedule.get("id") or uuid.uuid4())
-            clean = self._clean_schedule(schedule, existing_id=schedule_id)
+            rows = candidate.get("schedules", [])
+            if not isinstance(rows, list):
+                raise ValueError("stored schedules must be a list")
+            index = next((i for i, row in enumerate(rows)
+                          if isinstance(row, dict) and self._stored_schedule_id(row) == schedule_id), None)
+            existing = rows[index] if index is not None else {}
+            merged = {**existing, **schedule}
+            # Canonical edits supersede inherited aliases, explicit conflicts fail.
+            for canonical, aliases in (("weekday", ("weekly_day",)),
+                                       ("month_day", ("day", "monthday"))):
+                if canonical in schedule:
+                    for alias in aliases:
+                        if alias not in schedule:
+                            merged.pop(alias, None)
+            # Transient list metadata is never persisted from UI echoes.
+            for key in ("next_fire", "effective_timezone", "calendar_policy"):
+                merged.pop(key, None)
+            clean = await asyncio.to_thread(self._clean_schedule, merged, existing_id=schedule_id)
             clean["updated_at"] = _now_iso()
-
-            for idx, existing in enumerate(data["schedules"]):
-                if existing.get("id") == schedule_id:
-                    clean["created_at"] = existing.get("created_at") or clean["updated_at"]
-                    data["schedules"][idx] = clean
-                    await self._store.async_save(data)
-                    return deepcopy(clean)
-
-            clean["created_at"] = clean["updated_at"]
-            data["schedules"].append(clean)
-            await self._store.async_save(data)
+            clean["created_at"] = existing.get("created_at") or clean["updated_at"]
+            if index is None:
+                rows.append(clean)
+            else:
+                rows[index] = clean
+            candidate["schedules"] = rows
+            await self._store.async_save(candidate)
+            self._data = candidate
             return deepcopy(clean)
 
     async def async_delete_schedule(self, schedule_id: str) -> bool:
         """Delete one schedule by id."""
         async with self._lock:
-            data = await self._ensure_loaded_locked()
+            data = deepcopy(await self._async_tariff_data_locked())
             before = len(data["schedules"])
             data["schedules"] = [
                 schedule
                 for schedule in data["schedules"]
-                if schedule.get("id") != schedule_id
+                if not isinstance(schedule, dict) or self._stored_schedule_id(schedule) != schedule_id
             ]
             removed = len(data["schedules"]) != before
             if removed:
                 data["scheduler_state"].pop(schedule_id, None)
                 await self._store.async_save(data)
+                self._data = data
             return removed
 
     async def async_get_digest_state(self, kind: str, cadence: str) -> dict[str, Any]:
         """Return digest dedup state for one report stream."""
-        data = await self.async_load()
-        return deepcopy(
-            data.get("digest_state", {}).get(kind, {}).get(cadence, {})
-        )
+        async with self._lock:
+            data = await self._async_tariff_data_locked()
+            return deepcopy(data.get("digest_state", {}).get(kind, {}).get(cadence, {}))
 
     async def async_set_digest_state(
         self, kind: str, cadence: str, state: dict[str, Any]
     ) -> None:
         """Persist digest dedup state for one report stream."""
         async with self._lock:
-            data = await self._ensure_loaded_locked()
+            data = deepcopy(await self._async_tariff_data_locked())
             data.setdefault("digest_state", {}).setdefault(kind, {})[cadence] = deepcopy(
                 state
             )
             await self._store.async_save(data)
+            self._data = data
 
     async def async_get_last_fired(self, schedule_id: str) -> str | None:
         """Return the last fired period key for a schedule."""
-        data = await self.async_load()
-        state = data.get("scheduler_state", {}).get(schedule_id, {})
-        return state.get("last_fired_period")
+        async with self._lock:
+            data = await self._async_tariff_data_locked()
+            state = data.get("scheduler_state", {}).get(schedule_id, {})
+            return state.get("last_fired_period")
 
     async def async_set_last_fired(
         self, schedule_id: str, period_key: str, fired_at: str
     ) -> None:
         """Persist schedule last-fired metadata."""
         async with self._lock:
-            data = await self._ensure_loaded_locked()
+            data = deepcopy(await self._async_tariff_data_locked())
             data.setdefault("scheduler_state", {})[schedule_id] = {
+                **data.get("scheduler_state", {}).get(schedule_id, {}),
                 "last_fired_period": period_key,
                 "last_fired_at": fired_at,
             }
             await self._store.async_save(data)
+            self._data = data
 
     async def _ensure_loaded_locked(self) -> dict[str, Any]:
         """Load data while the caller holds the lock."""
@@ -317,9 +335,6 @@ class EmailStorage:
                 loaded = {}
             self._data = _default_state()
             self._deep_merge(self._data, loaded)
-            self._data["schedules"] = self._clean_schedule_list(
-                self._data.get("schedules", [])
-            )
         return self._data
 
     @staticmethod
@@ -359,6 +374,7 @@ class EmailStorage:
         recipients = [str(item).strip() for item in recipients if str(item).strip()]
 
         return {
+            **normalize_schedule_calendar(schedule),
             "id": str(existing_id or schedule.get("id") or uuid.uuid4()),
             "kind": kind,
             "cadence": cadence,
@@ -366,6 +382,14 @@ class EmailStorage:
             "recipients": recipients,
             "enabled": bool(schedule.get("enabled", True)),
         }
+
+    @staticmethod
+    def _stored_schedule_id(schedule: dict[str, Any]) -> str:
+        """Stable projection for ID-less legacy rows; never persist on read."""
+        if schedule.get("id"):
+            return str(schedule["id"])
+        return str(uuid.uuid5(uuid.NAMESPACE_URL,
+            "ha_tools_email:legacy:" + json.dumps(schedule, sort_keys=True)))
 
     @classmethod
     def _clean_schedule_list(cls, schedules: Any) -> list[dict[str, Any]]:
@@ -377,7 +401,7 @@ class EmailStorage:
             if not isinstance(schedule, dict):
                 continue
             try:
-                clean.append(cls._clean_schedule(schedule, existing_id=schedule.get("id")))
+                clean.append(cls._clean_schedule(schedule, existing_id=cls._stored_schedule_id(schedule)))
             except ValueError:
                 continue
         return clean

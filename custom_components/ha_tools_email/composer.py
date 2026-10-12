@@ -287,12 +287,16 @@ async def async_build_report_payload(
     kind: str,
     cadence: str,
     now: datetime | None = None,
+    window_start: datetime | None = None,
+    window_end: datetime | None = None,
 ) -> dict[str, Any]:
     """Compose a report payload from Home Assistant runtime data."""
     if kind == KIND_LOG_DIGEST:
-        return await async_build_log_digest_payload(hass, storage, cadence=cadence, now=now)
+        return await async_build_log_digest_payload(hass, storage, cadence=cadence, now=now,
+            window_start=window_start, window_end=window_end)
     if kind == KIND_ENERGY_REPORT:
-        return await async_build_energy_report_payload(hass, cadence=cadence, now=now)
+        return await async_build_energy_report_payload(hass, cadence=cadence, now=now,
+            window_start=window_start, window_end=window_end)
     raise ValueError(f"Unsupported report kind: {kind}")
 
 
@@ -302,19 +306,38 @@ async def async_build_log_digest_payload(
     *,
     cadence: str,
     now: datetime | None = None,
+    window_start: datetime | None = None,
+    window_end: datetime | None = None,
 ) -> dict[str, Any]:
     """Compose a log digest from system_log records and Store dedup state."""
     now = _aware(now or datetime.now(timezone.utc))
     state = await storage.async_get_digest_state(KIND_LOG_DIGEST, cadence)
-    since = _parse_datetime(state.get("last_digest")) or _period_start(cadence, now)
+    since = (window_start - timedelta(microseconds=1) if window_start is not None else
+             _parse_datetime(state.get("last_digest")) or _period_start(cadence, now))
     entries = await async_get_system_log_entries(hass)
-    return build_log_digest_payload(
+    if window_end is not None:
+        # Retained aggregates have a last-observed timestamp and lifetime count,
+        # not exact event occurrences within a calendar window.
+        entries = [row for row in entries if _entry_time(row) is None or _entry_time(row) < window_end]
+    payload = build_log_digest_payload(
         entries,
         cadence=cadence,
         now=now,
         since=since,
-        seen_keys=state.get("seen_keys") or [],
+        seen_keys=[] if window_start is not None else state.get("seen_keys") or [],
     )
+    source = {"name": "system_log", "count_semantics": "retained_aggregates",
+              "complete": False, "retained_entries": len(entries),
+              "reason": "retained_last_observed_aggregates_not_full_event_history"}
+    payload["summary"]["source"] = source
+    context = "Counts describe retained aggregates, not exact events or complete history."
+    if window_start is not None and window_end is not None:
+        payload["summary"]["period"] = {"from": window_start.isoformat(), "to": window_end.isoformat(),
+                                        "semantics": "previous_completed_calendar_period"}
+        context += f" Last-observed window: {window_start.isoformat()} → {window_end.isoformat()}."
+    payload["body"] += "\n\n" + context
+    payload["html"] = payload["html"].replace("</body>", f"<p>{escape(context)}</p></body>")
+    return payload
 
 
 async def async_get_system_log_entries(hass: Any) -> list[dict[str, Any]]:
@@ -357,10 +380,13 @@ async def async_build_energy_report_payload(
     *,
     cadence: str,
     now: datetime | None = None,
+    window_start: datetime | None = None,
+    window_end: datetime | None = None,
 ) -> dict[str, Any]:
     """Compose an energy report from recorder statistics."""
-    end = _aware(now or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
-    start = _period_start(cadence, end)
+    end = (_aware(window_end).astimezone(timezone.utc) if window_end is not None else
+           _aware(now or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0))
+    start = _aware(window_start).astimezone(timezone.utc) if window_start is not None else _period_start(cadence, end)
     sensors = []
     try:
         from homeassistant.components.energy.data import async_get_manager
