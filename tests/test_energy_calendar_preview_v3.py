@@ -131,3 +131,27 @@ class EnergyCalendarPropagationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('America/New_York', seen[0]['report_timezone'])
         self.assertEqual('2026-10-05T04:00:00+00:00', seen[0]['report_window'][0].astimezone(UTC).isoformat())
         self.assertNotIn('report_timezone', seen[1])
+
+    async def test_send_prepare_forwards_timezone_without_crossing_smtp(self):
+        ws = load_websocket(self)
+        import sys
+        scheduler = sys.modules[ws.__package__ + '.scheduler']
+        composer = sys.modules[ws.__package__ + '.composer']
+        from types import ModuleType
+        history = ModuleType(ws.__package__ + '.history')
+        captured=[]
+        async def build(*args, **kw):
+            captured.append(kw)
+            return {'subject':'synthetic', 'body':'synthetic', 'html':'synthetic'}
+        async def dispatch(hass, storage, send, prepare, **kw):
+            cfg,to,subject,body,html=await prepare()
+            return {'status':'fixture_no_smtp'}
+        history.async_dispatch_attempt=dispatch
+        async def config():return {'default_recipient':'synthetic@example.invalid'}
+        smtp=Mock(side_effect=AssertionError('No SMTP in calendar propagation test'))
+        hass=SimpleNamespace(data={'ha_tools_email':{'load_config':config,'send_email':smtp}})
+        with patch.dict(sys.modules,{history.__name__:history}), patch.object(composer,'async_build_report_payload',build):
+            result=await scheduler.async_send_report(hass,object(),kind='energy_report',cadence='weekly',
+                recipients=[],now=NOW,report_window=(NOW,NOW),report_timezone='America/New_York')
+        self.assertEqual('America/New_York',captured[0]['report_timezone'])
+        self.assertEqual('fixture_no_smtp',result['status']);self.assertEqual(0,smtp.call_count)
