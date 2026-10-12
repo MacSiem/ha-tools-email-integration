@@ -252,5 +252,31 @@ class MailChartSpecification(unittest.TestCase):
         self.assertIn('https://ha.example.test/energy',payload['body'])
         self.assertEqual(1,payload['body'].count('Static chart data'))
 
+    def test_calendar_chart_uses_report_timezone_without_changing_measured_totals(self):
+        start = datetime(2026, 10, 5, 4, tzinfo=timezone.utc)
+        end = datetime(2026, 10, 12, 4, tzinfo=timezone.utc)
+        buckets = [{**r, 'kwh': 1} for r in series(start, 168)]
+        async def snapshot(*args):
+            return {'status': 'ready', 'source_ids': ['sensor.grid'],
+                    'hourly_buckets': buckets, 'devices': [{'name': 'Grid', 'kwh': 168}]}
+        hass = SimpleNamespace(data={}, config=SimpleNamespace(currency='PLN', time_zone='Asia/Tokyo'))
+        with patch.object(c, 'async_get_energy_usage', snapshot):
+            payload = asyncio.run(c.async_build_energy_report_payload(hass, cadence='weekly',
+                window_start=start, window_end=end, report_timezone='America/New_York'))
+            old = asyncio.run(c.async_build_energy_report_payload(hass, cadence='weekly',
+                window_start=start, window_end=end))
+        model = payload['summary']['visualization']
+        self.assertEqual('America/New_York', model['timezone'])
+        rows = chart(model, 'energy-usage')['rows']
+        self.assertEqual(7, len(rows))
+        self.assertEqual([24] * 7, [r['hours'] for r in rows])
+        self.assertEqual([24] * 7, [r['value'] for r in rows])
+        self.assertTrue(all(r['complete'] for r in rows))
+        self.assertIn('2026-10-05', rows[0]['label'])
+        self.assertIn('America/New_York', payload['body'])
+        self.assertEqual('Asia/Tokyo', hass.config.time_zone)
+        self.assertEqual({k:v for k,v in old['summary'].items() if k != 'visualization'},
+                         {k:v for k,v in payload['summary'].items() if k != 'visualization'})
+
 if __name__ == '__main__':
     unittest.main()
