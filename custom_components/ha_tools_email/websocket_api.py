@@ -268,11 +268,11 @@ async def _ws_preview_log_digest(hass, connection, msg) -> None:
     payload = build_log_digest_payload(entries, cadence=cadence, now=now, since=start - timedelta(microseconds=1))
     summary = payload["summary"]
     result = {key: summary[key] for key in
-              ("total", "level_counts", "logger_counts", "recent_errors", "recent_warnings")}
+              ("total", "level_counts", "logger_counts", "recent_errors", "recent_warnings", "unique_problems", "counts_complete")}
     # Internal datetime objects are not a WebSocket JSON contract.
     for key in ("recent_errors", "recent_warnings"):
         result[key] = [{"level": row.get("level"), "name": row.get("name"),
-                        "message": row["_message"], "count": row.get("count") or 1,
+                        "message": row["_message"], "count": row.get("count"),
                         "timestamp": row["_timestamp_dt"].isoformat() if row["_timestamp_dt"] else None}
                        for row in result[key]]
     result.update(cadence=cadence, effective_timezone=getattr(zone, "key", str(zone)),

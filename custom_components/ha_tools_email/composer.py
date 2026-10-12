@@ -37,7 +37,7 @@ def build_log_digest_payload(
 ) -> dict[str, Any]:
     """Build a log digest email payload from system_log-like entries."""
     now = _aware(now or datetime.now(timezone.utc))
-    summary = summarize_log_entries(entries, since=since, seen_keys=seen_keys)
+    summary = summarize_log_entries(entries, since=since, seen_keys=seen_keys, until=now)
     title = f"HA Log Digest - {_cadence_label(cadence)}"
     subject = f"{title} - {now.date().isoformat()}"
     body = _render_log_plain(title, summary)
@@ -56,6 +56,7 @@ def summarize_log_entries(
     *,
     since: datetime | None = None,
     seen_keys: Iterable[str] | None = None,
+    until: datetime | None = None,
 ) -> dict[str, Any]:
     """Aggregate system log entries by level/logger with optional dedup state."""
     seen = set(seen_keys or [])
@@ -63,10 +64,10 @@ def summarize_log_entries(
     dedup_keys = set(seen)
     since = _aware(since) if since else None
 
-    for raw in entries:
-        if not isinstance(raw, dict):
-            continue
+    for raw in _group_retained_logs(entries):
         when = _entry_time(raw)
+        if until and when and when > _aware(until):
+            continue
         if since and when and when <= since:
             continue
         key = _entry_key(raw)
@@ -78,14 +79,14 @@ def summarize_log_entries(
         entry["_timestamp_dt"] = when
         accepted.append(entry)
 
-    level_counts: dict[str, int] = {}
-    logger_counts: dict[str, int] = {}
+    level_counts: dict[str, int | None] = {}
+    logger_counts: dict[str, int | None] = {}
     for entry in accepted:
         level = str(entry.get("level") or "UNKNOWN").upper()
         logger = str(entry.get("name") or "unknown")
-        count = int(entry.get("count") or 1)
-        level_counts[level] = level_counts.get(level, 0) + count
-        logger_counts[logger] = logger_counts.get(logger, 0) + count
+        count = entry["count"]
+        level_counts[level] = _log_count_sum(level_counts.get(level, 0), count)
+        logger_counts[logger] = _log_count_sum(logger_counts.get(logger, 0), count)
 
     recent_errors = [
         entry
@@ -107,10 +108,14 @@ def summarize_log_entries(
     )
 
     return {
-        "total": sum(level_counts.values()),
+        "total": _log_count_total(level_counts.values()),
+        "unique_problems": len(accepted),
+        "counts_complete": all(entry["count"] is not None for entry in accepted),
+        "source": {"name": "system_log", "complete": False, "count_semantics": "retained_aggregates",
+                   "unknown_counts": sum(entry["count"] is None for entry in accepted)},
         "level_counts": level_counts,
         "logger_counts": dict(
-            sorted(logger_counts.items(), key=lambda item: item[1], reverse=True)
+            sorted(logger_counts.items(), key=lambda item: (item[1] is not None, item[1] if item[1] is not None else 0), reverse=True)
         ),
         "recent_errors": recent_errors[:10],
         "recent_warnings": recent_warnings[:10],
@@ -127,7 +132,7 @@ def render_log_digest_html(
     level_rows = "".join(
         "<tr>"
         f"<td>{escape(level)}</td>"
-        f"<td style=\"text-align:right;font-weight:700\">{count}</td>"
+        f"<td style=\"text-align:right;font-weight:700\">{_log_count_text(count)}</td>"
         "</tr>"
         for level, count in sorted(summary["level_counts"].items())
     )
@@ -137,7 +142,7 @@ def render_log_digest_html(
     logger_rows = "".join(
         "<tr>"
         f"<td>{escape(logger)}</td>"
-        f"<td style=\"text-align:right\">{count}</td>"
+        f"<td style=\"text-align:right\">{_log_count_text(count)}</td>"
         "</tr>"
         for logger, count in list(summary["logger_counts"].items())[:10]
     )
@@ -149,7 +154,7 @@ def render_log_digest_html(
         f"<strong>{escape(str(entry.get('level') or ''))}</strong> "
         f"{escape(str(entry.get('name') or 'unknown'))}: "
         f"{escape(entry.get('_message') or '')} "
-        f"<span style=\"color:#64748b\">x{int(entry.get('count') or 1)}</span>"
+        f"<span style=\"color:#64748b\">x{_log_count_text(entry.get('count'))}</span>"
         "</li>"
         for entry in summary["recent_errors"]
     )
@@ -160,7 +165,7 @@ def render_log_digest_html(
         "<li>"
         f"{escape(str(entry.get('name') or 'unknown'))}: "
         f"{escape(entry.get('_message') or '')} "
-        f"<span style=\"color:#64748b\">x{int(entry.get('count') or 1)}</span>"
+        f"<span style=\"color:#64748b\">x{_log_count_text(entry.get('count'))}</span>"
         "</li>"
         for entry in summary["recent_warnings"]
     )
@@ -175,7 +180,7 @@ def render_log_digest_html(
       <p style="margin:6px 0 0;color:#cbd5e1;font-size:13px">{escape(now.isoformat())}</p>
     </div>
     <div style="padding:18px 22px">
-      <p style="font-size:15px;margin:0 0 14px">Total counted warnings/errors: <strong>{summary["total"]}</strong></p>
+      <p style="font-size:15px;margin:0 0 14px">Total counted warnings/errors: <strong>{_log_count_text(summary["total"])}</strong></p>
       <h2 style="font-size:16px;margin:18px 0 8px">Counts by level</h2>
       <table style="width:100%;border-collapse:collapse">{level_rows}</table>
       <h2 style="font-size:16px;margin:18px 0 8px">Top loggers</h2>
@@ -613,13 +618,13 @@ def _clean_energy_devices(
 def _render_log_plain(title: str, summary: dict[str, Any]) -> str:
     lines = [
         title,
-        f"Total counted warnings/errors: {summary['total']}",
+        f"Total counted warnings/errors: {_log_count_text(summary['total'])}",
         "",
         "Counts by level:",
     ]
     if summary["level_counts"]:
         lines.extend(
-            f"- {level}: {count}"
+            f"- {level}: {_log_count_text(count)}"
             for level, count in sorted(summary["level_counts"].items())
         )
     else:
@@ -628,7 +633,7 @@ def _render_log_plain(title: str, summary: dict[str, Any]) -> str:
     lines.append("Top loggers:")
     if summary["logger_counts"]:
         lines.extend(
-            f"- {logger}: {count}"
+            f"- {logger}: {_log_count_text(count)}"
             for logger, count in list(summary["logger_counts"].items())[:10]
         )
     else:
@@ -638,7 +643,7 @@ def _render_log_plain(title: str, summary: dict[str, Any]) -> str:
     if summary["recent_errors"]:
         lines.extend(
             f"- {entry.get('level')} {entry.get('name')}: {entry.get('_message')} "
-            f"x{int(entry.get('count') or 1)}"
+            f"x{_log_count_text(entry.get('count'))}"
             for entry in summary["recent_errors"]
         )
     else:
@@ -648,7 +653,7 @@ def _render_log_plain(title: str, summary: dict[str, Any]) -> str:
     if summary["recent_warnings"]:
         lines.extend(
             f"- {entry.get('name')}: {entry.get('_message')} "
-            f"x{int(entry.get('count') or 1)}"
+            f"x{_log_count_text(entry.get('count'))}"
             for entry in summary["recent_warnings"]
         )
     else:
@@ -673,16 +678,85 @@ def _entry_key(entry: dict[str, Any]) -> str:
     )
 
 
+def _log_count(value: Any) -> int | None:
+    return value if type(value) is int and 0 <= value <= 9007199254740991 else None
+
+
+def _log_count_sum(left: int | None, right: int | None) -> int | None:
+    return _log_count(left + right) if left is not None and right is not None else None
+
+
+def _log_count_total(values: Iterable[int | None]) -> int | None:
+    total = 0
+    for value in values:
+        total = _log_count_sum(total, value)
+    return total
+
+
+def _log_count_text(value: int | None) -> str:
+    return str(value) if value is not None else "Unknown"
+
+
+def _log_exact(value: Any) -> tuple:
+    # Type and structure are identity; rendered/truncated text is not.
+    if value is None:
+        return ("null",)
+    if isinstance(value, bool):
+        return ("boolean", value)
+    if isinstance(value, (int, float)):
+        return ("number", value)
+    if isinstance(value, str):
+        return ("string", value)
+    if isinstance(value, list):
+        return ("array", tuple(_log_exact(item) for item in value))
+    if isinstance(value, dict):
+        return ("object", tuple((key, _log_exact(value[key])) for key in sorted(value)))
+    return ("unsupported", type(value).__name__)
+
+
+def _group_retained_logs(entries: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups = {}
+    for raw in entries:
+        if not isinstance(raw, dict):
+            continue
+        supplied = next((key for key in ("id", "entry_id", "key", "hash") if
+                         isinstance(raw.get(key), str) or type(raw.get(key)) in (int, float)
+                         and isfinite(raw[key])), None)
+        identity = ("backend", supplied, _log_exact(raw[supplied])) if supplied else (
+            "exact", tuple((key in raw, _log_exact(raw.get(key))) for key in
+                           ("level", "name", "source", "message", "exception")))
+        count = _log_count(raw.get("count"))
+        previous = groups.get(identity)
+        if previous is None:
+            groups[identity] = {**raw, "count": count}
+            continue
+        before_count = previous["count"]
+        combined = (max(before_count, count) if supplied and before_count is not None and count is not None
+                    else _log_count_sum(before_count, count))
+        stamp = _entry_time(raw)
+        previous_stamp = _entry_time(previous)
+        if stamp is not None and (previous_stamp is None or stamp >= previous_stamp):
+            groups[identity] = {**raw, "count": combined}
+        else:
+            previous["count"] = combined
+    return list(groups.values())
+
+
 def _entry_time(entry: dict[str, Any]) -> datetime | None:
-    raw = entry.get("timestamp") or entry.get("first_occurred")
+    raw = entry.get("timestamp")
+    if raw is None:
+        raw = entry.get("first_occurred")
     if raw is None:
         return None
-    if isinstance(raw, (int, float)):
-        return datetime.fromtimestamp(raw, tz=timezone.utc)
-    if isinstance(raw, str):
-        return _parse_datetime(raw)
-    if isinstance(raw, datetime):
-        return _aware(raw)
+    try:
+        if type(raw) in (int, float):
+            return datetime.fromtimestamp(raw, tz=timezone.utc) if isfinite(raw) else None
+        if isinstance(raw, str):
+            return _parse_datetime(raw)
+        if isinstance(raw, datetime):
+            return _aware(raw)
+    except (ValueError, OverflowError, OSError):
+        return None
     return None
 
 
