@@ -19,6 +19,7 @@ try:
         DATA_SEND_EMAIL,
         DOMAIN,
         KIND_LOG_DIGEST,
+        KIND_ENERGY_REPORT,
     )
 except ImportError:  # Allows pure tests to load this file without a package import.
     CADENCE_DAILY = "daily"
@@ -29,6 +30,7 @@ except ImportError:  # Allows pure tests to load this file without a package imp
     DATA_SEND_EMAIL = "send_email"
     DOMAIN = "ha_tools_email"
     KIND_LOG_DIGEST = "log_digest"
+    KIND_ENERGY_REPORT = "energy_report"
 
 _LOGGER = logging.getLogger(__name__)
 # Keep validated ZoneInfo instances alive beyond Python's small strong cache.
@@ -299,6 +301,9 @@ async def async_send_schedule(
 ) -> dict[str, Any]:
     """Compose and send one configured schedule."""
     bucket = hass.data[DOMAIN]
+    now = _aware(now or datetime.now(timezone.utc))
+    local_zone = getattr(getattr(hass, "config", None), "time_zone", None)
+    zone = effective_schedule_timezone(schedule, now, local_zone)
     return await async_send_report(
         hass,
         bucket["storage"],
@@ -308,8 +313,9 @@ async def async_send_schedule(
         now=now,
         schedule_id=schedule.get("id"),
         expected_schedule=schedule,
-        report_window=calendar_report_window(schedule, now or datetime.now(timezone.utc),
-            local_timezone=getattr(getattr(hass, "config", None), "time_zone", None)),
+        report_window=calendar_report_window(schedule, now, local_timezone=local_zone),
+        **({"report_timezone": getattr(zone, "key", str(zone))}
+           if schedule["kind"] == KIND_ENERGY_REPORT else {}),
     )
 
 
@@ -343,6 +349,7 @@ async def async_send_report(
     schedule_id: str | None = None,
     report_window: tuple[datetime, datetime] | None = None,
     expected_schedule: dict[str, Any] | None = None,
+    report_timezone: str | None = None,
 ) -> dict[str, Any]:
     """Compose and send one report through the existing SMTP send path."""
     from .composer import async_build_report_payload
@@ -360,6 +367,7 @@ async def async_send_report(
         payload = await async_build_report_payload(
             hass, storage, kind=kind, cadence=cadence, now=now,
             **({"window_start": report_window[0], "window_end": report_window[1]} if report_window else {}),
+            **({"report_timezone": report_timezone} if report_timezone is not None else {}),
         )
         # Recorder/config awaits can allow an administrator's edit/delete.
         # Re-read immediately before the shared dispatcher crosses into SMTP.

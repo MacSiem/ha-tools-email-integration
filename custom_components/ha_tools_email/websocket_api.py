@@ -224,6 +224,8 @@ async def _ws_send_now(
     {
         vol.Required("type"): f"{DOMAIN}/preview_energy_report",
         vol.Required("cadence"): vol.In(sorted(VALID_CADENCES)),
+        vol.Optional("calendar_period"): bool,
+        vol.Optional("timezone"): str,
     }
 )
 @websocket_api.require_admin
@@ -233,9 +235,35 @@ async def _ws_preview_energy_report(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Read the same Recorder model used by send_now and schedules, without sending."""
-    payload = await async_build_energy_report_payload(hass, cadence=msg["cadence"])
-    connection.send_result(msg["id"], payload["summary"])
+    """Read Recorder without sending; completed calendar periods are explicit opt-in."""
+    calendar_period = msg.get("calendar_period", False)
+    if type(calendar_period) is not bool or "timezone" in msg and not calendar_period:
+        connection.send_error(msg["id"], "invalid_payload", "Timezone requires calendar_period=true.")
+        return
+    if not calendar_period:
+        # Keep the existing dashboard's current-period request and response intact.
+        payload = await async_build_energy_report_payload(hass, cadence=msg["cadence"])
+        connection.send_result(msg["id"], payload["summary"])
+        return
+    now = _utcnow()
+    local_zone = getattr(getattr(hass, "config", None), "time_zone", None)
+    context = {"cadence": msg["cadence"]}
+    if "timezone" in msg:
+        context["timezone"] = msg["timezone"]
+    try:
+        await asyncio.to_thread(normalize_schedule_calendar, context)
+        zone = effective_schedule_timezone(context, now, local_zone)
+        start, end = calendar_report_window(context, now, local_timezone=local_zone)
+    except (ValueError, TypeError, KeyError):
+        connection.send_error(msg["id"], "invalid_payload", "Invalid calendar timezone.")
+        return
+    report_zone = getattr(zone, "key", str(zone))
+    payload = await async_build_energy_report_payload(hass, cadence=msg["cadence"], now=now,
+        window_start=start, window_end=end, report_timezone=report_zone)
+    summary = dict(payload["summary"])
+    summary.update(cadence=msg["cadence"], effective_timezone=report_zone,
+        period={**summary["period"], "semantics": "previous_completed_calendar_period"})
+    connection.send_result(msg["id"], summary)
 
 
 @websocket_api.websocket_command({

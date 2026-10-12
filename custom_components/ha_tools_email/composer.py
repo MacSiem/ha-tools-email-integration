@@ -327,6 +327,7 @@ async def async_build_report_payload(
     now: datetime | None = None,
     window_start: datetime | None = None,
     window_end: datetime | None = None,
+    report_timezone: str | None = None,
 ) -> dict[str, Any]:
     """Compose a report payload from Home Assistant runtime data."""
     if kind == KIND_LOG_DIGEST:
@@ -334,7 +335,8 @@ async def async_build_report_payload(
             window_start=window_start, window_end=window_end)
     if kind == KIND_ENERGY_REPORT:
         return await async_build_energy_report_payload(hass, cadence=cadence, now=now,
-            window_start=window_start, window_end=window_end)
+            window_start=window_start, window_end=window_end,
+            **({"report_timezone": report_timezone} if report_timezone is not None else {}))
     raise ValueError(f"Unsupported report kind: {kind}")
 
 
@@ -420,6 +422,7 @@ async def async_build_energy_report_payload(
     now: datetime | None = None,
     window_start: datetime | None = None,
     window_end: datetime | None = None,
+    report_timezone: str | None = None,
 ) -> dict[str, Any]:
     """Compose an energy report from recorder statistics."""
     end = (_aware(window_end).astimezone(timezone.utc) if window_end is not None else
@@ -515,7 +518,7 @@ async def async_build_energy_report_payload(
                        or safe_energy_url(getattr(config, "internal_url", None)))
     attach_mail_charts(payload, build_energy_chart_model(
         payload["summary"], snapshot.get("hourly_buckets", []), chart_tariff_rows,
-        timezone_name=getattr(config, "time_zone", None),
+        timezone_name=report_timezone if report_timezone is not None else getattr(config, "time_zone", None),
         interactive_url=interactive_url, source_kind="grid",
     ))
     return payload
