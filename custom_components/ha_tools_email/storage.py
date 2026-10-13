@@ -13,6 +13,10 @@ from pathlib import Path
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+try:
+    from homeassistant.core import CoreState
+except ImportError:  # Lightweight boundary fixtures; HA provides the real enum.
+    CoreState = None
 from homeassistant.helpers.storage import Store
 
 from .tariff import TariffValidationError, validate_tariff_profile
@@ -39,6 +43,55 @@ class TariffRevisionConflict(ValueError):
     """The caller must reload settings before making a new explicit save."""
 
 
+class StorageWriteError(RuntimeError):
+    """The tariff save returned without a confirmed lower Store write."""
+
+
+class _ConfirmedStore(Store):
+    """Reuse Frigate's lower-write receipt, scoped to explicit tariff saves.
+
+    HA Store may log and swallow lower write errors or skip a write at shutdown.
+    Ordinary async_save calls retain HA behavior for SMTP, schedules and history.
+    EmailStorage serializes all calls through its existing lock.
+    """
+
+    def __init__(self, hass: HomeAssistant, *args: Any, **kwargs: Any) -> None:
+        self._tariff_hass = hass
+        self._confirming_tariff = False
+        self._write_confirmed = False
+        self._last_write_error: Exception | None = None
+        super().__init__(hass, *args, **kwargs)
+
+    async def async_save_confirmed(self, data: dict[str, Any]) -> None:
+        """Require a completed lower write before the caller publishes a tariff."""
+        stopping = CoreState.stopping if CoreState else "stopping"
+        if getattr(self._tariff_hass, "state", None) == stopping:
+            raise StorageWriteError("tariff state write skipped during shutdown")
+        self._last_write_error = None
+        self._write_confirmed = False
+        self._confirming_tariff = True
+        try:
+            await super().async_save(data)
+            if error := self._last_write_error:
+                raise StorageWriteError("tariff state was not durably saved") from error
+            if not self._write_confirmed:
+                raise StorageWriteError("tariff state write was not confirmed")
+        finally:
+            self._confirming_tariff = False
+
+    async def _async_write_data(self, *args: Any, **kwargs: Any) -> None:
+        try:
+            # Older HA passes (path, data); current HA passes (data).
+            await super()._async_write_data(*args, **kwargs)
+        except Exception as error:
+            if self._confirming_tariff:
+                self._last_write_error = error
+            raise  # Preserve HA's existing error handling/logging.
+        else:
+            if self._confirming_tariff:
+                self._write_confirmed = True
+
+
 def _default_state() -> dict[str, Any]:
     """Return the default persisted shape."""
     return {
@@ -61,7 +114,7 @@ class EmailStorage:
     def __init__(self, hass: HomeAssistant) -> None:
         """Bind storage to a Home Assistant instance."""
         self.hass = hass
-        self._store: Store[dict[str, Any]] = Store(
+        self._store: _ConfirmedStore = _ConfirmedStore(
             hass, STORAGE_VERSION, STORAGE_KEY
         )
         self._lock = asyncio.Lock()
@@ -107,7 +160,7 @@ class EmailStorage:
             candidate = deepcopy(data)
             candidate.update(tariff_profile=clean, tariff_revision=expected_revision + 1,
                              tariff_updated_at=_now_iso())
-            await self._store.async_save(candidate)
+            await self._store.async_save_confirmed(candidate)
             self._data = candidate
             return self._tariff_state(candidate)
 
