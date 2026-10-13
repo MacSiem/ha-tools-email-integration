@@ -137,12 +137,31 @@ def load_storage():
             return cls
         def __init__(self, *args):
             self.saved, self.loaded, self.fail = [], {}, False
+            self.swallowed_failure = self.skipped = self.old_hook = False
+            self.save_calls = self.write_calls = 0
+            self.write_started = self.write_release = None
         async def async_load(self):
             return copy.deepcopy(self.loaded)
         async def async_save(self, value):
+            self.save_calls += 1
             if self.fail:
                 raise OSError('private detail must not be exposed')
-            self.saved.append(copy.deepcopy(value))
+            if self.skipped:
+                return
+            try:
+                arguments = ('synthetic-path', value) if self.old_hook else (value,)
+                await self._async_write_data(*arguments)
+            except OSError:
+                if not self.swallowed_failure:
+                    raise
+        async def _async_write_data(self, *arguments):
+            self.write_calls += 1
+            if self.write_started is not None:
+                self.write_started.set()
+                await self.write_release.wait()
+            if self.swallowed_failure:
+                raise OSError('synthetic lower write failure')
+            self.saved.append(copy.deepcopy(arguments[-1]))
     ha_store.Store = Store
     with patch.dict(sys.modules, {package.__name__: package, core.__name__: core, ha_store.__name__: ha_store}):
         name = package.__name__ + '.storage'
