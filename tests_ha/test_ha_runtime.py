@@ -237,9 +237,11 @@ async def test_stored_schedule_loads_fires_once_per_period(hass, hass_storage, h
         now = dt_util.now()
         fire_at = now.replace(hour=7, minute=30, second=0, microsecond=0) + dt.timedelta(days=1)
         async_fire_time_changed(hass, fire_at)
-        await hass.async_block_till_done()
+        # Timer callbacks and their executor-backed storage reads can be HA
+        # background tasks; the default wait excludes them on older Core.
+        await hass.async_block_till_done(wait_background_tasks=True)
         async_fire_time_changed(hass, fire_at + dt.timedelta(seconds=1))
-        await hass.async_block_till_done()
+        await hass.async_block_till_done(wait_background_tasks=True)
     assert send.call_count == 1
     client = await hass_ws_client(hass)
     await client.send_json_auto_id({"type": f"{DOMAIN}/set_schedule", "action": "upsert",
