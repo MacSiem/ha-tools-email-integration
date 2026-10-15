@@ -266,6 +266,13 @@ class RuntimeTests(unittest.IsolatedAsyncioTestCase):
         await self.callbacks[0](datetime(2026, 10, 12, 22, 30, tzinfo=UTC))
         self.assertEqual([], self.sends)
 
+    async def test_swallowed_lower_period_write_never_sends(self):
+        await self.s.async_reload_schedules(self.hass)
+        self.storage._store.swallowed_failure = True
+        await self.callbacks[0](datetime(2026, 10, 12, 22, 30, tzinfo=UTC))
+        self.assertEqual([], self.sends)
+        self.assertIsNone(await self.storage.async_get_last_fired('one'))
+
 
 def load_websocket(testcase):
     """Use actual methods with a deny-capable trusted admin guard stub."""
@@ -306,6 +313,23 @@ def load_websocket(testcase):
 
 
 class ReadonlyAPITests(unittest.IsolatedAsyncioTestCase):
+    async def test_unconfirmed_schedule_write_is_safe_error_without_reload_or_ack(self):
+        from unittest.mock import AsyncMock
+        ws = load_websocket(self)
+        _, s = store()
+        s._store.swallowed_failure = True
+        hass = types.SimpleNamespace(data={'ha_tools_email': {'storage': s}})
+        results, errors = [], []
+        conn = types.SimpleNamespace(user=types.SimpleNamespace(is_admin=True),
+                                    send_result=lambda *a: results.append(a),
+                                    send_error=lambda *a: errors.append(a))
+        with patch.object(ws, 'async_reload_schedules', new=AsyncMock()) as reload:
+            await ws._ws_set_schedule(hass, conn, {'id': 1, 'schedule': schedule()})
+        self.assertEqual([], results)
+        self.assertEqual('storage_write_failed', errors[0][1])
+        self.assertNotIn('synthetic lower', str(errors))
+        reload.assert_not_awaited()
+
     async def test_actual_list_metadata_and_preview_zero_writes_sends(self):
         ws = load_websocket(self)
         _, s = store()
