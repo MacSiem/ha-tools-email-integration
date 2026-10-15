@@ -285,7 +285,7 @@ are retained on upgrade; do not delete them to update the integration.
 4. Install **HA Tools Email**.
 5. Restart Home Assistant.
 6. Go to **Settings → Devices & services → Add integration** and add **HA Tools Email**. The setup form has no fields — just confirm.
-7. Open **Configure** on the HA Tools Email integration and enter your SMTP settings. Tick **Send a test email after saving** to confirm delivery.
+7. Open **Configure** on the HA Tools Email integration and enter your SMTP settings. Optionally enable **Send a test email before saving**. SMTP acceptance confirms handoff to the server; check the inbox or provider separately for delivery.
 
 ### Manual
 

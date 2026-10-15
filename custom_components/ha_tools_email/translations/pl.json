@@ -29,7 +29,7 @@
         },
         "data_description": {
           "default_recipient": "Oddzieleni przecinkami. Używani, gdy raport lub akcja nie ma odbiorcy.",
-          "send_test": "Ustawienia zostaną zapisane tylko wtedy, gdy serwer przyjmie testowy e-mail."
+          "send_test": "Po włączeniu tej opcji ustawienia zostaną zapisane dopiero po przyjęciu testowego e-maila przez serwer. Wyłączona opcja oznacza zapis bez wysyłania testu."
         }
       }
     },

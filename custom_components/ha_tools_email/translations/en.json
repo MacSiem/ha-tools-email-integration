@@ -29,7 +29,7 @@
         },
         "data_description": {
           "default_recipient": "Comma-separated. Used when a report or action has no recipient.",
-          "send_test": "Settings are saved only if the test email is accepted by the server."
+          "send_test": "If enabled, settings are saved only after the server accepts the test email. With this option off, no test email is sent."
         }
       }
     },
