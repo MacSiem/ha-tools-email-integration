@@ -1,5 +1,6 @@
 """Optional native own-Store IO; owner must select an SSD --basetemp."""
 import json
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -35,8 +36,8 @@ def hass_storage():
 
 
 def configure_ssd(hass, tmp_path):
-    if not tmp_path.resolve().is_relative_to(Path('/Volumes/Samsung_SSD')):
-        pytest.skip('Native tariff storage requires explicit SSD --basetemp')
+    if sys.platform == 'darwin' and not tmp_path.resolve().is_relative_to(Path('/Volumes/Samsung_SSD')):
+        pytest.fail('macOS native storage fixture requires explicit SSD --basetemp')
     hass.config.config_dir = str(tmp_path)
 
 

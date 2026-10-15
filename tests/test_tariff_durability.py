@@ -139,3 +139,50 @@ class TariffDurabilityTests(unittest.IsolatedAsyncioTestCase):
         s.hass.state = 'stopping'
         await s._store.async_save({'synthetic': 'ordinary'})
         self.assertEqual(2, s._store.save_calls)
+
+
+class ReportStateDurabilityTests(TariffDurabilityTests):
+    """Logical report state must not outlive an unconfirmed lower write."""
+
+    async def test_history_schedule_and_period_mutations_require_persistence(self):
+        from datetime import datetime, timezone
+        now = datetime(2026, 10, 15, 12, tzinfo=timezone.utc)
+        attempt = dict(id='00000000-0000-4000-8000-000000000001',
+                       timestamp=now.isoformat(), source='manual', kind='test',
+                       cadence=None, period=None, schedule_ref=None,
+                       recipient_count=1, outcome='accepted_by_smtp')
+        for boundary in ('swallowed_failure', 'skipped', 'stopping'):
+            for operation in ('history', 'upsert', 'delete', 'digest', 'period'):
+                with self.subTest(boundary=boundary, operation=operation):
+                    mod, s = self.storage()
+                    s._store.loaded = {'future': {'keep': True}}
+                    schedule = await s.async_upsert_schedule(dict(
+                        id='qa-durable', kind='log_digest', cadence='daily',
+                        time='07:30', enabled=False))
+                    durable = copy.deepcopy(s._store.saved[-1])
+                    before = copy.deepcopy(s._data)
+                    saves = s._store.save_calls
+                    if boundary == 'stopping':
+                        s.hass.state = 'stopping'
+                    else:
+                        setattr(s._store, boundary, True)
+                    with self.assertRaises(mod.StorageWriteError):
+                        if operation == 'history':
+                            await s.async_append_attempt(attempt, now=now)
+                        elif operation == 'upsert':
+                            await s.async_upsert_schedule({**schedule, 'time': '08:30'})
+                        elif operation == 'delete':
+                            await s.async_delete_schedule(schedule['id'])
+                        elif operation == 'digest':
+                            await s.async_set_digest_state('log_digest', 'daily', {'count': 1})
+                        else:
+                            await s.async_set_last_fired(schedule['id'], 'daily:2026-10-15', now.isoformat())
+                    self.assertEqual(before, s._data)
+                    self.assertEqual(durable, s._store.saved[-1])
+                    self.assertEqual(saves + (boundary != 'stopping'), s._store.save_calls)
+                    s.hass.state = 'running'
+                    s._store.swallowed_failure = s._store.skipped = False
+                    # A later valid write must not accidentally persist a failed mutation.
+                    await s.async_save_tariff(None, expected_revision=0)
+                    for key in ('attempt_history', 'schedules', 'digest_state', 'scheduler_state', 'future'):
+                        self.assertEqual(before.get(key), s._store.saved[-1].get(key), key)
