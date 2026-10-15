@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 from email import policy
 from email.parser import BytesParser
-from test_send_semantics import SendSemanticsTests
+import test_send_semantics as transport
 
 try:
     from tests.test_schedule_timezone_v3 import load_websocket, store
@@ -87,7 +87,7 @@ class MailPreviewManualTests(unittest.IsolatedAsyncioTestCase):
             return {'default_recipient': 'fixture@example.invalid',
                 'server': 'smtp.example.invalid', 'username': 'sender@example.invalid',
                 'password': 'SYNTHETIC-ONLY-NO-NETWORK'}
-        shipping_send, smtp = SendSemanticsTests()._send_function({})
+        shipping_send, smtp = transport.SendSemanticsTests()._send_function({})
         def send(*args):
             shipping_send(*args)
             raw = smtp.sendmail.call_args.args[2].encode('ascii')
