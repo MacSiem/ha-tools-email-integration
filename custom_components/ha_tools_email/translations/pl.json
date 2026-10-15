@@ -28,7 +28,7 @@
           "send_test": "Wyślij testowy email przed zapisem"
         },
         "data_description": {
-          "default_recipient": "Oddzieleni przecinkami. Używani, gdy raport lub akcja nie ma odbiorcy.",
+          "default_recipient": "Adresy oddzielone przecinkami. Używane, gdy raport lub akcja nie wskazuje odbiorcy.",
           "send_test": "Po włączeniu tej opcji ustawienia zostaną zapisane dopiero po przyjęciu testowego e-maila przez serwer. Wyłączona opcja oznacza zapis bez wysyłania testu."
         }
       }
