@@ -372,6 +372,10 @@ async def async_build_report_payload(
         context = f"Report period: {label}. {period['from']} → {period['to']}. The end is exclusive."
         payload["body"] += "\n\n" + context
         append_mail_html(payload, f"<p>{escape(context)}</p>")
+    # Preview and dispatch expose the same final text, including Energy source
+    # names and appended sections. Keep raw summary/source identity untouched.
+    for field in ("subject", "body", "html"):
+        payload[field] = _mail_text(payload[field])
     return payload
 
 
