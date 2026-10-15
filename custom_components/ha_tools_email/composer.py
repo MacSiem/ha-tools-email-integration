@@ -57,10 +57,11 @@ def build_log_digest_payload(
     now: datetime | None = None,
     since: datetime | None = None,
     seen_keys: Iterable[str] | None = None,
+    max_entries: int = 10,
 ) -> dict[str, Any]:
     """Build a log digest email payload from system_log-like entries."""
     now = _aware(now or datetime.now(timezone.utc))
-    summary = summarize_log_entries(entries, since=since, seen_keys=seen_keys, until=now)
+    summary = summarize_log_entries(entries, since=since, seen_keys=seen_keys, until=now, max_entries=max_entries)
     title = f"HA Log Digest - {_cadence_label(cadence)}"
     subject = f"{title} - {now.date().isoformat()}"
     summary["visualization"] = build_log_chart_model(summary)
@@ -81,8 +82,11 @@ def summarize_log_entries(
     since: datetime | None = None,
     seen_keys: Iterable[str] | None = None,
     until: datetime | None = None,
+    max_entries: int = 10,
 ) -> dict[str, Any]:
     """Aggregate system log entries by level/logger with optional dedup state."""
+    if type(max_entries) is not int or not 1 <= max_entries <= 1000:
+        raise ValueError("max_entries must be an integer between 1 and 1000")
     seen = set(seen_keys or [])
     accepted: list[dict[str, Any]] = []
     dedup_keys = set(seen)
@@ -134,6 +138,7 @@ def summarize_log_entries(
     return {
         "total": _log_count_total(level_counts.values()),
         "unique_problems": len(accepted),
+        "max_entries": max_entries,
         "counts_complete": all(entry["count"] is not None for entry in accepted) and _log_count_total(level_counts.values()) is not None,
         "source": {"name": "system_log", "complete": False, "count_semantics": "retained_aggregates",
                    "unknown_counts": sum(entry["count"] is None for entry in accepted)},
@@ -141,8 +146,8 @@ def summarize_log_entries(
         "logger_counts": dict(
             sorted(logger_counts.items(), key=lambda item: (item[1] is not None, item[1] if item[1] is not None else 0), reverse=True)
         ),
-        "recent_errors": recent_errors[:10],
-        "recent_warnings": recent_warnings[:10],
+        "recent_errors": recent_errors[:max_entries],
+        "recent_warnings": recent_warnings[:max_entries],
         "entries": accepted,
         "dedup_keys": sorted(dedup_keys)[-500:],
     }
@@ -209,9 +214,9 @@ def render_log_digest_html(
       <table style="width:100%;table-layout:fixed;border-collapse:collapse">{level_rows}</table>
       <h2 style="font-size:16px;margin:18px 0 8px">Top loggers</h2>
       <table style="width:100%;table-layout:fixed;border-collapse:collapse">{logger_rows}</table>
-      <h2 style="font-size:16px;margin:18px 0 8px">Top 10 recent errors</h2>
+      <h2 style="font-size:16px;margin:18px 0 8px">Top {summary.get("max_entries", 10)} recent errors</h2>
       <ul style="padding-left:18px;line-height:1.5">{error_items}</ul>
-      <h2 style="font-size:16px;margin:18px 0 8px">Top 10 recent warnings</h2>
+      <h2 style="font-size:16px;margin:18px 0 8px">Top {summary.get("max_entries", 10)} recent warnings</h2>
       <ul style="padding-left:18px;line-height:1.5">{warning_items}</ul>
       {render_charts_html(summary.get("visualization") or build_log_chart_model(summary), embedded=True)}
       <!-- HA_TOOLS_REPORT_SECTIONS -->
@@ -334,16 +339,35 @@ async def async_build_report_payload(
     window_start: datetime | None = None,
     window_end: datetime | None = None,
     report_timezone: str | None = None,
+    period_semantics: str | None = None,
+    max_entries: int | None = None,
 ) -> dict[str, Any]:
     """Compose a report payload from Home Assistant runtime data."""
     if kind == KIND_LOG_DIGEST:
-        return await async_build_log_digest_payload(hass, storage, cadence=cadence, now=now,
-            window_start=window_start, window_end=window_end)
-    if kind == KIND_ENERGY_REPORT:
-        return await async_build_energy_report_payload(hass, cadence=cadence, now=now,
+        payload = await async_build_log_digest_payload(hass, storage, cadence=cadence, now=now,
             window_start=window_start, window_end=window_end,
+            **({"manual_window": True} if period_semantics is not None else {}),
+            **({"max_entries": max_entries} if max_entries is not None else {}))
+    elif kind == KIND_ENERGY_REPORT:
+        payload = await async_build_energy_report_payload(hass, cadence=cadence, now=now,
+            window_start=window_start, window_end=window_end,
+            **({"compare_calendar": False} if period_semantics == "rolling_completed_hours" else {}),
             **({"report_timezone": report_timezone} if report_timezone is not None else {}))
-    raise ValueError(f"Unsupported report kind: {kind}")
+    else:
+        raise ValueError(f"Unsupported report kind: {kind}")
+    if period_semantics is not None:
+        period = {"from": window_start.isoformat(), "to": window_end.isoformat(),
+                  "semantics": period_semantics}
+        payload["summary"]["period"] = period
+        # Keep body and HTML period semantics identical on preview and dispatch.
+        label = ({"daily": "Previous completed day", "weekly": "Previous completed ISO week",
+                  "monthly": "Previous completed month"}[cadence]
+                 if period_semantics == "previous_completed_calendar_period" else
+                 {"daily": "Last 24 hours", "weekly": "Last 7 days", "monthly": "Last 30 days"}[cadence])
+        context = f"Report period: {label}. {period['from']} → {period['to']}. The end is exclusive."
+        payload["body"] += "\n\n" + context
+        append_mail_html(payload, f"<p>{escape(context)}</p>")
+    return payload
 
 
 async def async_build_log_digest_payload(
@@ -354,23 +378,30 @@ async def async_build_log_digest_payload(
     now: datetime | None = None,
     window_start: datetime | None = None,
     window_end: datetime | None = None,
+    max_entries: int = 10,
+    manual_window: bool = False,
 ) -> dict[str, Any]:
     """Compose a log digest from system_log records and Store dedup state."""
     now = _aware(now or datetime.now(timezone.utc))
-    state = await storage.async_get_digest_state(KIND_LOG_DIGEST, cadence)
+    state = {} if manual_window else await storage.async_get_digest_state(KIND_LOG_DIGEST, cadence)
     since = (window_start - timedelta(microseconds=1) if window_start is not None else
              _parse_datetime(state.get("last_digest")) or _period_start(cadence, now))
     entries = await async_get_system_log_entries(hass)
     if window_end is not None:
         # Retained aggregates have a last-observed timestamp and lifetime count,
         # not exact event occurrences within a calendar window.
-        entries = [row for row in entries if _entry_time(row) is None or _entry_time(row) < window_end]
+        if manual_window:
+            entries = [row for row in entries if _entry_time(row) is not None and
+                       window_start <= _entry_time(row) < window_end and _entry_time(row) <= now]
+        else:
+            entries = [row for row in entries if _entry_time(row) is None or _entry_time(row) < window_end]
     payload = build_log_digest_payload(
         entries,
         cadence=cadence,
         now=now,
         since=since,
         seen_keys=[] if window_start is not None else state.get("seen_keys") or [],
+        max_entries=max_entries,
     )
     source = {**payload["summary"].get("source", {}), "name": "system_log", "count_semantics": "retained_aggregates",
               "complete": False, "retained_entries": len(entries),
@@ -429,6 +460,7 @@ async def async_build_energy_report_payload(
     window_start: datetime | None = None,
     window_end: datetime | None = None,
     report_timezone: str | None = None,
+    compare_calendar: bool = True,
 ) -> dict[str, Any]:
     """Compose an energy report from recorder statistics."""
     end = (_aware(window_end).astimezone(timezone.utc) if window_end is not None else
@@ -522,7 +554,7 @@ async def async_build_energy_report_payload(
     config = getattr(hass, "config", None)
     timezone_name = report_timezone if report_timezone is not None else getattr(config, "time_zone", None)
     # ZoneInfo can read tzdata; resolve it away from HA's event loop.
-    args = (cadence, start, end, timezone_name, window_start is not None and window_end is not None)
+    args = (cadence, start, end, timezone_name, compare_calendar and window_start is not None and window_end is not None)
     executor = getattr(hass, "async_add_executor_job", None)
     comparison = (await executor(_calendar_comparison_window, *args) if executor else
                   _calendar_comparison_window(*args))
@@ -843,7 +875,7 @@ def _render_log_plain(title: str, summary: dict[str, Any]) -> str:
     else:
         lines.append("- none")
     lines.append("")
-    lines.append("Top 10 recent errors:")
+    lines.append(f"Top {summary.get('max_entries', 10)} recent errors:")
     if summary["recent_errors"]:
         lines.extend(
             f"- {entry.get('level')} {entry.get('name')}: {entry.get('_message')} "
@@ -853,7 +885,7 @@ def _render_log_plain(title: str, summary: dict[str, Any]) -> str:
     else:
         lines.append("- none")
     lines.append("")
-    lines.append("Top 10 recent warnings:")
+    lines.append(f"Top {summary.get('max_entries', 10)} recent warnings:")
     if summary["recent_warnings"]:
         lines.extend(
             f"- {entry.get('name')}: {entry.get('_message')} "

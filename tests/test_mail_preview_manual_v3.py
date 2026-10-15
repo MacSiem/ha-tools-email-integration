@@ -9,6 +9,9 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
+from email import policy
+from email.parser import BytesParser
+from test_send_semantics import SendSemanticsTests
 
 try:
     from tests.test_schedule_timezone_v3 import load_websocket, store
@@ -81,9 +84,19 @@ class MailPreviewManualTests(unittest.IsolatedAsyncioTestCase):
 
     def enable_send(self, hass):
         async def config():
-            return {'default_recipient': 'fixture@example.invalid'}
-        def send(hass, config, recipient, subject, body, html):
-            self.sent.append(dict(subject=subject, body=body, html=html))
+            return {'default_recipient': 'fixture@example.invalid',
+                'server': 'smtp.example.invalid', 'username': 'sender@example.invalid',
+                'password': 'SYNTHETIC-ONLY-NO-NETWORK'}
+        shipping_send, smtp = SendSemanticsTests()._send_function({})
+        def send(*args):
+            shipping_send(*args)
+            raw = smtp.sendmail.call_args.args[2].encode('ascii')
+            message = BytesParser(policy=policy.default).parsebytes(raw)
+            self.assertEqual('multipart/alternative', message.get_content_type())
+            self.assertEqual([], message.defects)
+            self.sent.append(dict(subject=str(message['Subject']),
+                body=message.get_body(preferencelist=('plain',)).get_content(),
+                html=message.get_body(preferencelist=('html',)).get_content()))
         hass.data['ha_tools_email'].update(load_config=config, send_email=send)
 
     async def test_frozen_preview_equals_actual_dispatch_for_two_kinds_three_cadences_and_modes(self):
@@ -104,7 +117,7 @@ class MailPreviewManualTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(NOW.isoformat(), mail['generated_at'])
                         self.assertEqual(cadence, mail['cadence'])
                         self.assertIn('<!doctype html>', mail['html'])
-                        self.assertIn('Report period (', mail['html'])
+                        self.assertIn('Report period:', mail['html'])
                         if kind == 'log_digest':
                             self.assertFalse(mail['source']['complete'])
                             self.assertEqual('retained_aggregates', mail['source']['count_semantics'])
@@ -166,7 +179,7 @@ class MailPreviewManualTests(unittest.IsolatedAsyncioTestCase):
         records = [row(str(i), NOW-timedelta(seconds=i+1)) for i in range(15)]
         default = composer.build_log_digest_payload(records, cadence='daily', now=NOW)
         self.assertEqual(10, len(default['summary']['recent_errors']))
-        for limit in (True, False, 0, -1, 101, 1.5, '3'):
+        for limit in (True, False, 0, -1, 1001, 1.5, '3'):
             with self.subTest(limit=limit):
                 self.results.clear()
                 await self.preview(ws, hass, conn, 'log_digest', period_mode='rolling', max_entries=limit)

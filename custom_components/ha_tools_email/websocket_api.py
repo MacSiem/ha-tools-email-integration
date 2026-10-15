@@ -12,10 +12,11 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN, EVENT_SCHEDULES_CHANGED, VALID_CADENCES, VALID_KINDS
-from .composer import async_build_energy_report_payload, async_get_system_log_entries, build_log_digest_payload
+from .composer import (async_build_energy_report_payload, async_build_report_payload,
+                       async_get_system_log_entries, build_log_digest_payload)
 from .scheduler import (async_reload_schedules, async_send_now, calculate_next_fire,
                         calendar_report_window, effective_schedule_timezone, fire_period_key,
-                        normalize_schedule_calendar)
+                        normalize_schedule_calendar, async_resolve_manual_period)
 from .storage import EmailStorage, TariffRevisionConflict
 from .tariff import TariffValidationError
 
@@ -197,6 +198,9 @@ async def _ws_set_schedule(
         vol.Required("kind"): vol.In(sorted(VALID_KINDS)),
         vol.Required("cadence"): vol.In(sorted(VALID_CADENCES)),
         vol.Optional("recipients", default=[]): vol.Any([str], str),
+        vol.Optional("period_mode"): vol.In(["rolling", "calendar"]),
+        vol.Optional("timezone"): str,
+        vol.Optional("max_entries"): vol.All(int, vol.Range(min=1, max=1000)),
     }
 )
 @websocket_api.require_admin
@@ -216,6 +220,9 @@ async def _ws_send_now(
             kind=msg["kind"],
             cadence=msg["cadence"],
             recipients=recipients,
+            **({"period_mode": msg["period_mode"]} if "period_mode" in msg else {}),
+            **({"report_timezone": msg["timezone"]} if "timezone" in msg else {}),
+            **({"max_entries": msg["max_entries"]} if "max_entries" in msg else {}),
         )
     except Exception as err:  # noqa: BLE001
         connection.send_error(msg["id"], "send_failed", str(err))
@@ -228,6 +235,8 @@ async def _ws_send_now(
         vol.Required("type"): f"{DOMAIN}/preview_energy_report",
         vol.Required("cadence"): vol.In(sorted(VALID_CADENCES)),
         vol.Optional("calendar_period"): bool,
+        vol.Optional("format"): vol.In(["summary", "mail"]),
+        vol.Optional("period_mode"): vol.In(["rolling", "calendar"]),
         vol.Optional("timezone"): str,
     }
 )
@@ -239,6 +248,12 @@ async def _ws_preview_energy_report(
     msg: dict[str, Any],
 ) -> None:
     """Read Recorder without sending; completed calendar periods are explicit opt-in."""
+    if msg.get("format") == "mail":
+        await _async_preview_mail(hass, connection, msg, "energy_report")
+        return
+    if "period_mode" in msg:
+        connection.send_error(msg["id"], "invalid_payload", "period_mode requires format=mail")
+        return
     calendar_period = msg.get("calendar_period", False)
     if type(calendar_period) is not bool or "timezone" in msg and not calendar_period:
         connection.send_error(msg["id"], "invalid_payload", "Timezone requires calendar_period=true.")
@@ -271,6 +286,9 @@ async def _ws_preview_energy_report(
 
 @websocket_api.websocket_command({
     vol.Required("type"): f"{DOMAIN}/preview_log_digest",
+    vol.Optional("format"): vol.In(["summary", "mail"]),
+    vol.Optional("period_mode"): vol.In(["rolling", "calendar"]),
+    vol.Optional("max_entries"): vol.All(int, vol.Range(min=1, max=1000)),
     vol.Required("cadence"): vol.In(sorted(VALID_CADENCES)),
     vol.Optional("timezone"): str,
 })
@@ -278,6 +296,12 @@ async def _ws_preview_energy_report(
 @websocket_api.async_response
 async def _ws_preview_log_digest(hass, connection, msg) -> None:
     """Readonly retained log aggregate preview for a completed HA calendar period."""
+    if msg.get("format") == "mail":
+        await _async_preview_mail(hass, connection, msg, "log_digest")
+        return
+    if "period_mode" in msg or "max_entries" in msg:
+        connection.send_error(msg["id"], "invalid_payload", "period_mode/max_entries require format=mail")
+        return
     now = _utcnow()
     cadence = msg["cadence"]
     local_zone = getattr(getattr(hass, "config", None), "time_zone", None)
@@ -313,6 +337,41 @@ async def _ws_preview_log_digest(hass, connection, msg) -> None:
                           "complete": False, "retained_entries": len(entries),
                           "reason": "retained_last_observed_aggregates_not_full_event_history"})
     connection.send_result(msg["id"], result)
+
+
+async def _async_preview_mail(hass, connection, msg, kind) -> None:
+    """Shared server composer, no SMTP config, dispatch, Store writes or history."""
+    now = _utcnow()
+    # New mail contract defaults to rolling, matching explicit manual rolling send.
+    # Existing summary contracts above preserve their historical default behavior.
+    mode = msg.get("period_mode", "calendar" if msg.get("calendar_period") is True else "rolling")
+    try:
+        if "calendar_period" in msg and (type(msg["calendar_period"]) is not bool or
+                msg["calendar_period"] != (mode == "calendar")):
+            raise ValueError("calendar_period conflicts with period_mode")
+        limit = msg.get("max_entries", 10)
+        if type(limit) is not int or not 1 <= limit <= 1000:
+            raise ValueError("max_entries must be an integer between 1 and 1000")
+        options = await async_resolve_manual_period(hass, kind=kind, cadence=msg["cadence"],
+            now=now, period_mode=mode, report_timezone=msg.get("timezone"))
+    except (ValueError, TypeError, KeyError) as err:
+        connection.send_error(msg["id"], "invalid_payload", str(err))
+        return
+    start, end = options.pop("report_window")
+    payload = await async_build_report_payload(hass, _bucket(hass).get("storage"),
+        kind=kind, cadence=msg["cadence"], now=now,
+        window_start=start, window_end=end, **options,
+        **({"max_entries": limit} if kind == "log_digest" else {}))
+    summary = payload["summary"]
+    source = summary.get("source") or {
+        "name": "recorder", "kind": "grid_import", "status": summary.get("status", "no_data"),
+        "complete": summary.get("status") == "ready", "source_ids": summary.get("source_ids", [])}
+    connection.send_result(msg["id"], {
+        "subject": payload["subject"], "body": payload["body"], "html": payload["html"],
+        "cadence": msg["cadence"], "period": summary["period"], "source": source,
+        "generated_at": now.isoformat(), **({"effective_timezone": options["report_timezone"]}
+            if "report_timezone" in options else {}),
+    })
 
 
 def async_register_commands(hass: HomeAssistant) -> None:

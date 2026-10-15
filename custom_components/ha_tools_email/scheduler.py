@@ -172,6 +172,38 @@ def calendar_report_window(
             _resolve_wall(end_day, 0, 0, zone).astimezone(timezone.utc))
 
 
+async def async_resolve_manual_period(
+    hass: Any, *, kind: str, cadence: str, now: datetime,
+    period_mode: str, report_timezone: str | None = None,
+) -> dict[str, Any]:
+    """One explicit preview/manual-send contract; scheduler defaults stay unchanged."""
+    if period_mode not in {"rolling", "calendar"}:
+        raise ValueError("period_mode must be rolling or calendar")
+    if cadence not in {CADENCE_DAILY, CADENCE_WEEKLY, CADENCE_MONTHLY}:
+        raise ValueError("Unsupported cadence")
+    if kind not in {KIND_LOG_DIGEST, KIND_ENERGY_REPORT}:
+        raise ValueError("Unsupported report kind")
+    if report_timezone is not None and period_mode != "calendar":
+        raise ValueError("timezone requires period_mode=calendar")
+    now = _aware(now).astimezone(timezone.utc)
+    if period_mode == "rolling":
+        # Recorder supplies completed hourly changes. Log bounds use the exact
+        # request instant; neither monthly rolling window means a calendar month.
+        end = now if kind == KIND_LOG_DIGEST else now.replace(minute=0, second=0, microsecond=0)
+        days = {CADENCE_DAILY: 1, CADENCE_WEEKLY: 7, CADENCE_MONTHLY: 30}[cadence]
+        return {"report_window": (end - timedelta(days=days), end),
+                "period_semantics": "rolling_retained_last_observed" if kind == KIND_LOG_DIGEST else "rolling_completed_hours"}
+    context = {"cadence": cadence}
+    if report_timezone is not None:
+        context["timezone"] = report_timezone
+    await asyncio.to_thread(normalize_schedule_calendar, context)
+    local_zone = getattr(getattr(hass, "config", None), "time_zone", None)
+    zone = effective_schedule_timezone(context, now, local_zone)
+    return {"report_window": calendar_report_window(context, now, local_timezone=local_zone),
+            "report_timezone": getattr(zone, "key", str(zone)),
+            "period_semantics": "previous_completed_calendar_period"}
+
+
 def parse_schedule_time(value: str) -> tuple[int, int]:
     """Parse HH:MM schedule time."""
     parts = value.split(":")
@@ -325,16 +357,31 @@ async def async_send_now(
     kind: str,
     cadence: str,
     recipients: list[str] | None = None,
+    period_mode: str | None = None,
+    report_timezone: str | None = None,
+    max_entries: int | None = None,
 ) -> dict[str, Any]:
     """Compose and send a report immediately."""
     bucket = hass.data[DOMAIN]
+    now = datetime.now(timezone.utc)
+    options = {}
+    if period_mode is not None:
+        options = await async_resolve_manual_period(hass, kind=kind, cadence=cadence,
+            now=now, period_mode=period_mode, report_timezone=report_timezone)
+    elif report_timezone is not None:
+        raise ValueError("timezone requires period_mode=calendar")
+    if max_entries is not None:
+        if kind != KIND_LOG_DIGEST or type(max_entries) is not int or not 1 <= max_entries <= 1000:
+            raise ValueError("max_entries must be an integer between 1 and 1000 for log_digest")
+        options["max_entries"] = max_entries
     return await async_send_report(
         hass,
         bucket["storage"],
         kind=kind,
         cadence=cadence,
         recipients=recipients or [],
-        now=datetime.now(timezone.utc),
+        now=now,
+        **options,
     )
 
 
@@ -350,6 +397,8 @@ async def async_send_report(
     report_window: tuple[datetime, datetime] | None = None,
     expected_schedule: dict[str, Any] | None = None,
     report_timezone: str | None = None,
+    period_semantics: str | None = None,
+    max_entries: int | None = None,
 ) -> dict[str, Any]:
     """Compose and send one report through the existing SMTP send path."""
     from .composer import async_build_report_payload
@@ -368,6 +417,8 @@ async def async_send_report(
             hass, storage, kind=kind, cadence=cadence, now=now,
             **({"window_start": report_window[0], "window_end": report_window[1]} if report_window else {}),
             **({"report_timezone": report_timezone} if report_timezone is not None else {}),
+            **({"period_semantics": period_semantics} if period_semantics is not None else {}),
+            **({"max_entries": max_entries} if max_entries is not None else {}),
         )
         # Recorder/config awaits can allow an administrator's edit/delete.
         # Re-read immediately before the shared dispatcher crosses into SMTP.
@@ -383,7 +434,7 @@ async def async_send_report(
         period=fire_period_key({"cadence": cadence}, now),
         schedule_id=schedule_id, now=now,
     )
-    if kind == KIND_LOG_DIGEST:
+    if kind == KIND_LOG_DIGEST and period_semantics is None:
         # SMTP has already accepted this message. A metadata write failure must
         # not turn that handoff into send_failed and invite a duplicate retry.
         try:
