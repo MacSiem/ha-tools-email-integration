@@ -19,6 +19,7 @@ jobs:
           - core: '2024.7.0'
             python: '3.12'
             harness: '0.13.144'
+            extra: 'josepy==1.14.0'
           - core: '2026.10.1'
             python: '3.14'
             harness: '0.13.372'
@@ -31,8 +32,12 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Install Home Assistant test harness
+        env:
+          # Reconstruct Core's declared minimum-version environment. ACME2.x
+          # additionally needs pre-2.0 josepy (ComparableX509 was removed).
+          PIP_CONSTRAINT: ${{ matrix.core == '2024.7.0' && 'https://raw.githubusercontent.com/home-assistant/core/2024.7.0/homeassistant/package_constraints.txt' || '' }}
         run: |
-          pip install "pytest-homeassistant-custom-component==${{ matrix.harness }}"
+          pip install "pytest-homeassistant-custom-component==${{ matrix.harness }}" ${{ matrix.extra }}
           python - <<'PYVER'
           from homeassistant.const import __version__
           assert __version__ == '${{ matrix.core }}', __version__
