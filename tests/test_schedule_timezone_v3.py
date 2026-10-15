@@ -318,7 +318,8 @@ class ReadonlyAPITests(unittest.IsolatedAsyncioTestCase):
         ws = load_websocket(self)
         _, s = store()
         s._store.swallowed_failure = True
-        hass = types.SimpleNamespace(data={'ha_tools_email': {'storage': s}})
+        hass = types.SimpleNamespace(data={'ha_tools_email': {'storage': s}},
+                                     bus=types.SimpleNamespace(async_fire=Mock()))
         results, errors = [], []
         conn = types.SimpleNamespace(user=types.SimpleNamespace(is_admin=True),
                                     send_result=lambda *a: results.append(a),

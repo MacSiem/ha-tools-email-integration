@@ -180,6 +180,9 @@ async def _ws_set_schedule(
     except ValueError as err:
         connection.send_error(msg["id"], "invalid_payload", str(err))
         return
+    except Exception:
+        connection.send_error(msg["id"], "storage_write_failed", "Schedule state could not be saved.")
+        return
 
     await async_reload_schedules(hass)
     schedules = await storage.async_list_schedules()

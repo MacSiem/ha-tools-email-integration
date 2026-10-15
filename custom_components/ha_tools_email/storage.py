@@ -44,51 +44,51 @@ class TariffRevisionConflict(ValueError):
 
 
 class StorageWriteError(RuntimeError):
-    """The tariff save returned without a confirmed lower Store write."""
+    """A logical state save returned without a confirmed lower Store write."""
 
 
 class _ConfirmedStore(Store):
-    """Reuse Frigate's lower-write receipt, scoped to explicit tariff saves.
+    """Reuse Frigate's lower-write receipt for explicit durable state saves.
 
     HA Store may log and swallow lower write errors or skip a write at shutdown.
-    Ordinary async_save calls retain HA behavior for SMTP, schedules and history.
+    Ordinary async_save calls retain HA behavior for legacy SMTP configuration.
     EmailStorage serializes all calls through its existing lock.
     """
 
     def __init__(self, hass: HomeAssistant, *args: Any, **kwargs: Any) -> None:
-        self._tariff_hass = hass
-        self._confirming_tariff = False
+        self._state_hass = hass
+        self._confirming_write = False
         self._write_confirmed = False
         self._last_write_error: Exception | None = None
         super().__init__(hass, *args, **kwargs)
 
     async def async_save_confirmed(self, data: dict[str, Any]) -> None:
-        """Require a completed lower write before the caller publishes a tariff."""
+        """Require a completed lower write before publishing logical state."""
         stopping = CoreState.stopping if CoreState else "stopping"
-        if getattr(self._tariff_hass, "state", None) == stopping:
-            raise StorageWriteError("tariff state write skipped during shutdown")
+        if getattr(self._state_hass, "state", None) == stopping:
+            raise StorageWriteError("email state write skipped during shutdown")
         self._last_write_error = None
         self._write_confirmed = False
-        self._confirming_tariff = True
+        self._confirming_write = True
         try:
             await super().async_save(data)
             if error := self._last_write_error:
-                raise StorageWriteError("tariff state was not durably saved") from error
+                raise StorageWriteError("email state was not durably saved") from error
             if not self._write_confirmed:
-                raise StorageWriteError("tariff state write was not confirmed")
+                raise StorageWriteError("email state write was not confirmed")
         finally:
-            self._confirming_tariff = False
+            self._confirming_write = False
 
     async def _async_write_data(self, *args: Any, **kwargs: Any) -> None:
         try:
             # Older HA passes (path, data); current HA passes (data).
             await super()._async_write_data(*args, **kwargs)
         except Exception as error:
-            if self._confirming_tariff:
+            if self._confirming_write:
                 self._last_write_error = error
             raise  # Preserve HA's existing error handling/logging.
         else:
-            if self._confirming_tariff:
+            if self._confirming_write:
                 self._write_confirmed = True
 
 
@@ -218,7 +218,7 @@ class EmailStorage:
             section.update(schema=HISTORY_SCHEMA, attempts=entries)
             section["attempts"] = retained_attempts(section, clock)
             candidate["attempt_history"] = section
-            await self._store.async_save(candidate)
+            await self._store.async_save_confirmed(candidate)
             self._data = candidate
 
     async def async_get_state(self) -> dict[str, Any]:
@@ -322,7 +322,7 @@ class EmailStorage:
             else:
                 rows[index] = clean
             candidate["schedules"] = rows
-            await self._store.async_save(candidate)
+            await self._store.async_save_confirmed(candidate)
             self._data = candidate
             return deepcopy(clean)
 
@@ -339,7 +339,7 @@ class EmailStorage:
             removed = len(data["schedules"]) != before
             if removed:
                 data["scheduler_state"].pop(schedule_id, None)
-                await self._store.async_save(data)
+                await self._store.async_save_confirmed(data)
                 self._data = data
             return removed
 
@@ -358,7 +358,7 @@ class EmailStorage:
             data.setdefault("digest_state", {}).setdefault(kind, {})[cadence] = deepcopy(
                 state
             )
-            await self._store.async_save(data)
+            await self._store.async_save_confirmed(data)
             self._data = data
 
     async def async_get_last_fired(self, schedule_id: str) -> str | None:
@@ -379,7 +379,7 @@ class EmailStorage:
                 "last_fired_period": period_key,
                 "last_fired_at": fired_at,
             }
-            await self._store.async_save(data)
+            await self._store.async_save_confirmed(data)
             self._data = data
 
     async def _ensure_loaded_locked(self) -> dict[str, Any]:
