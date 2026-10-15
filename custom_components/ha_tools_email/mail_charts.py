@@ -257,7 +257,7 @@ def _side(width: float, fill: float, *, negative: bool) -> str:
             f'<tr>{inside}</tr></table></td>')
 
 
-def render_charts_html(model: dict[str, Any]) -> str:
+def render_charts_html(model: dict[str, Any], *, embedded: bool = False) -> str:
     sections = []
     for chart in model['charts']:
         rows = []
@@ -285,7 +285,9 @@ def render_charts_html(model: dict[str, Any]) -> str:
     if link:
         sections.append(f'<p style="font-size:14px;word-break:break-word"><a href="{escape(link, quote=True)}" '
                         'style="color:#1d4ed8">Open Home Assistant Energy reference</a></p>')
-    return HTML_START + '<div style="max-width:692px;margin:0 auto;padding:14px;font-family:Arial,sans-serif;background:#ffffff;color:#0f172a">' + ''.join(sections) + '</div>' + HTML_END
+    style = ("font-family:Arial,sans-serif;color:#0f172a" if embedded else
+             "max-width:692px;margin:0 auto;padding:14px;font-family:Arial,sans-serif;background:#ffffff;color:#0f172a")
+    return HTML_START + f'<div style="{style}">' + ''.join(sections) + '</div>' + HTML_END
 
 
 def render_charts_plain(model: dict[str, Any]) -> str:
@@ -307,4 +309,16 @@ def attach_mail_charts(payload: dict[str, Any], model: dict[str, Any]) -> None:
     """HTML and plaintext consume the exact same returned summary visualization."""
     payload['summary']['visualization'] = model
     payload['body'] += TEXT_START + render_charts_plain(model)
-    payload['html'] = payload['html'].replace('</body>', render_charts_html(model) + '</body>')
+    append_mail_html(payload, render_charts_html(model, embedded=REPORT_INSERT in payload['html']))
+
+
+REPORT_INSERT = "<!-- HA_TOOLS_REPORT_SECTIONS -->"
+
+def append_mail_html(payload: dict[str, Any], fragment: str) -> None:
+    """Keep appended sections inside the report column and before its footer."""
+    html = payload['html']
+    if REPORT_INSERT in html:
+        payload['html'] = html.replace(REPORT_INSERT, fragment + REPORT_INSERT, 1)
+    else:
+        # Retain support for callers supplying their own legacy HTML document.
+        payload['html'] = html.replace('</body>', fragment + '</body>')
