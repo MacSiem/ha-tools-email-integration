@@ -110,7 +110,10 @@ class EnergyCalendarPropagationTests(unittest.IsolatedAsyncioTestCase):
         import sys
         composer = sys.modules[ws.__package__ + '.composer']
         seen=[]
-        async def build(*args, **kw): seen.append(kw); return {'summary': {}}
+        async def build(*args, **kw):
+            seen.append(kw)
+            return {'subject': 'Energy report', 'body': 'Measured energy',
+                    'html': '<p>Measured energy</p>', 'summary': {}}
         with patch.object(composer, 'async_build_energy_report_payload', build):
             await composer.async_build_report_payload(None, None, kind='energy_report', cadence='weekly',
                 now=NOW, report_timezone='America/New_York')
