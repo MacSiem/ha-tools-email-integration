@@ -1,6 +1,14 @@
 # Changelog
 
-## 2.2.0 (Unreleased)
+## 2.3.0 (Unreleased)
+
+- Preview the actual subject, plain text and self-contained HTML without sending or changing schedules, history or digest state. The same composer builds the requested manual report.
+- Choose daily, weekly or monthly rolling windows or previous completed calendar periods for manual Energy and Log reports. Explicit manual Log sends are independent of scheduled digest deduplication.
+- Compare completed calendar Energy reports with the adjacent previous calendar period, preserving actual durations, DST, missing data and measured zero. Unsupported comparisons remain unavailable.
+- Keep the source notes, charts and footer inside one readable email column; include UTF-8 and viewport metadata.
+- Preserve full Unicode messages and emoji while replacing malformed unpaired surrogate characters at the mail boundary; a malformed log entry can no longer prevent MIME encoding.
+
+## 2.2.0 (2026-10-15)
 
 - Add shared measured-energy tariff profiles with revision checks, household reads and administrator writes. Energy, variable charges and monthly fixed fees stay separate; no tariff is assumed.
 - Retain up to 128 dispatch-attempt metadata records for 90 days across manual reports, schedules, services and options tests. SMTP acceptance remains separate from delivery and history availability.

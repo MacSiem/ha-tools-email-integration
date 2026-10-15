@@ -27,10 +27,10 @@ settings once, then send or schedule reports.**
    `<config>/ha-tools/smtp-config.json` settings are migrated automatically
    and the plaintext legacy file is removed only after Store saves
    successfully.
-3. **Cards send through the existing services.** `ha-log-email` and
-   `ha-energy-email` (in their respective HA Tools frontend packages) call
-   `ha_tools_email.get_config`, `ha_tools_email.test` and
-   `ha_tools_email.send` directly — no changes needed for existing cards.
+3. **Cards use the same SMTP integration.** Compatible Log and Energy cards
+   can request server-composed reports through `send_now` and read the actual
+   mail before sending. Existing `get_config`, `test` and `send` service calls
+   remain supported for older cards and custom automations.
 4. **Server-side scheduling is optional.** Since v2.0.0 you can also store
    schedules (`log_digest` or `energy_report`, daily/weekly/monthly) through
    the `ha_tools_email/set_schedule` websocket command. The integration then
@@ -134,6 +134,62 @@ Administrators can read `ha_tools_email/preview_energy_report` with `cadence` se
 `daily`, `weekly` or `monthly`. It returns the same summary model used by `send_now`
 and schedules, without sending email or changing schedules. Energy Email cards need
 a version supporting this endpoint to show the server preview.
+
+## Actual mail preview and manual periods (2.3+)
+
+Choose **daily**, **weekly** or **monthly**, then choose the period:
+
+| Period mode | Log digest | Energy report |
+|---|---|---|
+| `rolling` | Retained groups last observed in the last 24 hours, 7 days or 30 days | Last 24, 168 or 720 completed Recorder hours |
+| `calendar` | Previous completed local day, ISO week or calendar month | Previous completed local day, ISO week or calendar month |
+
+Calendar periods use the requested IANA timezone, otherwise Home Assistant's
+configured timezone. Their lengths can differ across DST transitions and months.
+The exact start is inclusive and the end exclusive. Log totals describe retained
+aggregates, not exact event counts or complete historical coverage; a retained
+group may include earlier occurrences. Missing timestamps are excluded from an
+explicit manual window. Missing Energy measurements remain unavailable.
+
+Use the administrator-only preview command for either kind:
+
+```json
+{
+  "type": "ha_tools_email/preview_log_digest",
+  "cadence": "monthly",
+  "format": "mail",
+  "period_mode": "calendar",
+  "timezone": "Europe/Warsaw",
+  "max_entries": 50
+}
+```
+
+For Energy, use `ha_tools_email/preview_energy_report` and omit `max_entries`.
+The response includes `subject`, `body`, `html`, `cadence`, `period`, `source`,
+`generated_at` and the effective calendar timezone. It does not contact SMTP or
+write settings, schedules, history or digest state. The existing summary-format
+preview and Energy `calendar_period: true` alias remain available.
+
+To send the same selected kind and period, call `ha_tools_email/send_now` with
+`kind` (`log_digest` or `energy_report`), the same `cadence`, `period_mode` and
+optional `timezone`, plus optional `recipients`. For Log, `max_entries` is an
+integer from 1 to 1000, default 10, limiting each recent severity list rather than
+its aggregate counts. Both preview and send compose from current server data;
+new data between the two requests can change the report. Explicit manual sends
+do not update the scheduled Log digest's seen keys or last-digest time.
+
+Calendar Energy reports include comparison against the adjacent previous
+calendar period when both periods have complete supported measurements. Actual
+hours and dates remain visible; totals are not normalized to equal duration.
+A zero comparison baseline has no percentage change. Rolling reports do not
+claim a calendar comparison. Grid-import statistics do not establish individual
+appliance consumption or a solar-flow diagram.
+
+`accepted_by_smtp` means that the configured SMTP server accepted the attempt;
+it does not confirm delivery to the recipient's inbox. Unconfirmed results do
+not trigger an automatic resend. HTML and plain text retain full messages,
+Polish characters and emoji; malformed unpaired surrogate characters become the
+Unicode replacement character without changing stored log identity.
 
 ## Scheduled reports
 
