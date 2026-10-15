@@ -36,6 +36,12 @@ class SendSemanticsTests(unittest.TestCase):
             "open_smtp_connection": lambda *args: fake_smtp,
             "client_context": lambda: object(),
         }
+        # Keep the actual MIME implementation and its pure Unicode boundary.
+        composer_path = SOURCE.with_name("composer.py")
+        composer = ast.parse(composer_path.read_text(encoding="utf-8"))
+        text_node = next(item for item in composer.body
+                         if isinstance(item, ast.FunctionDef) and item.name == "_mail_text")
+        exec(compile(ast.Module(body=[text_node], type_ignores=[]), str(composer_path), "exec"), namespace)
         exec(compile(ast.Module(body=[node], type_ignores=[]), str(SOURCE), "exec"), namespace)
         return namespace["_send_email"], fake_smtp
 

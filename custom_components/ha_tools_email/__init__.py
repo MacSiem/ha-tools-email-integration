@@ -38,6 +38,7 @@ from .const import (
     VALID_ENCRYPTION,
     VERSION,
 )
+from .composer import _mail_text
 from .scheduler import async_start_scheduler, async_stop_scheduler
 from .smtp import open_smtp_connection
 from .history import PartialSMTPAcceptance, async_dispatch_attempt
@@ -104,14 +105,14 @@ def _send_email(hass: HomeAssistant, cfg: dict, to: str, subject: str, body: str
     msg = MIMEMultipart("alternative")
     msg["From"] = sender
     msg["To"] = ", ".join(recipients)
-    msg["Subject"] = subject
+    msg["Subject"] = _mail_text(subject)
 
     # Always attach plain text
-    msg.attach(MIMEText(body, "plain", "utf-8"))
+    msg.attach(MIMEText(_mail_text(body), "plain", "utf-8"))
 
     # Attach HTML if provided
     if html:
-        msg.attach(MIMEText(html, "html", "utf-8"))
+        msg.attach(MIMEText(_mail_text(html), "html", "utf-8"))
 
     # Connect and send
     _LOGGER.debug("Connecting to configured SMTP server (encryption=%s)", encryption)

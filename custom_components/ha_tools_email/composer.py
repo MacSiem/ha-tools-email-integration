@@ -50,6 +50,11 @@ except ImportError:  # Keep existing direct-file pure-test loading supported.
     safe_energy_url = _charts.safe_energy_url
 
 
+def _mail_text(value: str) -> str:
+    """Keep Unicode scalars/pairs, replacing unpaired surrogates for UTF-8 mail."""
+    return value.encode("utf-16-le", "surrogatepass").decode("utf-16-le", "replace")
+
+
 def build_log_digest_payload(
     entries: Iterable[dict[str, Any]],
     *,
@@ -68,9 +73,9 @@ def build_log_digest_payload(
     body = _render_log_plain(title, summary) + "\n\nStatic chart data\n" + render_charts_plain(summary["visualization"])
     html = render_log_digest_html(title, summary, now)
     return {
-        "subject": subject,
-        "body": body,
-        "html": html,
+        "subject": _mail_text(subject),
+        "body": _mail_text(body),
+        "html": _mail_text(html),
         "summary": summary,
         "dedup_keys": summary["dedup_keys"],
     }
