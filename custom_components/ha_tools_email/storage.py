@@ -51,7 +51,7 @@ class _ConfirmedStore(Store):
     """Reuse Frigate's lower-write receipt for explicit durable state saves.
 
     HA Store may log and swallow lower write errors or skip a write at shutdown.
-    Ordinary async_save calls retain HA behavior for legacy SMTP configuration.
+    The base async_save keeps HA behavior; callers explicitly require confirmation.
     EmailStorage serializes all calls through its existing lock.
     """
 
@@ -237,11 +237,13 @@ class EmailStorage:
         clean = self._clean_smtp_config(config)
         async with self._lock:
             data = await self._ensure_loaded_locked()
-            data["smtp_config"] = clean
+            candidate = deepcopy(data)
+            candidate["smtp_config"] = clean
             if password_via_options is not None:
-                security = data.setdefault("security", {})
+                security = candidate.setdefault("security", {})
                 security["password_via_options"] = bool(password_via_options)
-            await self._store.async_save(data)
+            await self._store.async_save_confirmed(candidate)
+            self._data = candidate
 
     async def async_password_via_options(self) -> bool:
         """Return True when the stored password was entered through the options flow."""
@@ -266,8 +268,10 @@ class EmailStorage:
             return
 
         clean = self._clean_smtp_config(legacy_config)
-        self._data["smtp_config"] = clean
-        await self._store.async_save(self._data)
+        candidate = deepcopy(self._data)
+        candidate["smtp_config"] = clean
+        await self._store.async_save_confirmed(candidate)
+        self._data = candidate
         await self.hass.async_add_executor_job(_remove_legacy_config, legacy_path)
         _LOGGER.info("Migrated SMTP configuration to Home Assistant Store")
 

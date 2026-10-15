@@ -37,6 +37,9 @@ def _load_storage_module():
             return deepcopy(self.data)
 
         async def async_save(self, data):
+            await self._async_write_data(data)
+
+        async def _async_write_data(self, data):
             self.data = deepcopy(data)
             self.saved.append(deepcopy(data))
 

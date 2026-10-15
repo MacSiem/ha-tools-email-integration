@@ -25,7 +25,7 @@
           "password_secret": "secrets.yaml key (optional)",
           "sender": "Sender address",
           "default_recipient": "Default recipient(s)",
-          "send_test": "Send a test email after saving"
+          "send_test": "Send a test email before saving"
         },
         "data_description": {
           "default_recipient": "Comma-separated. Used when a report or action has no recipient.",
@@ -40,7 +40,9 @@
       "invalid_email": "Enter a valid email address.",
       "unknown_secret": "secrets.yaml has no key with this name.",
       "password_required": "Enter a password or a secrets.yaml key.",
-      "unknown": "Unexpected error. Check the Home Assistant log."
+      "unknown": "Unexpected error. Check the Home Assistant log.",
+      "save_failed": "Could not confirm saved settings. Check storage and save again.",
+      "save_failed_after_test": "The test email was accepted by SMTP, but settings could not be saved. Check storage; the test is not repeated automatically."
     },
     "abort": {
       "not_loaded": "HA Tools Email is not loaded. Reload the integration and try again."

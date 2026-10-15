@@ -384,14 +384,21 @@ async def async_send_report(
         schedule_id=schedule_id, now=now,
     )
     if kind == KIND_LOG_DIGEST:
-        await storage.async_set_digest_state(
-            kind,
-            cadence,
-            {
-                "last_digest": now.isoformat(),
-                "seen_keys": payload.get("dedup_keys", [])[-500:],
-            },
-        )
+        # SMTP has already accepted this message. A metadata write failure must
+        # not turn that handoff into send_failed and invite a duplicate retry.
+        try:
+            await storage.async_set_digest_state(
+                kind,
+                cadence,
+                {
+                    "last_digest": now.isoformat(),
+                    "seen_keys": payload.get("dedup_keys", [])[-500:],
+                },
+            )
+        except Exception:
+            dispatch["digest_state_status"] = "unavailable"
+        else:
+            dispatch["digest_state_status"] = "recorded"
     return {
         **dispatch,
         "kind": kind,

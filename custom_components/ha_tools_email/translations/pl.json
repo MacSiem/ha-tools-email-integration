@@ -25,7 +25,7 @@
           "password_secret": "Klucz z secrets.yaml (opcjonalnie)",
           "sender": "Adres nadawcy",
           "default_recipient": "Domyślni odbiorcy",
-          "send_test": "Wyślij testowy e-mail po zapisaniu"
+          "send_test": "Wyślij testowy email przed zapisem"
         },
         "data_description": {
           "default_recipient": "Oddzieleni przecinkami. Używani, gdy raport lub akcja nie ma odbiorcy.",
@@ -40,7 +40,9 @@
       "invalid_email": "Podaj poprawny adres e-mail.",
       "unknown_secret": "W secrets.yaml nie ma klucza o tej nazwie.",
       "password_required": "Podaj hasło albo klucz z secrets.yaml.",
-      "unknown": "Nieoczekiwany błąd. Sprawdź log Home Assistanta."
+      "unknown": "Nieoczekiwany błąd. Sprawdź log Home Assistanta.",
+      "save_failed": "Nie udało się potwierdzić zapisu ustawień. Sprawdź zapis danych i zapisz ponownie.",
+      "save_failed_after_test": "Serwer SMTP przyjął testowy email, ale ustawień nie udało się zapisać. Sprawdź zapis danych; test nie jest ponawiany automatycznie."
     },
     "abort": {
       "not_loaded": "HA Tools Email nie jest załadowany. Przeładuj integrację i spróbuj ponownie."

@@ -135,12 +135,17 @@ class HAToolsEmailOptionsFlow(config_entries.OptionsFlow):
 
             if not errors:
                 password_changed = bool(secret_key or new_password)
-                await storage.async_save_smtp_config(
-                    cfg, password_via_options=True if password_changed else None
-                )
-                await async_update_password_issue(self.hass, storage)
-                # Nothing secret is kept in entry.options.
-                return self.async_create_entry(data={})
+                try:
+                    await storage.async_save_smtp_config(
+                        cfg, password_via_options=True if password_changed else None
+                    )
+                except Exception:
+                    errors["base"] = ("save_failed_after_test" if user_input.get(CONF_SEND_TEST)
+                                      else "save_failed")
+                else:
+                    await async_update_password_issue(self.hass, storage)
+                    # Nothing secret is kept in entry.options.
+                    return self.async_create_entry(data={})
 
             current = {**current, **{k: v for k, v in cfg.items() if k != "password"}}
 
