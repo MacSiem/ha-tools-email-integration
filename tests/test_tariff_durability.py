@@ -146,6 +146,50 @@ class ReportStateDurabilityTests(unittest.IsolatedAsyncioTestCase):
 
     storage = TariffDurabilityTests.storage
 
+    async def test_smtp_save_never_publishes_unconfirmed_settings_or_security_flag(self):
+        for boundary in ('swallowed_failure', 'skipped', 'stopping'):
+            with self.subTest(boundary=boundary):
+                mod, s = self.storage()
+                s._store.loaded = {'smtp_config': {'server': 'old', 'password': '!secret synthetic'},
+                                   'security': {'password_via_options': False}, 'future': {'keep': True}}
+                await s.async_save_tariff(None, expected_revision=0)
+                before = copy.deepcopy(s._data)
+                if boundary == 'stopping':
+                    s.hass.state = 'stopping'
+                else:
+                    setattr(s._store, boundary, True)
+                with self.assertRaises(mod.StorageWriteError):
+                    await s.async_save_smtp_config({'server': 'new', 'password': '!secret synthetic'},
+                                                  password_via_options=True)
+                self.assertEqual(before, s._data)
+                self.assertEqual(before, s._store.saved[-1])
+
+    async def test_failed_legacy_migration_keeps_only_durable_copy_and_allows_explicit_restart(self):
+        from unittest.mock import patch
+        for boundary in ('swallowed_failure', 'skipped', 'stopping'):
+            with self.subTest(boundary=boundary):
+                mod, s = self.storage()
+                s.hass.config.path = lambda *parts: '/synthetic/' + '/'.join(parts)
+                async def executor(fn, *args):
+                    return fn(*args)
+                s.hass.async_add_executor_job = executor
+                if boundary == 'stopping':
+                    s.hass.state = 'stopping'
+                else:
+                    setattr(s._store, boundary, True)
+                with patch.object(mod, '_read_legacy_config', return_value={'server': 'synthetic', 'password': '!secret synthetic'}), \
+                     patch.object(mod, '_remove_legacy_config') as remove:
+                    with self.assertRaises(mod.StorageWriteError):
+                        await s.async_load()
+                    remove.assert_not_called()
+                    self.assertIsNone(s._data['smtp_config'])
+                    self.assertEqual([], s._store.saved)
+                    s.hass.state = 'running'
+                    restarted = mod.EmailStorage(s.hass)
+                    await restarted.async_load()
+                    self.assertEqual('synthetic', restarted._store.saved[-1]['smtp_config']['server'])
+                    remove.assert_called_once()
+
     async def test_history_schedule_and_period_mutations_require_persistence(self):
         from datetime import datetime, timezone
         now = datetime(2026, 10, 15, 12, tzinfo=timezone.utc)

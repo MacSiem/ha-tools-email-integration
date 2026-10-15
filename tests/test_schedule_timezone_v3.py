@@ -391,6 +391,29 @@ class ReadonlyAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], s._store.saved)
 
 class DispatchCalendarTests(unittest.IsolatedAsyncioTestCase):
+    async def test_digest_save_failure_after_smtp_acceptance_does_not_become_send_failure(self):
+        from unittest.mock import AsyncMock
+        ws = load_websocket(self)
+        name = ws.__package__
+        scheduler = sys.modules[name + '.scheduler']
+        composer = sys.modules[name + '.composer']
+        mod, s = store()
+        calls = []
+        async def config():
+            return {'default_recipient': 'synthetic@example.invalid'}
+        async def executor(fn, *args):
+            return fn(*args)
+        hass = types.SimpleNamespace(data={'ha_tools_email': {'storage': s, 'load_config': config,
+                   'send_email': lambda *args: calls.append(1)}}, async_add_executor_job=executor)
+        payload = {'subject': 'synthetic', 'body': 'synthetic', 'html': None, 'dedup_keys': []}
+        with patch.object(composer, 'async_build_report_payload', new=AsyncMock(return_value=payload)), \
+             patch.object(s, 'async_set_digest_state', new=AsyncMock(side_effect=mod.StorageWriteError('synthetic private'))):
+            result = await scheduler.async_send_report(hass, s, kind='log_digest', cadence='daily', recipients=[], now=NOW)
+        self.assertEqual('accepted_by_smtp', result['status'])
+        self.assertEqual('unavailable', result['digest_state_status'])
+        self.assertEqual([1], calls)
+        self.assertNotIn('synthetic private', str(result))
+
     async def test_actual_single_dispatch_calendar_bounds_history_and_late_delete(self):
         ws = load_websocket(self)
         package_name = ws.__package__
