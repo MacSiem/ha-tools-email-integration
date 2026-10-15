@@ -141,8 +141,10 @@ class TariffDurabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(2, s._store.save_calls)
 
 
-class ReportStateDurabilityTests(TariffDurabilityTests):
+class ReportStateDurabilityTests(unittest.IsolatedAsyncioTestCase):
     """Logical report state must not outlive an unconfirmed lower write."""
+
+    storage = TariffDurabilityTests.storage
 
     async def test_history_schedule_and_period_mutations_require_persistence(self):
         from datetime import datetime, timezone
