@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.3.0 (Unreleased)
+## 2.3.0 (2026-10-15)
 
 - Preview the actual subject, plain text and self-contained HTML without sending or changing schedules, history or digest state. The same composer builds the requested manual report.
 - Choose daily, weekly or monthly rolling windows or previous completed calendar periods for manual Energy and Log reports. Explicit manual Log sends are independent of scheduled digest deduplication.
