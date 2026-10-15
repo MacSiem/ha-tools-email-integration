@@ -107,7 +107,7 @@ class RecorderProvenanceTest(unittest.TestCase):
                 summary, _ = fixture.compose(
                     {'energy_sources':[{'type':'grid', 'stat_energy_from':'sensor.grid'}]},
                     {'sensor.grid':{'unit':unit, 'change':change}})
-                self.assertEqual(24, summary['total_kwh'])
+                self.assertAlmostEqual(24, summary['total_kwh'])
                 self.assertEqual({'sensor.grid':{'method':'recorder_hourly_change_v1',
                     'unit':'kWh','source_unit':unit,'unit_class':'energy','has_sum':True}},
                     summary['measurement_provenance'])

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from html import escape
 from math import isfinite
 from typing import Any, Iterable
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 try:
     from .const import (
@@ -227,6 +228,7 @@ def build_energy_report_payload(
     price_per_kwh: float | None = None,
     interactive_url: str | None = None,
     _include_charts: bool = True,
+    source_kind: str = "consumers",
 ) -> dict[str, Any]:
     """Build an energy report email payload from device usage rows."""
     now = _aware(now or datetime.now(timezone.utc))
@@ -235,7 +237,7 @@ def build_energy_report_payload(
     rate = _energy_rate(price_per_kwh)
     total_cost = total_kwh * rate if total_kwh is not None and rate is not None else None
     summary = {"total_kwh": total_kwh, "total_cost": total_cost, "devices": rows}
-    summary["visualization"] = build_energy_chart_model({**summary, "currency": currency}, interactive_url=interactive_url)
+    summary["visualization"] = build_energy_chart_model({**summary, "currency": currency}, interactive_url=interactive_url, source_kind=source_kind)
     title = f"{_cadence_label(cadence)} Energy Report"
     subject = f"{title} - {now.date().isoformat()}"
     body_lines = [
@@ -243,7 +245,7 @@ def build_energy_report_payload(
         (f"Total: {total_kwh:.2f} kWh / {_energy_cost_text(total_cost, currency)}"
          if total_kwh is not None else "No energy statistics found for this period."),
         "",
-        "Top consumers:",
+        "Grid import sources:" if source_kind == "grid" else "Top consumers:",
     ]
     body_lines.extend(
         f"{row['name']}: {row['kwh']:.2f} kWh / {_energy_cost_text(row['cost'], currency)}"
@@ -251,7 +253,7 @@ def build_energy_report_payload(
     )
     html = render_energy_report_html(
         title, rows, total_kwh, total_cost, currency, now,
-        visualization=summary["visualization"], include_charts=_include_charts,
+        visualization=summary["visualization"], include_charts=_include_charts, source_kind=source_kind,
     )
     return {
         "subject": subject,
@@ -272,12 +274,13 @@ def render_energy_report_html(
     visualization: dict[str, Any] | None = None,
     interactive_url: str | None = None,
     include_charts: bool = True,
+    source_kind: str = "consumers",
 ) -> str:
     """Render compact HTML for an energy report."""
     now = _aware(now or datetime.now(timezone.utc))
     if visualization is None:
         visualization = build_energy_chart_model(
-            {"devices": devices, "currency": currency}, interactive_url=interactive_url
+            {"devices": devices, "currency": currency}, interactive_url=interactive_url, source_kind=source_kind
         )
     rows = "".join(
         "<tr>"
@@ -304,7 +307,7 @@ def render_energy_report_html(
       <p style="font-size:15px;margin:0 0 14px">{escape(total_text)}</p>
       <table style="width:100%;table-layout:fixed;border-collapse:collapse;border:1px solid #e2e8f0">
         <thead><tr style="background:#f1f5f9">
-          <th style="padding:9px 4px;text-align:left">Consumer</th>
+          <th style="padding:9px 4px;text-align:left">{"Grid import source" if source_kind == "grid" else "Consumer"}</th>
           <th style="padding:9px 4px;text-align:right">kWh</th>
           <th style="padding:9px 4px;text-align:right">Cost</th>
           <th style="padding:9px 4px;text-align:right">Share</th>
@@ -444,7 +447,7 @@ async def async_build_energy_report_payload(
     payload = build_energy_report_payload(
         snapshot["devices"], cadence=cadence, now=end,
         currency=getattr(getattr(hass, "config", None), "currency", "") or "",
-        price_per_kwh=None, _include_charts=False,
+        price_per_kwh=None, _include_charts=False, source_kind="grid",
     )
     chart_tariff_rows = []
     payload["summary"].update({key: value for key, value in snapshot.items() if key not in {"devices", "hourly_buckets"}})
@@ -514,6 +517,26 @@ async def async_build_energy_report_payload(
     payload["body"] += "\n\n" + context
     payload["html"] = payload["html"].replace("</body>", f"<p>{escape(context)}</p></body>")
     config = getattr(hass, "config", None)
+    timezone_name = report_timezone if report_timezone is not None else getattr(config, "time_zone", None)
+    # ZoneInfo can read tzdata; resolve it away from HA's event loop.
+    args = (cadence, start, end, timezone_name, window_start is not None and window_end is not None)
+    executor = getattr(hass, "async_add_executor_job", None)
+    comparison = (await executor(_calendar_comparison_window, *args) if executor else
+                  _calendar_comparison_window(*args))
+    if comparison["status"] == "pending":
+        previous = await async_get_energy_usage(
+            hass, sensors, datetime.fromisoformat(comparison["previous_start"]), start, cadence,
+        )
+        comparison = _compare_energy_snapshots(snapshot, previous, comparison)
+    payload["summary"]["comparison"] = comparison
+    comparison_lines = _energy_comparison_lines(comparison)
+    payload["body"] += "\n\n" + "\n".join(comparison_lines)
+    comparison_html = ('<div style="max-width:676px;margin:16px auto;padding:18px 22px;'
+                       'background:#eff6ff;border:1px solid #bfdbfe">'
+                       '<h2 style="font-size:16px;margin:0 0 10px">Previous period comparison</h2>'
+                       + "".join(f'<p style="margin:6px 0">{escape(line)}</p>' for line in comparison_lines)
+                       + '</div>')
+    payload["html"] = payload["html"].replace("</body>", comparison_html + "</body>")
     interactive_url = (safe_energy_url(getattr(config, "external_url", None))
                        or safe_energy_url(getattr(config, "internal_url", None)))
     attach_mail_charts(payload, build_energy_chart_model(
@@ -522,6 +545,133 @@ async def async_build_energy_report_payload(
         interactive_url=interactive_url, source_kind="grid",
     ))
     return payload
+
+
+def _calendar_comparison_window(
+    cadence: str, start: datetime, end: datetime, timezone_name: str | None, explicit: bool,
+) -> dict[str, Any]:
+    """Recognize exact completed calendar windows; never reinterpret manual rolling usage.
+
+    Midnight resolution mirrors scheduler._resolve_wall: first fold and UTC roundtrip
+    for gaps. Kept pure here to avoid importing the scheduler's send/composer chain.
+    """
+    comparison = {"status": "unknown", "reason": "rolling_or_custom_window",
+                  "previous_kwh": None, "delta_kwh": None, "percent": None}
+    if not explicit:
+        return comparison
+    try:
+        zone = ZoneInfo(timezone_name) if isinstance(timezone_name, str) else None
+    except (ValueError, ZoneInfoNotFoundError):
+        zone = None
+    if zone is None:
+        return {**comparison, "reason": "report_timezone_unavailable"}
+
+    def midnight(day):
+        return datetime(day.year, day.month, day.day, tzinfo=zone, fold=0).astimezone(timezone.utc)
+
+    local_end = end.astimezone(zone).date()
+    if cadence == CADENCE_DAILY:
+        day = local_end - timedelta(days=1)
+        previous_day = day - timedelta(days=1)
+    elif cadence == CADENCE_WEEKLY and local_end.weekday() == 0:
+        day = local_end - timedelta(days=7)
+        previous_day = day - timedelta(days=7)
+    elif cadence == CADENCE_MONTHLY and local_end.day == 1:
+        day = (local_end - timedelta(days=1)).replace(day=1)
+        previous_day = (day - timedelta(days=1)).replace(day=1)
+    else:
+        return comparison
+    if end != midnight(local_end) or start != midnight(day):
+        return comparison
+    previous_start = midnight(previous_day)
+    current_hours = (end - start).total_seconds() / 3600
+    previous_hours = (start - previous_start).total_seconds() / 3600
+    comparison.update(timezone=timezone_name, current_start=start.isoformat(), current_end=end.isoformat(),
+                      previous_start=previous_start.isoformat(), previous_end=start.isoformat(),
+                      current_local_start=start.astimezone(zone).isoformat(),
+                      current_local_end=end.astimezone(zone).isoformat(),
+                      previous_local_start=previous_start.astimezone(zone).isoformat(),
+                      previous_local_end=start.astimezone(zone).isoformat(),
+                      current_hours=current_hours, previous_hours=previous_hours)
+    # Recorder hourly changes cannot truthfully resolve half/quarter-hour boundaries.
+    if any(bound.timestamp() % 3600 for bound in (previous_start, start, end)):
+        return {**comparison, "reason": "calendar_boundary_not_recorder_hour"}
+    return {**comparison, "status": "pending", "reason": None}
+
+
+def _compare_energy_snapshots(current, previous, comparison):
+    """Only compare complete, same-source snapshots with explicit compatible provenance."""
+    result = {**comparison, "status": "unknown", "reason": "incomplete_statistics",
+              "delta_kwh": None, "percent": None}
+
+    def measured(snapshot):
+        ids = snapshot.get("source_ids") or []
+        devices = snapshot.get("devices") or []
+        if (snapshot.get("status") != "ready" or not ids or len(set(ids)) != len(ids)
+                or len(devices) != len(ids) or {r.get("entity_id") for r in devices} != set(ids)):
+            return None
+        values = [row.get("kwh") for row in devices]
+        if any(type(v) not in (int, float) or not isfinite(v) or v < 0 for v in values):
+            return None
+        total = sum(values)
+        return total if isfinite(total) else None
+
+    current_kwh, previous_kwh = measured(current), measured(previous)
+    # An independently measured zero is useful even if a comparison is unavailable.
+    result["previous_kwh"] = previous_kwh
+    if current_kwh is None or previous_kwh is None:
+        return result
+    ids = set(current["source_ids"])
+    if ids != set(previous["source_ids"]):
+        return {**result, "reason": "source_set_changed"}
+    provenance = current.get("measurement_provenance")
+    prior_provenance = previous.get("measurement_provenance")
+    if (not isinstance(provenance, dict) or not isinstance(prior_provenance, dict)
+            or set(provenance) != ids or set(prior_provenance) != ids
+            or any(not isinstance(provenance[sid], dict)
+                   or provenance[sid].get("method") != "recorder_hourly_change_v1"
+                   or provenance[sid].get("unit") != "kWh"
+                   or provenance[sid].get("source_unit") not in {"Wh", "kWh", "MWh"}
+                   or provenance[sid].get("has_sum") is not True
+                   or provenance[sid].get("unit_class") not in {None, "energy"} for sid in ids)
+            or provenance != prior_provenance):
+        return {**result, "reason": "measurement_provenance_unavailable_or_changed"}
+    delta = current_kwh - previous_kwh
+    percent = delta / previous_kwh * 100 if previous_kwh else None
+    return {**result, "status": "ready", "reason": None, "delta_kwh": delta,
+            "percent": percent if percent is not None and isfinite(percent) else None}
+
+
+def _energy_comparison_lines(comparison):
+    lines = []
+    if "previous_start" in comparison:
+        lines.extend([
+            f"Current: [{comparison['current_local_start']} → {comparison['current_local_end']}); "
+            f"{comparison['current_hours']:g} elapsed hours.",
+            f"Previous: [{comparison['previous_local_start']} → {comparison['previous_local_end']}); "
+            f"{comparison['previous_hours']:g} elapsed hours. Timezone: {comparison['timezone']}.",
+            "Calendar-period totals; unequal month or DST lengths are not normalized. "
+            "Both periods use the current configured grid sources; historical configuration is not reconstructed.",
+        ])
+    previous = comparison.get("previous_kwh")
+    lines.append(f"Previous measured grid import: {previous:.2f} kWh." if previous is not None
+                 else "Previous measured grid import: Unknown.")
+    if comparison["status"] == "ready":
+        percent = comparison.get("percent")
+        percent_text = (f"{percent:+.1f}%" if percent is not None else
+                        "Unknown (zero baseline or unrepresentable percentage)")
+        lines.append(f"Change in grid import: {comparison['delta_kwh']:+.2f} kWh; {percent_text}.")
+    else:
+        reason = {
+            "rolling_or_custom_window": "comparison requires a complete local calendar day, ISO week or month",
+            "report_timezone_unavailable": "report timezone is unavailable",
+            "calendar_boundary_not_recorder_hour": "local calendar boundaries do not align with Recorder hours",
+            "incomplete_statistics": "complete statistics are unavailable for one or both periods",
+            "source_set_changed": "the measured grid source sets differ",
+            "measurement_provenance_unavailable_or_changed": "measurement provenance is unavailable or differs",
+        }.get(comparison["reason"], "comparison is unavailable")
+        lines.append(f"Change in grid import: Unknown ({reason}).")
+    return lines
 
 
 def discover_energy_sensors(hass: Any) -> list[dict[str, Any]]:
@@ -588,6 +738,7 @@ async def async_get_energy_usage(
     names = {sensor["entity_id"]: sensor["name"] for sensor in sensors}
     expected = set(range(int(start.timestamp()), int(end.timestamp()), 3600))
     devices = []
+    provenance = {}
     measured = {key: 0.0 for key in expected}
     any_samples = any((result or {}).get(sid) for sid in ids)
     for sid in ids:
@@ -596,6 +747,9 @@ async def async_get_energy_usage(
         factor = {"Wh": 0.001, "kWh": 1.0, "MWh": 1000.0}.get(meta.get("unit_of_measurement")) if meta else None
         if not meta or not meta.get("has_sum") or factor is None or meta.get("unit_class") not in {None, "energy"}:
             return {**snapshot, "status": "unsupported"}
+        provenance[sid] = {"method": "recorder_hourly_change_v1", "unit": "kWh",
+                           "source_unit": meta["unit_of_measurement"],
+                           "unit_class": meta.get("unit_class"), "has_sum": True}
         points = (result or {}).get(sid) or []
         buckets = {}
         for point in points:
@@ -622,7 +776,8 @@ async def async_get_energy_usage(
         return {**snapshot, "status": "partial"}
     hourly = [{"from": key * 1000, "to": (key + 3600) * 1000, "kwh": measured[key]}
               for key in sorted(measured)]
-    return {**snapshot, "status": "ready", "devices": devices, "hourly_buckets": hourly}
+    return {**snapshot, "status": "ready", "devices": devices, "hourly_buckets": hourly,
+            "measurement_provenance": provenance}
 
 
 def _energy_rate(value: float | None) -> float | None:

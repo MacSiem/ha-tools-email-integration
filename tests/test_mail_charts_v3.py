@@ -275,8 +275,10 @@ class MailChartSpecification(unittest.TestCase):
         self.assertIn('2026-10-05', rows[0]['label'])
         self.assertIn('America/New_York', payload['body'])
         self.assertEqual('Asia/Tokyo', hass.config.time_zone)
-        self.assertEqual({k:v for k,v in old['summary'].items() if k != 'visualization'},
-                         {k:v for k,v in payload['summary'].items() if k != 'visualization'})
+        self.assertEqual({k:v for k,v in old['summary'].items() if k not in {'visualization', 'comparison'}},
+                         {k:v for k,v in payload['summary'].items() if k not in {'visualization', 'comparison'}})
+        self.assertEqual('rolling_or_custom_window', old['summary']['comparison']['reason'])
+        self.assertEqual('incomplete_statistics', payload['summary']['comparison']['reason'])
 
 if __name__ == '__main__':
     unittest.main()
