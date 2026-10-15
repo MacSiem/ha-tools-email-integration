@@ -75,6 +75,24 @@ async def test_blank_password_keeps_existing_and_form_never_echoes_it(hass, hass
     assert cfg["server"] == "smtp2.example.com"
 
 
+@pytest.mark.parametrize(('send_test', 'error'), [(False, 'save_failed'), (True, 'save_failed_after_test')])
+async def test_options_write_failure_keeps_form_and_does_not_repeat_test(hass, hass_storage, send_test, error):
+    from homeassistant.helpers.storage import Store
+    from homeassistant.util.file import WriteError
+    entry, storage = await _setup(hass)
+    with patch.object(Store, '_async_write_data', side_effect=WriteError('synthetic')), \
+         patch('custom_components.ha_tools_email._send_email') as send:
+        _, result = await _options(hass, entry, {**SMTP_FORM, 'password': 'SYNTHETIC', 'send_test': send_test})
+    assert result['type'] is FlowResultType.FORM
+    assert result['errors'] == {'base': error}
+    assert send.call_count == int(send_test)
+    assert (await storage.async_get_smtp_config())['password'] == ''
+    assert not await storage.async_password_via_options()
+    assert entry.options == {}
+    marker = next(k for k in result['data_schema'].schema if k.schema == 'send_test')
+    assert marker.default() is False
+
+
 @pytest.mark.parametrize(
     ("side_effect", "error"),
     [

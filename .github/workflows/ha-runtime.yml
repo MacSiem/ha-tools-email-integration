@@ -12,14 +12,31 @@ permissions:
 jobs:
   ha-runtime:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - core: '2024.7.0'
+            python: '3.12'
+            harness: '0.13.144'
+          - core: '2026.10.1'
+            python: '3.14'
+            harness: '0.13.372'
+          - core: '2026.10.0b4'
+            python: '3.14'
+            harness: '0.13.370'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: ${{ matrix.python }}
       - name: Install Home Assistant test harness
         run: |
-          pip install pytest-homeassistant-custom-component
+          pip install "pytest-homeassistant-custom-component==${{ matrix.harness }}"
+          python - <<'PYVER'
+          from homeassistant.const import __version__
+          assert __version__ == '${{ matrix.core }}', __version__
+          PYVER
           # Requirements of core integrations this integration depends on (recorder).
           pip install $(python - <<'PY'
           import json, os, homeassistant

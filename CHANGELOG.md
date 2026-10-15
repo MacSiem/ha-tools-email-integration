@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.2.0 (Unreleased)
+
+- Add shared measured-energy tariff profiles with revision checks, household reads and administrator writes. Energy, variable charges and monthly fixed fees stay separate; no tariff is assumed.
+- Retain up to 128 dispatch-attempt metadata records for 90 days across manual reports, schedules, services and options tests. SMTP acceptance remains separate from delivery and history availability.
+- Add explicit schedule timezone, weekday/month day and computed next fire; scheduled reports use previous completed local calendar periods with DST handling. Read-only calendar previews do not send or write.
+- Add self-contained static charts and matching text data from the same report payload, preserving missing measurements and units.
+- Require confirmed HA Store writes before publishing settings, schedules, attempt history or duplicate-fire state. Failed legacy SMTP migration keeps the original file; failed metadata after SMTP acceptance never becomes a failed-send claim.
+- Report unconfirmed options saves safely in English/Polish and enable native storage tests in Linux CI, including minimum/current/beta HA Core.
+
 ## 2.1.2 (2026-09-30)
 
 - Energy reports use unique configured Energy Dashboard grid-import sources and Recorder metadata units, with exact completed-hour windows for the last 24 hours, 7 days or 30 days.

@@ -2,7 +2,7 @@
 
 ![Preview](banner.png)
 
-Built-in SMTP integration for Home Assistant. It sends email for HA Tools
+SMTP integration for Home Assistant. It sends email for HA Tools
 cards through simple service calls, and it can also compose and send
 scheduled server-side log digests and energy reports — no `notify:` platform
 or external mail relay required.
@@ -28,7 +28,7 @@ settings once, then send or schedule reports.**
    and the plaintext legacy file is removed only after Store saves
    successfully.
 3. **Cards send through the existing services.** `ha-log-email` and
-   `ha-energy-email` (in the main HA Tools repo) call
+   `ha-energy-email` (in their respective HA Tools frontend packages) call
    `ha_tools_email.get_config`, `ha_tools_email.test` and
    `ha_tools_email.send` directly — no changes needed for existing cards.
 4. **Server-side scheduling is optional.** Since v2.0.0 you can also store
@@ -111,7 +111,24 @@ Exports, solar sources and arbitrary discovered device meters are excluded.
 Daily, weekly and monthly reports cover the last 24, 168 and 720 completed UTC hours;
 the exact start and end are included in the report. Recorder metadata determines Wh/kWh/MWh
 conversion to kWh (Wh × 0.001, kWh × 1, MWh × 1000). Missing hours or unsupported metadata withhold the period total; measured
-zero stays zero. No tariff is assumed, so server report costs are unavailable.
+zero stays zero. No tariff is assumed. With an explicitly saved shared tariff,
+measured hourly energy is priced against its matching zones and rules. The
+report states energy cost, variable per-kWh charges and monthly fixed fees
+separately; the fixed fee is not silently prorated or added to an energy total.
+Missing measurements, conflicting rules or missing rates remain unavailable.
+
+Server schedules use the previous completed local day, ISO week or calendar
+month in the schedule's timezone. On-demand `send_now` and the default preview
+keep the existing rolling completed-hour periods described above. To preview a
+completed calendar period without sending, request
+`ha_tools_email/preview_energy_report` with `calendar_period: true` and an
+optional IANA `timezone`. Returned bounds and coverage state the actual range.
+
+HTML email contains self-contained static charts built from the same summary
+and measured records as its tables; plain text includes the corresponding data.
+No remote chart script or image is fetched. Missing values are labelled rather
+than drawn as measured zero. Long daily series state their display limit; the
+full report model is not replaced by the displayed subset.
 
 Administrators can read `ha_tools_email/preview_energy_report` with `cadence` set to
 `daily`, `weekly` or `monthly`. It returns the same summary model used by `send_now`
@@ -134,7 +151,16 @@ managed through the websocket API below. Each schedule looks like:
 ```
 
 - `kind`: `log_digest` or `energy_report`.
-- `cadence`: `daily` (every day at `time`), `weekly` (Monday at `time`), or `monthly` (first day of the month at `time`).
+- `cadence`: `daily`, `weekly` or `monthly` at the chosen `time`.
+- `timezone`: optional IANA zone; if absent, use Home Assistant's configured zone.
+- `weekday`: weekly day, Monday 0 through Sunday 6; default Monday.
+- `month_day`: monthly day 1–31; short months clamp to their last day; default 1.
+- `use_ha_timezone: true` on an explicit edit clears a previous zone override.
+- A spring DST gap moves forward by the offset change; the repeated autumn time
+  fires only on its first occurrence. The same resolver computes `next_fire`.
+- A confirmed period marker is stored before SMTP. If that save fails, no mail
+  is sent. An uncertain transport result is not retried automatically, including
+  after reload or restart.
 - If `recipients` is empty, the scheduler falls back to `default_recipient` from the saved SMTP config.
 
 Log digests read Home Assistant `system_log` records, aggregate counts by
@@ -197,10 +223,59 @@ Compose and send a report immediately (admin required):
 }
 ```
 
-All four websocket commands require an admin connection. The legacy services
+SMTP configuration, schedules, previews, sending and attempt history require
+an administrator connection. The legacy services
 that save/read SMTP settings or list secret-key names are admin-only too.
 
+## Shared tariffs
+
+`ha_tools_email/get_tariff` returns only `profile`, `revision` and `updated_at`
+for an authenticated household connection. It does not read SMTP settings,
+migrate legacy files, send mail or change the saved profile. Administrator-only
+`ha_tools_email/set_tariff` accepts a validated `profile` (or `null` to clear it)
+and `expected_revision`; conflicts require an explicit reload rather than retry.
+A successful save requires a completed underlying HA Store write.
+
+Custom profiles support currency, IANA civil time or an explicit fixed meter
+clock, zone energy and variable rates, separate monthly fees, weekday/season
+rules and date exceptions. Zero rates are valid. Measurements spanning a rate
+boundary are not arbitrarily split or priced from an average. Configure prices
+explicitly; no national tariff, holiday calendar or current market price is
+installed automatically. Compatible Smart Reports and Energy cards use this
+shared service; basic Recorder reports do not require SMTP configuration.
+
+## Dispatch attempt history
+
+Administrator-only `ha_tools_email/get_attempt_history` returns at most 128
+logical attempts retained for 90 days. Manual services, on-demand reports,
+schedules and options tests use one dispatcher and the same history. Metadata
+contains an attempt ID, time, controlled kind/source/cadence/period, a hashed
+schedule reference, recipient count and controlled outcome. It excludes mail
+addresses, subjects, bodies, credentials and raw exception text.
+
+`accepted_by_smtp` means the SMTP server accepted the message, not that it was
+delivered. Transport interruption or cancellation can have an unknown outcome;
+there is no automatic resend. A failed history write is reported separately as
+`history_status: unavailable`. For log digests, failure of the post-send dedup
+metadata is separately `digest_state_status: unavailable` and does not turn an
+accepted message into `send_failed`. Check the previous attempt before deciding
+to send again. SMTP and Store are separate systems: a process crash between
+acceptance and the history write may leave no history record.
+
+Schedules and history publish new in-memory state only after confirmed storage.
+Failed legacy SMTP migration leaves its file in place; a failed options save
+keeps the form open. If an options test was already accepted, the form states
+that separately and does not select the test again automatically.
+
 ## Installation
+
+### HACS default catalog
+
+HA Tools Email is included in the HACS default catalog as an Integration.
+Download it in HACS, restart Home Assistant, then add **HA Tools Email** under
+**Settings → Devices & services → Add integration**. Configure SMTP in its
+options only when sending is needed. Existing config entries and Store data
+are retained on upgrade; do not delete them to update the integration.
 
 ### HACS Custom Repository
 
@@ -250,9 +325,11 @@ Home Assistant automations without a user context continue to work.
 **Does a successful send mean delivery to the inbox?**
 No. `accepted_by_smtp` means the configured SMTP server accepted the message.
 Final delivery and any later bounce must be checked at the SMTP provider.
-The per-period schedule guard prevents concurrent callbacks and normal
-restart duplicates. A crash between SMTP acceptance and persistence can
-still result in a duplicate after restart.
+The schedule period marker is confirmed before SMTP, preventing a second
+callback after reload or restart from sending that period again. A crash after
+the marker but before SMTP can leave that period unsent; a crash after SMTP but
+before history persistence can leave no attempt record. Check the previous
+attempt before a manual resend; neither case triggers automatic retry.
 
 <a id="smtp-password-security"></a>
 **Why can't I pass the password to `save_config` any more?**
@@ -272,9 +349,9 @@ The send fails with an explicit error identifying the missing key — nothing
 is sent silently.
 
 **Which cards use this integration?**
-`ha-log-email` and `ha-energy-email` from the main HA Tools repository call
+`ha-log-email` and `ha-energy-email` from their HA Tools frontend packages call
 the services described above. Existing automations using
-`ha_tools_email.send` continue to work in v2.0.3; interactive calls from a
+`ha_tools_email.send` continue to work; interactive calls from a
 logged-in user require administrator access.
 
 ## Changelog

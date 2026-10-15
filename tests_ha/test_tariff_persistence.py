@@ -148,3 +148,21 @@ async def test_native_history_schedule_and_period_failure_preserve_file(hass, tm
     assert await fresh.async_get_schedule(schedule['id']) == schedule
     assert await fresh.async_get_last_fired(schedule['id']) is None
     assert await fresh.async_get_digest_state('log_digest', 'daily') == {}
+
+
+async def test_native_failed_smtp_migration_preserves_legacy_until_completed_write(hass, tmp_path):
+    from homeassistant.util.file import WriteError
+    configure_ssd(hass, tmp_path)
+    legacy = tmp_path / 'ha-tools' / 'smtp-config.json'
+    legacy.parent.mkdir()
+    legacy.write_text(json.dumps({'server': 'synthetic', 'password': '!secret synthetic'}))
+    before = legacy.read_bytes()
+    with patch.object(HAStore, '_async_write_data', side_effect=WriteError('synthetic')):
+        with pytest.raises(StorageWriteError):
+            await EmailStorage(hass).async_load()
+    assert legacy.read_bytes() == before
+    restored = EmailStorage(hass)
+    assert (await restored.async_get_smtp_config())['server'] == 'synthetic'
+    assert not legacy.exists()
+    envelope = json.loads((tmp_path / '.storage' / STORAGE_KEY).read_text())
+    assert envelope['data']['smtp_config']['password'] == '!secret synthetic'
