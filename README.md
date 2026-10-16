@@ -238,8 +238,9 @@ Log digests read Home Assistant `system_log` records, aggregate counts by
 level and logger, deduplicate against the previous digest, and include the
 top 10 recent errors and warnings. Energy reports use only configured Energy Dashboard grid imports and read
 Recorder `statistics_during_period` changes with Wh/kWh/MWh metadata. Complete
-hourly coverage across every source is required before rendering total kWh and
-a grid-source breakdown; unrelated appliance counters are not added.
+hourly coverage across every source is required for a full-period total. The
+grid-source breakdown retains available measured readings with their coverage;
+unrelated appliance counters are not added.
 
 ## Websocket API
 
