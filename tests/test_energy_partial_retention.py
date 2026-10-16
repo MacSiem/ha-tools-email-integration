@@ -34,6 +34,8 @@ class PartialRetentionTest(unittest.TestCase):
                 "expected_source_hours": 24, "complete_sources": 0, "sources": 1})
         self.assertIn("Recorded usage", report["html"])
         self.assertIn("18/24", report["html"])
+        self.assertIn("Data coverage: 18/24 source-hours", report['body'])
+        self.assertIn("18/24 measured hours", report['body'])
         self.assertNotIn("No energy statistics", report["html"])
         self.assertIn("Kitchen &lt;meter&gt;", report["html"])
         self.assertIsNone(report["summary"]["total_kwh"])

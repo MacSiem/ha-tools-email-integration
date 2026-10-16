@@ -290,8 +290,13 @@ def build_energy_report_payload(
     ]
     body_lines.extend(
         f"{row['name']}: {row['kwh']:.2f} kWh / {_energy_cost_text(row['cost'], currency)}"
+        + (f" · {row['measured_hours']}/{row['expected_hours']} measured hours"
+           if 'measured_hours' in row else '')
         for row in rows[:10]
     )
+    if coverage is not None:
+        body_lines.extend(['', f"Data coverage: {coverage['measured_source_hours']}/{coverage['expected_source_hours']} source-hours; "
+                           f"{coverage['complete_sources']}/{coverage['sources']} complete sources."])
     html = render_energy_report_html(
         title, rows, total_kwh, total_cost, currency, now,
         visualization=summary["visualization"], include_charts=_include_charts, source_kind=source_kind,
