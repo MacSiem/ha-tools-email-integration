@@ -101,7 +101,7 @@ class MailMIMEV3Tests(unittest.TestCase):
         charts.m.attach_mail_charts(payload, model)
         _, message, _ = self.check_payload(payload)
         body = message.get_body(preferencelist=('plain',)).get_content()
-        for value in ['T02:00:00+02:00', 'T02:00:00+01:00', '-0.15 PLN', 'Unknown PLN', '0 PLN']:
+        for value in ['02:00 → 02:00 (+02:00 → +01:00)', '02:00 → 03:00 (+01:00)', '-0.15 PLN', 'Unknown PLN', '0 PLN']:
             self.assertIn(value, body)
 
     def test_plain_only_legacy_handoff_still_has_utf8_and_no_html(self):
