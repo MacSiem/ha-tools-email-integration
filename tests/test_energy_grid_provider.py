@@ -135,7 +135,7 @@ class EnergyGridProviderTest(unittest.TestCase):
                 self.assertAlmostEqual(hours * 3, values["sensor.kwh"])
                 self.assertAlmostEqual(hours * 2, values["sensor.mwh"])
 
-    def test_gap_in_one_mixed_unit_source_withholds_the_entire_period(self):
+    def test_gap_withholds_full_total_and_retains_measured_mixed_unit_sources(self):
         prefs = {"energy_sources": [{"type": "grid", "stat_energy_from": sid}
                                     for sid in ["sensor.wh", "sensor.mwh"]]}
         rows = {"sensor.wh": {"unit": "Wh", "change": 1000},
@@ -146,7 +146,9 @@ class EnergyGridProviderTest(unittest.TestCase):
                 self.assertEqual("partial", summary["status"])
                 self.assertIsNone(summary["total_kwh"])
                 self.assertIsNone(summary["total_cost"])
-                self.assertEqual([], summary["devices"])
+                self.assertEqual(2, len(summary["devices"]))
+                self.assertEqual((24 if cadence == 'daily' else 168) * 2 - 1,
+                                 summary['coverage']['measured_source_hours'])
                 self.assertEqual(set(rows), calls["statistics_ids"])
 
     def test_complete_zero_is_measured_zero_for_nested_mwh(self):
@@ -180,7 +182,8 @@ class EnergyGridProviderTest(unittest.TestCase):
                 summary, _ = self.compose(prefs, {"sensor.grid": {"unit": "MWh"}}, mutation=change)
                 self.assertEqual("partial", summary["status"])
                 self.assertIsNone(summary["total_kwh"])
-                self.assertEqual([], summary["devices"])
+                self.assertEqual(23000, summary["devices"][0]['kwh'])
+                self.assertEqual(23, summary["devices"][0]['measured_hours'])
 
     def test_no_grid_import_remains_no_data_not_measured_zero(self):
         summary, calls = self.compose({"energy_sources": [{"type": "solar",
@@ -200,7 +203,8 @@ class EnergyGridProviderTest(unittest.TestCase):
             with self.subTest(cadence=cadence):
                 summary, calls = self.compose(prefs, rows, cadence=cadence)
                 self.assertEqual("partial", summary["status"])
-                self.assertEqual([], summary["devices"])
+                self.assertEqual(['sensor.valid'], [r['entity_id'] for r in summary['devices']])
+                self.assertEqual(24 if cadence == 'daily' else 168, summary['recorded_kwh'])
                 self.assertIsNone(summary["total_kwh"])
                 self.assertIsNone(summary["total_cost"])
                 self.assertEqual(list(rows), summary["source_ids"])

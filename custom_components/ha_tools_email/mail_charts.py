@@ -190,7 +190,7 @@ def build_energy_chart_model(summary: dict[str, Any], hourly_buckets: list[dict[
             for key, title in [('energy-cost', 'Measured energy cost'), ('variable-fees', 'Measured variable fees')]:
                 charts.append(_chart(key, title, currency, columns[key], note=price_note,
                                      limit=24 if granularity == 'hour' else DAY_DISPLAY_LIMIT, granularity=granularity))
-    if not charts or not any(row['value'] is not None for row in charts[0]['rows']):
+    if summary.get('devices') or not charts:
         title = 'Grid import sources (not appliances)' if source_kind == 'grid' else 'Reported consumers'
         note = ('Existing source rows only; no parent/appliance combination and no inferred source flow. '
                 'Displayed sources are a subset; no Other remainder is estimated.')

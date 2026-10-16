@@ -324,6 +324,8 @@ async def _ws_preview_log_digest(hass, connection, msg) -> None:
     summary = payload["summary"]
     result = {key: summary[key] for key in
               ("total", "level_counts", "logger_counts", "recent_errors", "recent_warnings", "unique_problems", "counts_complete")}
+    if not summary['unique_problems']:
+        result.update(total=None, counts_complete=False, history_unavailable=True)
     # Internal datetime objects are not a WebSocket JSON contract.
     for key in ("recent_errors", "recent_warnings"):
         result[key] = [{"level": row.get("level"), "name": row.get("name"),

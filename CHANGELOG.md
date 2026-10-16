@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.3.1 (2026-10-16)
+
+- Keep valid Energy Recorder measurements when another source has a gap, invalid interval or unsupported metadata. Show recorded usage, per-source measured hours, overall coverage, the available hourly profile and a source ranking; incomplete full-period totals and comparisons remain unavailable.
+- Replace empty completed-period Log totals with an explicit unavailable-history notice. When the current HA buffer contains newer diagnostics, show them in a separate, clearly labelled section outside the requested period. A restart is never presented as evidence of zero errors.
+- Give Energy and Log emails a shared self-contained table layout, clear metric panels, semantic coverage colours and responsive source tables. Retain plain-text alternatives and inline charts without external assets or tracking.
+
 ## 2.3.0 (2026-10-15)
 
 - Preview the actual subject, plain text and self-contained HTML without sending or changing schedules, history or digest state. The same composer builds the requested manual report.

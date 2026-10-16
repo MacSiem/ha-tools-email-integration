@@ -117,6 +117,21 @@ report states energy cost, variable per-kWh charges and monthly fixed fees
 separately; the fixed fee is not silently prorated or added to an energy total.
 Missing measurements, conflicting rules or missing rates remain unavailable.
 
+From 2.3.1, a gap in one meter does not discard other measurements. The report
+shows **Recorded usage** (the sum of retained valid readings), coverage in
+source-hours, per-source measured hours and available charts. This subtotal is
+not a complete household-period total. A combined hourly chart value requires
+all configured sources for that hour; a missing interval stays a visible gap.
+Source rankings remain available alongside the time profile. Full-period cost
+and previous-period comparisons still require complete data.
+
+Log reports use Home Assistant's bounded in-memory `system_log` buffer, which
+can lose older entries on restart or eviction. An empty completed-period buffer
+is labelled **history unavailable**, not zero errors. If newer retained entries
+are available, the email includes a separate **Current diagnostics** section,
+explicitly outside the requested report period. It does not invent a historical
+archive or attribute those lifetime aggregate counts to the previous day.
+
 Server schedules use the previous completed local day, ISO week or calendar
 month in the schedule's timezone. On-demand `send_now` and the default preview
 keep the existing rolling completed-hour periods described above. To preview a
