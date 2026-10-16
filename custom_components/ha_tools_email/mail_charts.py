@@ -149,9 +149,11 @@ def _profile(window: tuple[datetime, datetime], buckets: list[dict[str, Any]],
         first, last = int(a.timestamp()*1000), int(b.timestamp()*1000)
         stamps = list(range(first, last, HOUR_MS))
         local_a, local_b = a.astimezone(tz), b.astimezone(tz)
-        label = (f'{local_a.isoformat()} → {local_b.isoformat()}' if granularity == 'hour' else
-                 f'{local_a.date().isoformat()} ({len(stamps)}h; '
-                 f'{local_a.isoformat()} → {local_b.isoformat()})')
+        first_offset, last_offset = local_a.isoformat()[-6:], local_b.isoformat()[-6:]
+        offsets = first_offset if first_offset == last_offset else f'{first_offset} → {last_offset}'
+        label = (f'{local_a.date().isoformat()} · {local_a:%H:%M} → {local_b:%H:%M} ({offsets})'
+                 if granularity == 'hour' else
+                 f'{local_a.date().isoformat()} ({len(stamps)}h; {offsets})')
         measured = fully_in_window and bool(stamps) and all(usage.get(t) is not None for t in stamps)
         for key, index in [('energy-usage', usage), ('energy-cost', energy_cost), ('variable-fees', variable_cost)]:
             complete = measured and all(index.get(t) is not None for t in stamps)

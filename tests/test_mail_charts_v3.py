@@ -201,8 +201,9 @@ class MailChartSpecification(unittest.TestCase):
         end = start + timedelta(hours=3)
         data = chart(m.build_energy_chart_model(summary(start,end),series(start,3),
                          timezone_name='Europe/Warsaw'), 'energy-usage')
-        self.assertIn('T02:00:00+02:00', data['rows'][0]['label'])
-        self.assertIn('T02:00:00+01:00', data['rows'][1]['label'])
+        self.assertIn('02:00 → 02:00 (+02:00 → +01:00)', data['rows'][0]['label'])
+        self.assertIn('02:00 → 03:00 (+01:00)', data['rows'][1]['label'])
+        self.assertNotEqual(data['rows'][0]['from'], data['rows'][1]['from'])
         self.assertEqual([1,2,3], [r['value'] for r in data['rows']])
 
     def test_pure_financial_fields_are_exactly_unchanged(self):

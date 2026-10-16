@@ -4,6 +4,12 @@ from tests import test_energy_grid_provider as provider
 
 
 class PartialRetentionTest(unittest.TestCase):
+    def test_external_statistics_use_their_recorder_display_names(self):
+        prefs = {"energy_sources": [{"type": "grid", "stat_energy_from": "utility:import"}]}
+        summary, _ = provider.EnergyGridProviderTest().compose(
+            prefs, {"utility:import": {"name": "Utility Annex <meter>", "change": 1}})
+        self.assertEqual("Utility Annex <meter>", summary['devices'][0]['name'])
+
     def test_one_missing_hour_keeps_both_sources_and_recorded_profile(self):
         prefs = {"energy_sources": [{"type": "grid", "flow_from": [
             {"stat_energy_from": "sensor.complete"}, {"stat_energy_from": "sensor.gapped"}]}]}

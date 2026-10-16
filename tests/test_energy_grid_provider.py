@@ -28,6 +28,7 @@ class EnergyGridProviderTest(unittest.TestCase):
         def metadata(hass, *, statistic_ids):
             calls["metadata_ids"] = set(statistic_ids)
             return {sid: (1, {"has_sum": row.get("has_sum", True),
+                             "name": row.get("name"),
                              "unit_of_measurement": row.get("unit", "kWh"),
                              "unit_class": row.get("unit_class", "energy")})
                     for sid, row in rows.items()}
