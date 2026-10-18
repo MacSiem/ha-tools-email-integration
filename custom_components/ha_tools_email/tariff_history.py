@@ -308,6 +308,45 @@ def _version_at(versions, stamp):
     return None
 
 
+def prepare_tariff_book_edit(before, proposed, now):
+    """Validate an edit and identify changed historical effective versions.
+
+    A future exclusive end does not itself change the preceding history. Only
+    compare effective payloads at past timeline boundaries, not entire books.
+    The server supplies now; this function never writes historical reports.
+    """
+    if not isinstance(now, datetime) or now.utcoffset() is None:
+        _fail('invalid_server_clock')
+    clean = validate_tariff_book(proposed)
+    if before is None:
+        return clean, []
+    try:
+        old = validate_tariff_book(before)
+    except TariffValidationError:
+        return clean, [{'reason': 'invalid_previous_book'}]
+    old_tariffs = {t['id']: t for t in old['tariffs']}
+    new_tariffs = {t['id']: t for t in clean['tariffs']}
+    cutoff, changes = int(now.timestamp() * 1000), []
+
+    def signature(version):
+        if version is None:
+            return None
+        profile = {k: v for k, v in version['profile'].items() if k not in ('validFrom', 'validTo')}
+        return (version['id'], profile, version['fixed_monthly'],
+                version['rate_semantics'], version.get('legacy_combined_monthly'))
+
+    for sid in sorted(old_tariffs.keys() | new_tariffs.keys()):
+        a = old_tariffs.get(sid, {}).get('versions', [])
+        b = new_tariffs.get(sid, {}).get('versions', [])
+        points = {bound for version in a + b for bound in _bounds(version)
+                  if bound is not None and bound < cutoff}
+        for point in sorted(points):
+            if signature(_version_at(a, point)) != signature(_version_at(b, point)):
+                changes.append({'tariff_id': sid, 'from': datetime.fromtimestamp(point / 1000, timezone.utc).isoformat()})
+                break
+    return clean, changes
+
+
 def _money(value):
     return None if value is None else format(value.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP), '.2f')
 

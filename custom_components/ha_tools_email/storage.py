@@ -8,7 +8,9 @@ import logging
 import re
 import uuid
 from copy import deepcopy
+from contextlib import contextmanager
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -20,11 +22,13 @@ except ImportError:  # Lightweight boundary fixtures; HA provides the real enum.
 from homeassistant.helpers.storage import Store
 
 from .tariff import TariffValidationError, validate_tariff_profile
+from .tariff_history import prepare_tariff_book_edit, validate_tariff_book
 from .scheduler import normalize_schedule_calendar
 from .history import HISTORY_SCHEMA, HISTORY_LIMIT, HISTORY_DAYS, clean_attempt, retained_attempts
 
 from .const import (
     DEFAULT_SCHEDULE_TIME,
+    DOMAIN,
     KIND_LOG_DIGEST,
     SMTP_DEFAULTS,
     STORAGE_KEY,
@@ -97,6 +101,7 @@ def _default_state() -> dict[str, Any]:
     return {
         "smtp_config": None,
         "tariff_profile": None,
+        "tariff_book": None,
         "tariff_revision": 0,
         "tariff_updated_at": None,
         "schedules": [],
@@ -120,6 +125,7 @@ class EmailStorage:
         self._lock = asyncio.Lock()
         self._data: dict[str, Any] | None = None
         self._tariff_only_loaded: dict[str, Any] | None = None
+        self._book_pending = 0
 
     async def async_load(self) -> dict[str, Any]:
         """Load storage, creating defaults when absent."""
@@ -154,6 +160,73 @@ class EmailStorage:
         async with self._lock:
             data = await self._async_tariff_data_locked()
             return self._tariff_state(data)
+
+    @contextmanager
+    def _book_admission(self):
+        if self._book_pending >= 4:
+            raise RuntimeError('energy_pricing_busy')
+        self._book_pending += 1
+        try:
+            yield
+        finally:
+            self._book_pending -= 1
+
+    async def _async_book_cpu(self, job):
+        # Reuse the existing bounded executor lane, including cancellation and
+        # unload protection. No second unbounded thread pool for large books.
+        bucket = getattr(self.hass, 'data', {}).get(DOMAIN, {})
+        coordinator = bucket.get('energy_snapshot')
+        if coordinator is None or not getattr(coordinator, 'running', True):
+            raise RuntimeError('energy_unavailable')
+        result = await coordinator._async_run_cpu(job)
+        if (bucket.get('energy_snapshot') is not coordinator
+                or not getattr(coordinator, 'running', True)):
+            raise RuntimeError('energy_snapshot_unloaded')
+        return result
+
+    async def async_get_tariff_book(self) -> dict[str, Any]:
+        """Read an additive book snapshot without migrating SMTP or guessing v1."""
+        with self._book_admission():
+            async with self._lock:
+                data = await self._async_tariff_data_locked()
+                state = self._tariff_state(data)
+                raw = deepcopy(data.get('tariff_book'))
+            if raw is not None:
+                try:
+                    raw = await self._async_book_cpu(partial(validate_tariff_book, raw))
+                except TariffValidationError:
+                    raw = {'schema': 0}
+            return {'book': raw, 'revision': state['revision'], 'updated_at': state['updated_at'],
+                    'legacy_profile': state['profile'] if raw is None else None}
+
+    async def async_save_tariff_book(self, book, *, expected_revision, historical_edit_ack=False,
+                                    now=None, before_save=None) -> dict[str, Any]:
+        """Publish one validated copy only after the existing confirmed Store write.
+
+        The admin route supplies a fresh authorization/lifecycle callback after
+        CPU validation. Historical edits need explicit acknowledgement; the
+        legacy profile and archived attempt reports remain byte-for-byte data.
+        """
+        if type(expected_revision) is not int or expected_revision < 0 or type(historical_edit_ack) is not bool:
+            raise TariffValidationError([{'path': 'expected_revision', 'reason': 'invalid_revision_or_ack'}])
+        with self._book_admission():
+            async with self._lock:
+                data = await self._async_tariff_data_locked()
+                if self._tariff_state(data)['revision'] != expected_revision:
+                    raise TariffRevisionConflict('tariff_revision_conflict')
+                clean, changes = await self._async_book_cpu(partial(
+                    prepare_tariff_book_edit, data.get('tariff_book'), book, now or datetime.now(timezone.utc)))
+                if changes and not historical_edit_ack:
+                    raise ValueError('historical_edit_ack_required')
+                if before_save is not None and not await before_save():
+                    raise PermissionError('unauthorized')
+                candidate = deepcopy(data)
+                candidate.update(tariff_book=clean, tariff_revision=expected_revision + 1,
+                                 tariff_updated_at=_now_iso())
+                await self._store.async_save_confirmed(candidate)
+                self._data = candidate
+                return {'book': deepcopy(clean), 'revision': expected_revision + 1,
+                        'updated_at': candidate['tariff_updated_at'], 'legacy_profile': None}
 
     async def async_save_tariff(self, profile: Any, *, expected_revision: int) -> dict[str, Any]:
         """Validate, compare revision, save a copy, then publish confirmed state.
