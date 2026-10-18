@@ -1,6 +1,7 @@
 """Baseline rooms use the same actual readings, hierarchy and captured registry."""
 from datetime import datetime, timezone
 from decimal import Decimal
+import json
 import unittest
 from tests import test_energy_analysis_service as fixtures
 
@@ -79,3 +80,42 @@ class AnalysisGroupBaselineTest(unittest.IsolatedAsyncioTestCase):
             # Honest initial baseline support; matched partial-room comparison
             # still needs hourly group evidence and must not be called complete.
             self.assertEqual('group_common_measurements_required', groups['areas']['office']['reason'])
+
+
+class GroupComparisonRobustnessTest(unittest.TestCase):
+    def groups(self, kwh, *, currency='PLN', basis='gross', domain='grid_import', revision=2):
+        row = {'kwh': kwh, 'measurement_complete': True,
+               'coverage': {'observed_hours': 1, 'expected_hours': 1},
+               'energy_cost': '1.00', 'variable_cost': '0.00', 'usage_cost': '1.00'}
+        return {'registry_revision': revision, 'membership_mode': 'current_snapshot',
+                'energy_domain': domain, 'currency': currency, 'price_basis': basis,
+                'partition_complete': True, 'devices': {'sensor.a': row},
+                'areas': {'office': row}, 'floors': {'up': row},
+                'unassigned': row, 'unmeasured': row}
+
+    def compare(self, a, b):
+        return fixtures.service.compare_period_groups(a, b,
+            {'status': 'ready', 'comparison_scope': 'calendar_totals'})
+
+    def test_unrepresentable_percent_never_poison_snapshot_json(self):
+        result = self.compare(self.groups('1000000000000'), self.groups('5e-324'))
+        self.assertEqual('ready', result['areas']['office']['status'])
+        self.assertIsNone(result['areas']['office']['percent'])
+        json.dumps(result, allow_nan=False)
+
+    def test_currency_basis_and_domain_never_mix_costs(self):
+        for kwargs in ({'currency': 'EUR'}, {'basis': 'net'}, {'domain': 'site_consumption'}):
+            with self.subTest(kwargs=kwargs):
+                result = self.compare(self.groups('4'), self.groups('2', **kwargs))
+                self.assertIsNone(result['areas']['office']['delta_usage_cost'])
+                self.assertIsNone(result['currency'])
+        same_domain = self.compare(self.groups('4', domain='site_consumption'),
+                                   self.groups('2', domain='site_consumption'))
+        self.assertEqual('2', same_domain['areas']['office']['delta_kwh'])
+        self.assertFalse(same_domain['reconciles_household_delta'])
+
+    def test_changed_registry_context_does_not_claim_same_historical_rooms(self):
+        result = self.compare(self.groups('4'), self.groups('2', revision=3))
+        self.assertEqual('group_context_changed', result['areas']['office']['reason'])
+        self.assertIsNone(result['areas']['office']['delta_kwh'])
+        self.assertFalse(result['reconciles_household_delta'])
