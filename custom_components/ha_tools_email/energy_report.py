@@ -718,6 +718,12 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                 row = fact((*zp, field))
                 if row:
                     zone_rows.append((caption + ' · ' + title(field), user_value(row), row[3], None))
+            for field in ('energy_cost', 'variable_cost', 'legacy_combined_cost'):
+                known = fact((*zp, 'known_costs', field))
+                full = fact((*zp, field))
+                if known and (not full or known[2:4] != full[2:4]):
+                    zone_rows.append((caption + ' · ' + label('known_costs') + ' · ' + title(field),
+                                      known[2], known[3], None))
         for field in ('status', 'reason'):
             row = fact(('chart', 'bins', index, 'zone_breakdown', field))
             if row and not (field == 'reason' and row[2] == unknown):
@@ -727,6 +733,11 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
             if row:
                 zone_rows.append((str(index+1) + ' · ' + tr('Bez przypisania do strefy', 'Unattributed to zone')
                                   + ' · ' + title(field), row[2], row[3], None))
+        for field in ('energy_cost', 'variable_cost', 'legacy_combined_cost'):
+            row = fact(('chart', 'bins', index, 'zone_breakdown', 'unattributed', 'known_costs', field))
+            if row:
+                zone_rows.append((str(index+1) + ' · ' + tr('Bez przypisania do strefy', 'Unattributed to zone')
+                                  + ' · ' + label('known_costs') + ' · ' + title(field), row[2], row[3], None))
     if zone_rows:
         table(tr('Szczegóły · Zmierzone strefy', 'Details · Measured zones'), zone_rows)
     fee_rows = []
