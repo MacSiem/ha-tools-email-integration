@@ -84,6 +84,10 @@ def build_snapshot(state, measurement, *, now, measurement_timezone, profile_sou
     coverage = {key: value for key, value in measurement.get('coverage', {}).items()
                 if key in ('complete', 'measured_source_hours', 'expected_source_hours', 'sources',
                            'complete_sources', 'unavailable_sources')}
+    # Schema extensions are retained in storage, never blindly reflected to UI.
+    clock = {'mode': model.clock['mode']} if model.valid else None
+    if clock and clock['mode'] == 'fixed':
+        clock['offsetMinutes'] = model.clock['offsetMinutes']
     return {'schema': 1, 'generated_at': current['at'], 'tariff_revision': state.get('revision'),
         'profile_source': profile_source,
         'status': 'ready' if available and costs['complete'] else 'partial' if available else 'unavailable',
@@ -91,7 +95,7 @@ def build_snapshot(state, measurement, *, now, measurement_timezone, profile_sou
         'price_basis': model.profile.get('priceBasis') if model.valid else None,
         'measurement_timezone': measurement_timezone,
         'tariff_timezone': model.profile.get('timezone') if model.valid else None,
-        'tariff_clock': deepcopy(model.clock) if model.valid else None,
+        'tariff_clock': clock,
         'current': current, 'next_cheap': next_cheap(model, now),
         'today': {'from': start.isoformat(), 'to': end.isoformat(), 'boundary_complete': aligned,
             'measurement_complete': measurement.get('status') == 'ready' and aligned,
