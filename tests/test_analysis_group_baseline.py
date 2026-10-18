@@ -63,7 +63,7 @@ class AnalysisGroupBaselineTest(unittest.IsolatedAsyncioTestCase):
                 await h.subject.async_get_analysis('day', 'user', anchor='2026-10-10', comparison='previous')
             self.assertIsNone(h.subject._cache)
 
-    async def test_partial_room_is_unknown_without_extrapolation_or_household_reconciliation(self):
+    async def test_partial_room_uses_exact_common_hours_without_extrapolation_or_household_reconciliation(self):
         h = self.harness(); original = h.usage
         async def usage(*args, **kwargs):
             snapshot = await original(*args, **kwargs)
@@ -75,11 +75,14 @@ class AnalysisGroupBaselineTest(unittest.IsolatedAsyncioTestCase):
             result = await h.subject.async_get_analysis('day', 'user', anchor='2026-10-10', comparison='previous')
             groups = result['comparisons']['previous']['groups']
             self.assertFalse(groups['reconciles_household_delta'])
-            self.assertIsNone(groups['areas']['office']['delta_kwh'])
-            self.assertEqual('unknown', groups['areas']['office']['status'])
-            # Honest initial baseline support; matched partial-room comparison
-            # still needs hourly group evidence and must not be called complete.
-            self.assertEqual('group_common_measurements_required', groups['areas']['office']['reason'])
+            office = groups['areas']['office']
+            self.assertEqual('ready', office['status'])
+            self.assertEqual('common_measurements', office['comparison_scope'])
+            self.assertEqual(Decimal(92), Decimal(office['current_kwh']))
+            self.assertEqual(Decimal(46), Decimal(office['baseline_kwh']))
+            self.assertEqual(Decimal(46), Decimal(office['delta_kwh']))
+            self.assertEqual('46.00', office['delta_usage_cost'])
+            self.assertIsNone(office['delta_fixed_cost'])
 
     async def test_historical_comparison_cost_matches_both_actual_period_bills(self):
         h = self.harness()
@@ -124,6 +127,51 @@ class AnalysisGroupBaselineTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(costs['current']['effective_price'])
             self.assertIsNone(result['totals']['total_cost'])
             self.assertEqual(23*3600, costs['baseline']['priced_source_seconds']['usage_cost'])
+
+
+    async def test_different_missing_room_hours_use_one_matching_mask_and_historical_prices(self):
+        h = self.harness(); original = h.usage
+        old = fixtures.version(rate=.4, version_id='old', monthly=31)
+        new = fixtures.version(start='2026-10-10', rate=.5, version_id='new', monthly=31)
+        old['profile']['zones'][0]['variableRate'] = .1
+        new['profile']['zones'][0]['variableRate'] = .2
+        h.book = fixtures.book([old, new])
+        async def usage(*args, **kwargs):
+            snapshot = await original(*args, **kwargs)
+            if args[1][0]['entity_id'] == 'sensor.device':
+                snapshot['source_buckets']['sensor.device'][0 if args[2].day == 10 else 1]['kwh'] = None
+            return snapshot
+        h.usage = usage
+        with h.patches():
+            result = await h.subject.async_get_analysis('day', 'user', anchor='2026-10-10', comparison='previous')
+            compared = result['comparisons']['previous']; room = compared['groups']['areas']['office']
+            self.assertEqual('ready', room['status'])
+            self.assertEqual((Decimal(88), Decimal(44), Decimal(44)),
+                tuple(Decimal(room[k]) for k in ('current_kwh', 'baseline_kwh', 'delta_kwh')))
+            self.assertEqual('39.60', room['delta_usage_cost'])
+            self.assertEqual(4, len(h.queries))
+            self.assertEqual(1, len(h.registry_ids))
+            self.assertFalse(compared['groups']['reconciles_household_delta'])
+            self.assertEqual('81.60', compared['costs']['delta_cost'])
+            self.assertIsNone(result['groups']['areas']['office']['kwh'])
+            self.assertTrue(await h.subject.async_validate_result(result, 'user'))
+
+    async def test_below_ninety_percent_room_does_not_borrow_complete_household_coverage(self):
+        h = self.harness(); original = h.usage
+        async def usage(*args, **kwargs):
+            snapshot = await original(*args, **kwargs)
+            if args[1][0]['entity_id'] == 'sensor.device' and args[2].day == 9:
+                for row in snapshot['source_buckets']['sensor.device'][:3]: row['kwh'] = None
+            return snapshot
+        h.usage = usage
+        with h.patches():
+            result = await h.subject.async_get_analysis('day', 'user', anchor='2026-10-10', comparison='previous')
+            compared = result['comparisons']['previous']; room = compared['groups']['areas']['office']
+            self.assertEqual('ready', compared['status'])
+            self.assertEqual('unknown', room['status'])
+            self.assertIsNone(room['delta_kwh'])
+            self.assertIsNone(room['delta_usage_cost'])
+            self.assertFalse(compared['groups']['reconciles_household_delta'])
 
 
 class GroupComparisonRobustnessTest(unittest.TestCase):
