@@ -141,3 +141,48 @@ class WeeklyYearAgoTest(unittest.TestCase):
         self.assertEqual('ready', periods['status'])
         self.assertEqual({'status': 'unknown', 'reason': 'iso_week_unavailable', 'baseline_periods': []},
                          periods['comparisons']['year_ago'])
+
+
+class ComparisonChartServiceTest(unittest.IsolatedAsyncioTestCase):
+    harness = AnalysisComparisonsTest.harness
+    async def test_pair_and_mean_chart_are_hashed_detached_and_reuse_io(self):
+        for kind in ('previous', 'mean7'):
+            h = self.harness()
+            with self.subTest(kind=kind), h.patches():
+                result = await h.subject.async_get_analysis('day', 'user', anchor='2026-10-10', comparison=kind)
+                compared = result['comparisons'][kind]
+                self.assertEqual(24, len(compared['chart']['markers']))
+                self.assertTrue(compared['chart']['reconciles_comparison_energy'])
+                count = len(h.queries)
+                self.assertEqual(4 if kind == 'previous' else 16, count)
+                payload = copy.deepcopy(result); snapshot_id = payload.pop('snapshot_id')
+                encode = lambda: json.dumps(payload, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+                self.assertEqual(snapshot_id, hashlib.sha256(encode()).hexdigest())
+                payload['comparisons'][kind]['chart']['markers'][0]['baseline_kwh'] = '999'
+                self.assertNotEqual(snapshot_id, hashlib.sha256(encode()).hexdigest())
+                result['comparisons'][kind]['chart']['markers'][0]['current_kwh'] = '999'
+                again = await h.subject.async_get_analysis('day', 'user', anchor='2026-10-10', comparison=kind)
+                self.assertEqual('10', again['comparisons'][kind]['chart']['markers'][0]['current_kwh'])
+                self.assertEqual(count, len(h.queries))
+
+    async def test_mean7_dst_does_not_shift_extra_hour_into_baseline(self):
+        h = self.harness(); h.hass.config.time_zone = 'Europe/Warsaw'
+        h.now = datetime(2026, 11, 1, 12, tzinfo=timezone.utc)
+        with h.patches():
+            result = await h.subject.async_get_analysis('day', 'user', anchor='2026-10-25', comparison='mean7')
+            compared = result['comparisons']['mean7']; rows = compared['chart']['markers']
+            self.assertEqual((250, 240), (compared['current_kwh'], compared['baseline_kwh']))
+            self.assertEqual(25, len(rows))
+            self.assertEqual('unknown', rows[3]['status'])
+            self.assertIsNone(rows[3]['baseline_kwh'])
+            self.assertEqual('ready', rows[4]['status'])
+            self.assertFalse(compared['chart']['reconciles_comparison_energy'])
+
+    async def test_unsupported_week_baseline_has_explicit_unknown_chart(self):
+        h = self.harness()
+        with h.patches():
+            result = await h.subject.async_get_analysis('week', 'user', anchor='2020-12-28', comparison='year_ago')
+            chart = result['comparisons']['year_ago']['chart']
+            self.assertEqual(('unknown', 'iso_week_unavailable'), (chart['status'], chart['reason']))
+            self.assertEqual([], chart['markers'])
+            self.assertFalse(chart['reconciles_comparison_energy'])
