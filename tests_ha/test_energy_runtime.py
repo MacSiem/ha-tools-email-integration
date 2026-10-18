@@ -110,13 +110,25 @@ async def test_native_ws_final_auth_await_rejects_stale_result(hass, hass_storag
     await storage.async_save_tariff(profile(), expected_revision=0)
     client = await hass_ws_client(hass)
     original = hass.auth.async_get_user
-    calls = 0
+    coordinator = hass.data[DOMAIN]['energy_snapshot']
+    method = 'async_snapshot' if command == 'energy_snapshot' else 'async_price_queries'
+    calculate = getattr(coordinator, method)
+    calculation_finished = False
+    mutation_applied = False
+
+    async def calculate_then_arm(*args, **kwargs):
+        nonlocal calculation_finished
+        result = await calculate(*args, **kwargs)
+        calculation_finished = True
+        return result
 
     async def get_user(uid):
-        nonlocal calls
+        nonlocal mutation_applied
         user = await original(uid)
-        calls += 1
-        if calls == 2:
+        # Source guards now reauthorize during IO too. Arm the mutation only
+        # after the real calculation returns, at the final authenticated await.
+        if calculation_finished and not mutation_applied:
+            mutation_applied = True
             if mutation == 'unload':
                 assert await hass.config_entries.async_unload(entry.entry_id)
             elif mutation == 'reload':
@@ -129,10 +141,11 @@ async def test_native_ws_final_auth_await_rejects_stale_result(hass, hass_storag
                 return None
         return user
 
-    with patch.object(hass.auth, 'async_get_user', new=get_user):
+    with patch.object(coordinator, method, new=calculate_then_arm), patch.object(
+            hass.auth, 'async_get_user', new=get_user):
         await client.send_json_auto_id(request(command))
         response = await client.receive_json()
-    assert calls == 2
+    assert calculation_finished and mutation_applied
     assert not response['success'], response
     assert response['error']['code'] == ('unauthorized' if mutation == 'revoke' else 'energy_unavailable')
 
