@@ -9,9 +9,10 @@ import asyncio
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from math import isfinite
+from functools import partial
 from zoneinfo import ZoneInfo
 
-from .composer import async_grid_sensors, async_get_energy_usage
+from .composer import async_grid_sensors, async_get_energy_usage, async_get_energy_metadata
 from .tariff import EnergyTariff, validate_tariff_profile, price_measurements
 
 _OVERRIDE_UNSET = object()
@@ -104,6 +105,18 @@ def build_snapshot(state, measurement, *, now, measurement_timezone, profile_sou
             'usage_cost': costs['usageCost'], 'fixed_monthly': costs['fixedMonthly'], 'issues': issues}}
 
 
+def _source_signature(sensors, metadata):
+    """Include Recorder normalization for external statistics without HA states."""
+    result = []
+    for row in sensors:
+        sid = row['entity_id']
+        raw = metadata.get(sid)
+        meta = raw[1] if isinstance(raw, tuple) else raw
+        meta = meta if isinstance(meta, dict) else {}
+        result.append((sid, meta.get('has_sum'), meta.get('unit_of_measurement'), meta.get('unit_class')))
+    return tuple(result)
+
+
 class EnergySnapshotCoordinator:
     """Serialize refreshes; all five entities read one bounded public snapshot."""
 
@@ -176,7 +189,9 @@ class EnergySnapshotCoordinator:
             start, end, aligned = measurement_window(now, tz)
             sensors = await async_grid_sensors(self.hass)
             self._check_running()
-            key = (start, end, tz, tuple(row['entity_id'] for row in sensors))
+            metadata = await async_get_energy_metadata(self.hass, [row['entity_id'] for row in sensors])
+            self._check_running()
+            key = (start, end, tz, _source_signature(sensors, metadata))
             # Price edits do not query Recorder. Retry incomplete data every five minutes.
             expired = self._measurement_at is None or (now - self._measurement_at).total_seconds() >= 300
             if key != self._measurement_key or expired:
@@ -185,12 +200,13 @@ class EnergySnapshotCoordinator:
                 elif self.provider:
                     measured = await self.provider(self.hass, start, end)
                 else:
-                    measured = await async_get_energy_usage(self.hass, sensors, start, end, 'daily')
+                    measured = await async_get_energy_usage(self.hass, sensors, start, end, 'daily', metadata=metadata)
                 self._check_running()
                 # A source/timezone change during Recorder IO invalidates the answer.
                 latest = await async_grid_sensors(self.hass)
+                latest_meta = await async_get_energy_metadata(self.hass, [row['entity_id'] for row in latest])
                 self._check_running()
-                if tz != self.hass.config.time_zone or tuple(row['entity_id'] for row in latest) != key[3]:
+                if tz != self.hass.config.time_zone or _source_signature(latest, latest_meta) != key[3]:
                     self._measurement_key = None
                     self._invalidate()
                     raise RuntimeError('energy_sources_changed')
@@ -204,7 +220,20 @@ class EnergySnapshotCoordinator:
                     raise RuntimeError('energy_calendar_changed')
                 now = finished
             self._model_boundaries = EnergyTariff(state.get('profile'))._boundaries
-            self.data = build_snapshot(state, self._measurement, now=now, measurement_timezone=tz)
+            result = await self._async_build_snapshot(state, self._measurement, now=now, measurement_timezone=tz)
+            self._check_running()
+            # CPU work runs off-loop. Reject answers overtaken by a confirmed edit,
+            # source normalization change, HA calendar change, or unload.
+            latest = await async_grid_sensors(self.hass)
+            latest_meta = await async_get_energy_metadata(self.hass, [row['entity_id'] for row in latest])
+            latest_state = await self.storage.async_get_tariff()
+            self._check_running()
+            if (tz != self.hass.config.time_zone or _source_signature(latest, latest_meta) != key[3]
+                    or latest_state['revision'] != state['revision']
+                    or (real_time and measurement_window(datetime.now(timezone.utc), tz)[:2] != (start, end))):
+                self._invalidate()
+                raise RuntimeError('energy_snapshot_changed')
+            self.data = result
             self._schedule_boundary(now)
             for listener in tuple(self._listeners):
                 listener()
@@ -215,10 +244,19 @@ class EnergySnapshotCoordinator:
             return await self.async_refresh(now=now)
         clean = validate_tariff_profile(profile)
         await self.async_refresh(now=now)
-        # No intervening await: use the exact shared measurement window atomically.
+        # Capture the shared measurement/window before awaiting pure CPU work.
         instant = datetime.fromisoformat(self.data['generated_at'])
-        return build_snapshot({'profile': clean, 'revision': None}, self._measurement,
+        result = await self._async_build_snapshot({'profile': clean, 'revision': None}, self._measurement,
             now=instant, measurement_timezone=self.data['measurement_timezone'], profile_source='override')
+        self._check_running()
+        return result
+
+    async def _async_build_snapshot(self, state, measurement, **kwargs):
+        build = partial(build_snapshot, state, measurement, **kwargs)
+        executor = getattr(self.hass, 'async_add_executor_job', None)
+        # Real Home Assistant always supplies the executor; the synchronous path
+        # keeps this pure coordinator usable by bounded source-only test doubles.
+        return await executor(build) if executor is not None else build()
 
     def _check_running(self):
         if self._stopped:

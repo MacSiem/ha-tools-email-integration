@@ -834,12 +834,27 @@ def discover_energy_sensors(hass: Any) -> list[dict[str, Any]]:
     return sensors
 
 
+async def async_get_energy_metadata(hass: Any, ids: list[str]) -> dict[str, Any]:
+    """Read normalization metadata without querying measurement history."""
+    if not ids:
+        return {}
+    try:
+        from homeassistant.components.recorder.statistics import get_metadata
+        from homeassistant.components.recorder.util import get_instance
+        return await get_instance(hass).async_add_executor_job(
+            lambda: get_metadata(hass, statistic_ids=set(ids)))
+    except Exception:
+        return {}
+
+
 async def async_get_energy_usage(
     hass: Any,
     sensors: list[dict[str, Any]],
     start: datetime,
     end: datetime,
     cadence: str,
+    *,
+    metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Keep valid measured sources; withhold only totals that require missing data."""
     ids = list(dict.fromkeys(sensor["entity_id"] for sensor in sensors))
@@ -847,10 +862,11 @@ async def async_get_energy_usage(
     if not ids:
         return snapshot
     try:
-        from homeassistant.components.recorder.statistics import get_metadata, statistics_during_period
+        from homeassistant.components.recorder.statistics import statistics_during_period
         from homeassistant.components.recorder.util import get_instance
         recorder = get_instance(hass)
-        metadata = await recorder.async_add_executor_job(lambda: get_metadata(hass, statistic_ids=set(ids)))
+        if metadata is None:
+            metadata = await async_get_energy_metadata(hass, ids)
         result = await recorder.async_add_executor_job(
             statistics_during_period, hass, start, end, set(ids), "hour", {}, {"change"},
         )

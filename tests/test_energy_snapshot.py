@@ -210,6 +210,39 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(['kWh', 'Wh'], calls)
             self.assertAlmostEqual(a['today']['usage_cost'] / 1000, b['today']['usage_cost'])
 
+    async def test_cpu_snapshot_runs_in_executor_and_unload_rejects_late_answer(self):
+        import threading
+        entered, release = asyncio.Event(), threading.Event()
+        loop = asyncio.get_running_loop()
+        original = energy.build_snapshot
+        def build(*args, **kwargs):
+            loop.call_soon_threadsafe(entered.set)
+            if not release.wait(timeout=2):
+                raise RuntimeError('test_executor_not_released')
+            return original(*args, **kwargs)
+        class Storage:
+            async def async_get_tariff(self):
+                return {'profile': classified(), 'revision': 1}
+        async def provider(hass, start, end):
+            return usage()
+        hass = types.SimpleNamespace(config=types.SimpleNamespace(time_zone='UTC'),
+                                     async_add_executor_job=asyncio.to_thread)
+        c = energy.EnergySnapshotCoordinator(hass, Storage(), provider=provider)
+        with patch.object(energy, 'async_grid_sensors', return_value=[]), \
+             patch.object(energy, 'build_snapshot', build):
+            task = asyncio.create_task(c.async_refresh(now=at('2026-10-18T12:34Z')))
+            try:
+                # This await can finish while the worker thread is blocked only
+                # when the pure calculation has left the HA event loop.
+                await asyncio.wait_for(entered.wait(), timeout=1)
+                self.assertFalse(task.done())
+                c.async_stop()
+            finally:
+                release.set()
+            with self.assertRaisesRegex(RuntimeError, 'unloaded'):
+                await task
+        self.assertIsNone(c.data)
+
     async def test_source_change_during_io_discards_answer(self):
         reads = iter([[{'entity_id': 'sensor.a'}], [{'entity_id': 'sensor.b'}]])
         class Storage:
