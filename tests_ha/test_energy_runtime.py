@@ -143,7 +143,7 @@ async def test_native_recorder_external_import_without_state_prices_daily_moneta
     from homeassistant.components.recorder import models
     from homeassistant.components.recorder.statistics import async_add_external_statistics
 
-    hass.config.set_time_zone('UTC')
+    await hass.config.async_set_time_zone('UTC')
     manager = await async_get_manager(hass)
     manager.data = {'energy_sources': [{'type': 'grid', 'flow_from': [
         {'stat_energy_from': 'w20:grid'}], 'flow_to': []}], 'device_consumption': []}
