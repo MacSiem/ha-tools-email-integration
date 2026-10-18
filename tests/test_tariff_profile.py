@@ -309,19 +309,30 @@ class TariffWebsocketTest(unittest.IsolatedAsyncioTestCase):
     async def test_separate_read_role_and_safe_save_failures(self):
         ws, mod = load_websocket()
         self.assertFalse(getattr(ws._ws_get_tariff, 'tariff_requires_admin', False))
-        self.assertTrue(ws._ws_set_tariff.tariff_requires_admin)
+        self.assertFalse(getattr(ws._ws_set_tariff, 'tariff_requires_admin', False))
         class Storage:
             fail = None
+            current_tariff_revision = 0
+            current_feature_access_revision = 0
+            async def async_get_feature_access(self):
+                return {'policy': {'schema': 1, 'features': {}}, 'revision': 0, 'status': 'ready'}
             async def async_get_tariff(self):
-                return {'profile': None, 'revision': 0, 'updated_at': None}
-            async def async_save_tariff(self, p, *, expected_revision):
+                return {'profile': None, 'revision': self.current_tariff_revision, 'updated_at': None}
+            async def async_save_tariff(self, p, *, expected_revision, before_save=None):
                 if self.fail:
                     raise self.fail
+                if before_save is not None and await before_save() is not True:
+                    raise PermissionError('unauthorized')
+                self.current_tariff_revision = expected_revision + 1
                 return {'profile': p, 'revision': expected_revision + 1, 'updated_at': 'saved'}
         storage = Storage()
-        hass = types.SimpleNamespace(data={'ha_tools_email': {'storage': storage}})
+        user = types.SimpleNamespace(id='synthetic', is_active=True, is_admin=True)
+        async def get_user(uid):
+            return user
+        hass = types.SimpleNamespace(data={'ha_tools_email': {'storage': storage}},
+                                     auth=types.SimpleNamespace(async_get_user=get_user))
         results, errors = [], []
-        connection = types.SimpleNamespace(send_result=lambda *a: results.append(a), send_error=lambda *a: errors.append(a))
+        connection = types.SimpleNamespace(user=user, send_result=lambda *a: results.append(a), send_error=lambda *a: errors.append(a))
         await ws._ws_get_tariff(hass, connection, {'id': 1})
         self.assertEqual({'profile': None, 'revision': 0, 'updated_at': None}, results[-1][1])
         msg = {'id': 2, 'profile': profile(), 'expected_revision': 0}

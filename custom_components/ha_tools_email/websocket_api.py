@@ -18,7 +18,7 @@ from .scheduler import (async_reload_schedules, async_send_now, calculate_next_f
                         calendar_report_window, effective_schedule_timezone, fire_period_key,
                         normalize_schedule_calendar, async_resolve_manual_period)
 from .storage import EmailStorage, TariffRevisionConflict, FeatureAccessRevisionConflict
-from .feature_access import default_feature_access, effective_feature_capabilities
+from .feature_access import default_feature_access, effective_feature_capabilities, feature_access_allowed
 from .tariff import TariffValidationError
 
 
@@ -80,6 +80,31 @@ def _book_context_current(hass, storage, coordinator, revision=None):
     return (bucket.get('storage') is storage and bucket.get('energy_snapshot') is coordinator
             and coordinator is not None and getattr(coordinator, 'running', False)
             and (revision is None or storage.current_tariff_revision == revision))
+
+
+async def _feature_authorized(hass, connection, feature, operation, *, token=None):
+    """Capture policy once; later checks use fresh identity plus revision fencing.
+
+    Store write callbacks pass this internal token, so they never reenter the
+    Store lock. Nothing in this token comes from a client or cached role.
+    """
+    try:
+        if token is None:
+            storage = hass.data.get(DOMAIN, {}).get('storage')
+            state = await storage.async_get_feature_access()
+            token = storage, state
+        else:
+            storage, state = token
+        user = await _feature_user(hass, connection)
+        if (user is None or state['status'] != 'ready'
+                or not feature_access_allowed(state['policy'], feature, operation,
+                    user_id=connection.user.id, is_active=user.is_active,
+                    is_admin=getattr(user, 'is_admin', False))
+                or not _feature_context_current(hass, storage, state['revision'])):
+            return None
+        return token
+    except (AttributeError, KeyError, TypeError, ValueError, RuntimeError):
+        return None
 
 
 def _feature_context_current(hass, storage, revision=None):
@@ -198,8 +223,9 @@ async def _ws_set_feature_access(hass, connection, msg):
 @websocket_api.websocket_command({vol.Required('type'): f'{DOMAIN}/get_tariff_book'})
 @websocket_api.async_response
 async def _ws_get_tariff_book(hass, connection, msg):
-    if not await _book_authorized(hass, connection):
-        connection.send_error(msg['id'], 'unauthorized', 'Active household user required.')
+    access = await _feature_authorized(hass, connection, 'energy_tariff', 'read')
+    if access is None:
+        connection.send_error(msg['id'], 'unauthorized', 'Tariff read access required.')
         return
     bucket = hass.data.get(DOMAIN, {})
     storage, coordinator = bucket.get('storage'), bucket.get('energy_snapshot')
@@ -208,8 +234,8 @@ async def _ws_get_tariff_book(hass, connection, msg):
     except Exception:
         connection.send_error(msg['id'], 'tariff_book_read_failed', 'Tariff history could not be read.')
         return
-    if not await _book_authorized(hass, connection):
-        connection.send_error(msg['id'], 'unauthorized', 'Active household user required.')
+    if not await _feature_authorized(hass, connection, 'energy_tariff', 'read', token=access):
+        connection.send_error(msg['id'], 'unauthorized', 'Tariff read access required.')
         return
     if not _book_context_current(hass, storage, coordinator, result['revision']):
         connection.send_error(msg['id'], 'tariff_book_changed', 'Tariff history changed. Reload before continuing.')
@@ -222,11 +248,11 @@ async def _ws_get_tariff_book(hass, connection, msg):
     vol.Required('book'): dict,
     vol.Required('expected_revision'): vol.All(int, vol.Range(min=0)),
 })
-@websocket_api.require_admin
 @websocket_api.async_response
 async def _ws_preview_tariff_book(hass, connection, msg):
-    if not await _book_authorized(hass, connection, admin=True):
-        connection.send_error(msg['id'], 'unauthorized', 'Active administrator required.')
+    access = await _feature_authorized(hass, connection, 'energy_tariff', 'execute')
+    if access is None:
+        connection.send_error(msg['id'], 'unauthorized', 'Tariff editing access required.')
         return
     bucket = hass.data.get(DOMAIN, {})
     storage, coordinator = bucket.get('storage'), bucket.get('energy_snapshot')
@@ -241,8 +267,8 @@ async def _ws_preview_tariff_book(hass, connection, msg):
     except Exception:
         connection.send_error(msg['id'], 'tariff_book_preview_failed', 'Tariff history could not be validated.')
         return
-    if not await _book_authorized(hass, connection, admin=True):
-        connection.send_error(msg['id'], 'unauthorized', 'Active administrator required.')
+    if not await _feature_authorized(hass, connection, 'energy_tariff', 'execute', token=access):
+        connection.send_error(msg['id'], 'unauthorized', 'Tariff editing access required.')
         return
     if not _book_context_current(hass, storage, coordinator, result['revision']):
         connection.send_error(msg['id'], 'tariff_book_changed', 'Tariff history changed. Reload before continuing.')
@@ -256,17 +282,17 @@ async def _ws_preview_tariff_book(hass, connection, msg):
     vol.Required('expected_revision'): vol.All(int, vol.Range(min=0)),
     vol.Optional('historical_edit_ack', default=False): bool,
 })
-@websocket_api.require_admin
 @websocket_api.async_response
 async def _ws_set_tariff_book(hass, connection, msg):
-    if not await _book_authorized(hass, connection, admin=True):
-        connection.send_error(msg['id'], 'unauthorized', 'Active administrator required.')
+    access = await _feature_authorized(hass, connection, 'energy_tariff', 'execute')
+    if access is None:
+        connection.send_error(msg['id'], 'unauthorized', 'Tariff editing access required.')
         return
     bucket = hass.data.get(DOMAIN, {})
     storage, coordinator = bucket.get('storage'), bucket.get('energy_snapshot')
 
     async def before_save():
-        if not await _book_authorized(hass, connection, admin=True):
+        if not await _feature_authorized(hass, connection, 'energy_tariff', 'execute', token=access):
             return False
         return _book_context_current(hass, storage, coordinator)
 
@@ -278,7 +304,7 @@ async def _ws_set_tariff_book(hass, connection, msg):
         connection.send_error(msg['id'], 'tariff_revision_conflict', 'Tariff history changed. Reload before saving.')
         return
     except PermissionError:
-        connection.send_error(msg['id'], 'unauthorized', 'Active administrator required.')
+        connection.send_error(msg['id'], 'unauthorized', 'Tariff editing access required.')
         return
     except TariffValidationError:
         connection.send_error(msg['id'], 'invalid_tariff_book', 'Tariff history or revision is invalid.')
@@ -293,8 +319,8 @@ async def _ws_set_tariff_book(hass, connection, msg):
     except Exception:
         connection.send_error(msg['id'], 'tariff_book_save_failed', 'Tariff history could not be saved.')
         return
-    if not await _book_authorized(hass, connection, admin=True):
-        connection.send_error(msg['id'], 'unauthorized', 'Active administrator required.')
+    if not await _feature_authorized(hass, connection, 'energy_tariff', 'execute', token=access):
+        connection.send_error(msg['id'], 'unauthorized', 'Tariff editing access required.')
         return
     if not _book_context_current(hass, storage, coordinator, result['revision']):
         connection.send_error(msg['id'], 'tariff_book_changed', 'Tariff history changed. Reload before continuing.')
@@ -376,8 +402,9 @@ async def _ws_energy_snapshot(hass, connection, msg):
 @websocket_api.async_response
 async def _ws_energy_price_queries(hass, connection, msg):
     """Read-only pricing of supplied card buckets, never household measurement."""
-    if not await _snapshot_authorized(hass, connection):
-        connection.send_error(msg['id'], 'unauthorized', 'Active household user required.')
+    access = await _feature_authorized(hass, connection, 'energy_tariff', 'read')
+    if access is None:
+        connection.send_error(msg['id'], 'unauthorized', 'Tariff read access required.')
         return
     coordinator = hass.data.get(DOMAIN, {}).get('energy_snapshot')
     if coordinator is None:
@@ -395,8 +422,8 @@ async def _ws_energy_price_queries(hass, connection, msg):
     except Exception:
         connection.send_error(msg['id'], 'energy_unavailable', 'Energy pricing is unavailable.')
         return
-    if not await _snapshot_authorized(hass, connection):
-        connection.send_error(msg['id'], 'unauthorized', 'Active household user required.')
+    if not await _feature_authorized(hass, connection, 'energy_tariff', 'read', token=access):
+        connection.send_error(msg['id'], 'unauthorized', 'Tariff read access required.')
         return
     if not _energy_context_current(hass, coordinator, result):
         connection.send_error(msg['id'], 'energy_unavailable', 'Energy pricing is unavailable.')
@@ -407,43 +434,66 @@ async def _ws_energy_price_queries(hass, connection, msg):
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/get_tariff"})
 @websocket_api.async_response
 async def _ws_get_tariff(hass, connection, msg) -> None:
-    """Read tariff-only settings for an authenticated household connection."""
-    try:
-        result = await _storage(hass).async_get_tariff()
-    except Exception:
-        connection.send_error(msg["id"], "tariff_read_failed", "Tariff settings could not be read.")
+    access = await _feature_authorized(hass, connection, 'energy_tariff', 'read')
+    if access is None:
+        connection.send_error(msg['id'], 'unauthorized', 'Tariff read access required.')
         return
-    connection.send_result(msg["id"], result)
+    storage = access[0]
+    try:
+        result = await storage.async_get_tariff()
+    except Exception:
+        connection.send_error(msg['id'], 'tariff_read_failed', 'Tariff settings could not be read.')
+        return
+    if not await _feature_authorized(hass, connection, 'energy_tariff', 'read', token=access):
+        connection.send_error(msg['id'], 'unauthorized', 'Tariff read access required.')
+        return
+    if storage.current_tariff_revision != result['revision']:
+        connection.send_error(msg['id'], 'tariff_revision_conflict', 'Tariff settings changed. Reload before continuing.')
+        return
+    connection.send_result(msg['id'], result)
 
 
 @websocket_api.websocket_command({
-    vol.Required("type"): f"{DOMAIN}/set_tariff",
-    vol.Required("profile"): vol.Any(dict, None),
-    vol.Required("expected_revision"): vol.All(int, vol.Range(min=0)),
+    vol.Required('type'): f'{DOMAIN}/set_tariff',
+    vol.Required('profile'): vol.Any(dict, None),
+    vol.Required('expected_revision'): vol.All(int, vol.Range(min=0)),
 })
-@websocket_api.require_admin
 @websocket_api.async_response
 async def _ws_set_tariff(hass, connection, msg) -> None:
-    """Admin save with optimistic revision and confirmed persisted readback."""
+    access = await _feature_authorized(hass, connection, 'energy_tariff', 'execute')
+    if access is None:
+        connection.send_error(msg['id'], 'unauthorized', 'Tariff editing access required.')
+        return
+    storage = access[0]
+
+    async def before_save():
+        return await _feature_authorized(hass, connection, 'energy_tariff', 'execute', token=access) is not None
+
     try:
-        result = await _storage(hass).async_save_tariff(
-            msg["profile"], expected_revision=msg["expected_revision"])
+        result = await storage.async_save_tariff(msg['profile'],
+            expected_revision=msg['expected_revision'], before_save=before_save)
+    except PermissionError:
+        connection.send_error(msg['id'], 'unauthorized', 'Tariff editing access required.')
+        return
     except TariffRevisionConflict:
-        connection.send_error(msg["id"], "tariff_revision_conflict", "Tariff settings changed. Reload before saving.")
+        connection.send_error(msg['id'], 'tariff_revision_conflict', 'Tariff settings changed. Reload before saving.')
         return
     except TariffValidationError:
-        connection.send_error(msg["id"], "invalid_tariff_profile", "Tariff profile or revision is invalid.")
+        connection.send_error(msg['id'], 'invalid_tariff_profile', 'Tariff profile or revision is invalid.')
         return
     except Exception:
-        # Do not expose Store paths, SMTP state, or private exception messages.
-        connection.send_error(msg["id"], "tariff_save_failed", "Tariff settings could not be saved.")
+        connection.send_error(msg['id'], 'tariff_save_failed', 'Tariff settings could not be saved.')
+        return
+    if not await _feature_authorized(hass, connection, 'energy_tariff', 'execute', token=access):
+        connection.send_error(msg['id'], 'unauthorized', 'Tariff editing access required.')
+        return
+    if storage.current_tariff_revision != result['revision']:
+        connection.send_error(msg['id'], 'tariff_revision_conflict', 'Tariff settings changed. Reload before continuing.')
         return
     coordinator = _bucket(hass).get('energy_snapshot')
     if coordinator is not None:
-        # The save has already been confirmed; a Recorder outage must not turn it
-        # into an ambiguous save response. Refresh runs through the shared lock.
         hass.async_create_task(coordinator._async_tick(None))
-    connection.send_result(msg["id"], result)
+    connection.send_result(msg['id'], result)
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/get_attempt_history"})

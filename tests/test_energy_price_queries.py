@@ -11,6 +11,9 @@ from tests.test_tariff_profile import load_websocket
 
 
 class Storage:
+    current_feature_access_revision = 0
+    async def async_get_feature_access(self):
+        return {'policy': {'schema': 1, 'features': {}}, 'revision': 0, 'status': 'ready'}
     def __init__(self, profile=None):
         self.state = {'profile': classified() if profile is None else profile, 'revision': 1}
     @property
@@ -205,7 +208,7 @@ class FinalAuthGuardTests(unittest.IsolatedAsyncioTestCase):
         c.async_snapshot = snapshot
         calls = []
         results, errors = [], []
-        hass = types.SimpleNamespace(data={'ha_tools_email': {'energy_snapshot': c}})
+        hass = types.SimpleNamespace(data={'ha_tools_email': {'energy_snapshot': c, 'storage': c.storage}})
         class Auth:
             async def async_get_user(self, uid):
                 calls.append(uid)
@@ -252,7 +255,7 @@ class FinalAuthGuardTests(unittest.IsolatedAsyncioTestCase):
                 return user
         c = coordinator()
         errors, results = [], []
-        hass = types.SimpleNamespace(auth=Auth(), data={'ha_tools_email': {'energy_snapshot': c}})
+        hass = types.SimpleNamespace(auth=Auth(), data={'ha_tools_email': {'energy_snapshot': c, 'storage': c.storage}})
         conn = types.SimpleNamespace(user=user, send_result=lambda *v: results.append(v), send_error=lambda *v: errors.append(v))
         await ws._ws_energy_price_queries(hass, conn, {'id': 1, 'queries': [query([{'PRIVATE': 'x' * 524288}])]})
         self.assertEqual('invalid_energy_price_queries', errors[-1][1])

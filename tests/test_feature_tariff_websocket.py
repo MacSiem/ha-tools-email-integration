@@ -16,6 +16,7 @@ class FeatureTariffWebsocketTest(unittest.IsolatedAsyncioTestCase):
         conn.user.is_admin = False
         for handler in (ws._ws_get_tariff, ws._ws_get_tariff_book, ws._ws_energy_price_queries):
             await handler(hass, conn, {'id': 1, 'queries': []})
+            self.assertTrue(errors)
             self.assertEqual('unauthorized', errors[-1][1])
         self.assertEqual([], results)
         self.assertEqual(1, len(storage._store.saved))
@@ -70,7 +71,6 @@ class FeatureTariffWebsocketTest(unittest.IsolatedAsyncioTestCase):
         ws, hass, storage, lane, conn, results, errors = self.fixture()
         # Policy load is the first Store await. Explicit execution must recheck
         # fresh role after every later validation/load before the write begins.
-        original = storage.async_get_tariff
         async def get_user(uid):
             user = hass.auth.current
             get_user.calls += 1

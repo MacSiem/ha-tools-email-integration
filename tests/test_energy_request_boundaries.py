@@ -157,7 +157,7 @@ class FinalCalendarContextTests(unittest.IsolatedAsyncioTestCase):
         ws, _ = load_websocket()
         c = coordinator()
         hass = c.hass
-        hass.data = {'ha_tools_email': {'energy_snapshot': c}}
+        hass.data = {'ha_tools_email': {'energy_snapshot': c, 'storage': c.storage}}
         instant = at('2026-10-18T12:34Z')
         clock = [instant]
         class Clock(datetime):

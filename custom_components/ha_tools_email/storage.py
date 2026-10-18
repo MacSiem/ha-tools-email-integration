@@ -299,7 +299,7 @@ class EmailStorage:
                 return {'book': deepcopy(clean), 'revision': expected_revision + 1,
                         'updated_at': candidate['tariff_updated_at'], 'legacy_profile': None}
 
-    async def async_save_tariff(self, profile: Any, *, expected_revision: int) -> dict[str, Any]:
+    async def async_save_tariff(self, profile: Any, *, expected_revision: int, before_save=None) -> dict[str, Any]:
         """Validate, compare revision, save a copy, then publish confirmed state.
 
         No retry: a stale editor must explicitly reload. None clears the profile.
@@ -313,6 +313,8 @@ class EmailStorage:
             current = self._tariff_state(data)
             if current["revision"] != expected_revision:
                 raise TariffRevisionConflict("tariff_revision_conflict")
+            if before_save is not None and await before_save() is not True:
+                raise PermissionError('unauthorized')
             candidate = deepcopy(data)
             candidate.update(tariff_profile=clean, tariff_revision=expected_revision + 1,
                              tariff_updated_at=_now_iso())
