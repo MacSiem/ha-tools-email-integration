@@ -547,14 +547,9 @@ async def async_grid_sensors(hass: Any) -> list[dict[str, Any]]:
             state = hass.states.get(sid) if hasattr(hass.states, "get") else None
             sensors.append({"entity_id": sid, "name": (getattr(state, "attributes", {}) or {}).get("friendly_name") or sid})
     except Exception:
-        # Unavailable preferences must not turn every discovered meter into a grid source.
-        pass
+        # A partially resolved source set cannot represent complete grid import.
+        return []
     return sensors
-
-
-async def async_grid_usage(hass: Any, start: datetime, end: datetime) -> dict[str, Any]:
-    """Shared measurement boundary; never discover unrelated energy meters."""
-    return await async_get_energy_usage(hass, await async_grid_sensors(hass), start, end, "daily")
 
 
 async def async_build_energy_report_payload(

@@ -120,7 +120,7 @@ async def _ws_set_tariff(hass, connection, msg) -> None:
     if coordinator is not None:
         # The save has already been confirmed; a Recorder outage must not turn it
         # into an ambiguous save response. Refresh runs through the shared lock.
-        hass.async_create_task(coordinator.async_refresh())
+        hass.async_create_task(coordinator._async_tick(None))
     connection.send_result(msg["id"], result)
 
 

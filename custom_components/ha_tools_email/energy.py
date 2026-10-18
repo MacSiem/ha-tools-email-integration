@@ -123,6 +123,7 @@ class EnergySnapshotCoordinator:
         self._stopped = False
         self._unsub = None
         self._boundary_unsub = None
+        self._model_boundaries = []
 
     def async_add_listener(self, listener):
         self._listeners.add(listener)
@@ -130,7 +131,7 @@ class EnergySnapshotCoordinator:
 
     async def async_start(self):
         from homeassistant.helpers.event import async_track_time_interval
-        await self.async_refresh()
+        await self._async_tick(None)
         self._unsub = async_track_time_interval(self.hass, self._async_tick, timedelta(seconds=30))
         self._schedule_boundary(datetime.now(timezone.utc))
 
