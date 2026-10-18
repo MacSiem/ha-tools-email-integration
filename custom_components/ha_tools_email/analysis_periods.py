@@ -6,7 +6,7 @@ server clock, never a browser date. ``ready`` means resolved, not measured.
 from __future__ import annotations
 
 from calendar import monthrange
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .composer import _calendar_comparison_window
@@ -103,11 +103,14 @@ def _extra_baseline(kind, start, end, target_day, zone):
                    partial=target_end < target_limit, clamps=clamps)
 
 
-def resolve_analysis_periods(kind, now, timezone_name):
+def resolve_analysis_periods(kind, now, timezone_name, *, anchor=None):
     """Resolve day/week/month/year and all W24 calendar comparison windows.
 
-    Return JSON-safe dictionaries. Current end is the last completed absolute
-    hour. At a new local calendar boundary no interval exists yet; do not fall
+    Return JSON-safe dictionaries. An optional strict ISO date selects a past
+    or current calendar period in the measurement zone; it never replaces the
+    trusted server clock. Past periods end at their actual calendar boundary.
+    Current end is the last completed absolute hour. At a new local calendar
+    boundary no interval exists yet; do not fall
     back to yesterday or invent zero. ``mean7`` retains all seven windows even
     if a baseline is unresolvable. No measured-data completeness is implied.
     """
@@ -127,7 +130,20 @@ def resolve_analysis_periods(kind, now, timezone_name):
         if now.utcoffset() is None:
             return {**result, "reason": "aware_server_clock_required"}
         end = now.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
-        day = now.astimezone(zone).date()
+        today = now.astimezone(zone).date()
+        day = today
+        if anchor is not None:
+            try:
+                if type(anchor) is not str or len(anchor) != 10:
+                    raise ValueError('invalid_anchor')
+                selected = date.fromisoformat(anchor)
+                if selected.isoformat() != anchor:
+                    raise ValueError('invalid_anchor')
+            except (ValueError, TypeError):
+                return {**result, "reason": "invalid_analysis_anchor"}
+            if selected > today:
+                return {**result, "reason": "future_analysis_anchor"}
+            day = selected
         if kind == "week":
             day -= timedelta(days=day.weekday())
         elif kind == "month":
@@ -137,6 +153,9 @@ def resolve_analysis_periods(kind, now, timezone_name):
             if day.year == 1:
                 raise ValueError('no_previous_year')
         start, limit = _wall(day, zone), _wall(_next(day, kind), zone)
+        # A selected past calendar period is complete. The server remains the
+        # only authority for unfinished current periods and future selections.
+        end = min(end, limit)
         if end < start:
             # E.g. a UTC hour preceding local half-hour midnight.
             return {**result, "reason": "calendar_boundary_not_recorder_hour"}
