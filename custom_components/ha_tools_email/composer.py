@@ -10,6 +10,20 @@ from typing import Any, Iterable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 try:
+    from .energy_measurements import calendar_grid, source_cells, valid_provenance, validated_source_ids
+except ImportError:  # Existing pure tests also load composer directly by filename.
+    import importlib.util
+    from pathlib import Path
+    _measurements_spec = importlib.util.spec_from_file_location(
+        'ha_tools_email_measurements', Path(__file__).with_name('energy_measurements.py'))
+    _measurements = importlib.util.module_from_spec(_measurements_spec)
+    _measurements_spec.loader.exec_module(_measurements)
+    calendar_grid = _measurements.calendar_grid
+    source_cells = _measurements.source_cells
+    valid_provenance = _measurements.valid_provenance
+    validated_source_ids = _measurements.validated_source_ids
+
+try:
     from .const import (
         CADENCE_DAILY,
         CADENCE_MONTHLY,
@@ -982,41 +996,21 @@ def _compare_source_intervals(current, previous, comparison):
     result = {**comparison, "status": "unknown", "reason": "incomplete_statistics",
               "current_kwh": None, "previous_kwh": None, "delta_kwh": None,
               "percent": None, "full_current_kwh": None, "full_previous_kwh": None}
-    ids, prior_ids = current.get("source_ids"), previous.get("source_ids")
-    if any(not isinstance(value, list) or not value or len(value) > 256
-           or any(not isinstance(sid, str) or not sid for sid in value)
-           or len(set(value)) != len(value) for value in (ids, prior_ids)):
+    try:
+        ids, prior_ids = validated_source_ids(current), validated_source_ids(previous)
+    except ValueError:
         return result
     if set(ids) != set(prior_ids):
         return {**result, "reason": "source_set_changed"}
     provenance, prior = current.get("measurement_provenance"), previous.get("measurement_provenance")
     if (not isinstance(provenance, dict) or not isinstance(prior, dict)
             or set(provenance) != set(ids) or provenance != prior
-            or any(not isinstance(provenance[sid], dict)
-                   or provenance[sid].get("method") != "recorder_hourly_change_v1"
-                   or provenance[sid].get("unit") != "kWh"
-                   or provenance[sid].get("source_unit") not in {"Wh", "kWh", "MWh"}
-                   or provenance[sid].get("has_sum") is not True
-                   or provenance[sid].get("unit_class") not in {None, "energy"} for sid in ids)):
+            or any(not valid_provenance(provenance[sid]) for sid in ids)):
         return {**result, "reason": "measurement_provenance_unavailable_or_changed"}
     try:
-        zone = ZoneInfo(comparison["timezone"])
-        grids = []
-        for prefix in ("current", "previous"):
-            start, end = (datetime.fromisoformat(comparison[f"{prefix}_{key}"]) for key in ("start", "end"))
-            if start.utcoffset() is None or end.utcoffset() is None:
-                return result
-            first, last = start.timestamp(), end.timestamp()
-            if first % 3600 or last % 3600 or not 0 < last - first <= 366 * 86400:
-                return result
-            origin = start.astimezone(zone).date()
-            grid = {}
-            for stamp in range(int(first), int(last), 3600):
-                local = datetime.fromtimestamp(stamp, zone)
-                day = ((local.month, local.day) if comparison.get("calendar_kind") == "yearly"
-                       else (local.date() - origin).days)
-                grid[stamp * 1000] = (day, local.hour, local.minute, local.fold)
-            grids.append(grid)
+        grids = [calendar_grid(comparison[f'{prefix}_start'], comparison[f'{prefix}_end'],
+                               comparison['timezone'], comparison.get('calendar_kind'))
+                 for prefix in ('current', 'previous')]
         # Process one source at a time: memory is bounded by two calendar years,
         # rather than a source-count by year matrix.
         measured = [0, 0]
@@ -1025,25 +1019,7 @@ def _compare_source_intervals(current, previous, comparison):
         for sid in ids:
             cells = []
             for index, snapshot in enumerate((current, previous)):
-                buckets = snapshot.get("source_buckets")
-                rows = buckets.get(sid) if isinstance(buckets, dict) else None
-                if not isinstance(rows, list) or len(rows) > 10000:
-                    return result
-                seen, valid = set(), {}
-                for row in rows:
-                    if not isinstance(row, dict):
-                        continue
-                    stamp, stop, value = row.get("from"), row.get("to"), row.get("kwh")
-                    if type(stamp) not in (int, float) or stamp not in grids[index]:
-                        continue
-                    key = grids[index][stamp]
-                    if stamp in seen:
-                        valid.pop(key, None)
-                        continue
-                    seen.add(stamp)
-                    if (type(stop) in (int, float) and stop == stamp + 3600000
-                            and type(value) in (int, float) and isfinite(value) and value >= 0):
-                        valid[key] = value
+                valid = source_cells(snapshot, sid, grids[index])
                 measured[index] += len(valid)
                 totals[index].append(fsum(valid.values()))
                 cells.append(valid)
