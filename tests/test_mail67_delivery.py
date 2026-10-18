@@ -1,6 +1,7 @@
 """Mail67: actual schema2 service and renderer; only external IO is stubbed."""
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 import importlib
 import json
 import unittest
@@ -83,7 +84,8 @@ class ActualDeliveryTest(unittest.IsolatedAsyncioTestCase):
             read=await self.build(h,'report_read')
             execute=await self.build(h)
             self.assertNotEqual(read['snapshot_id'],execute['snapshot_id'])
-            self.assertEqual('240',execute['summary']['total_kwh'])
+            self.assertIsInstance(execute['summary']['total_kwh'],str)
+            self.assertEqual(Decimal('240'),Decimal(execute['summary']['total_kwh']))
             self.assertEqual(execute['snapshot_id'],execute['summary']['snapshot_id'])
             self.assertIn(execute['snapshot_id'],execute['csv'])
             self.assertIn(execute['snapshot_id'],execute['html'])
@@ -183,6 +185,7 @@ class ActualDeliveryTest(unittest.IsolatedAsyncioTestCase):
                 h.on_auth=revoke_on_native_lookup
             if mode=='missing_actor':actor=None
             if mode=='strict_authorless':
+                actor=None  # Exercise the real private schedule capability, not an authenticated admin.
                 expected={'id':'s','kind':'energy_report','cadence':'daily','enabled':True}
                 h.policy['features']={'energy_reports':{'execute':{
                     'mode':'selected_users','user_ids':['real-admin']}}}
