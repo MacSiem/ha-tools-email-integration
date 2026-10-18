@@ -136,6 +136,62 @@ class PriceQueriesTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(*tasks)
         self.assertEqual(1, maximum)
 
+    async def test_cpu_lane_is_retained_across_coordinator_replacement(self):
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = []
+        async def executor(fn):
+            calls.append(1)
+            entered.set()
+            await release.wait()
+            return fn()
+        hass = types.SimpleNamespace(data={}, config=types.SimpleNamespace(time_zone='UTC'),
+                                     async_add_executor_job=executor)
+        first = energy.EnergySnapshotCoordinator(hass, Storage())
+        a = asyncio.create_task(first._async_run_cpu(lambda: 1))
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        first.async_stop()
+        second = energy.EnergySnapshotCoordinator(hass, Storage())
+        b = asyncio.create_task(second._async_run_cpu(lambda: 2))
+        try:
+            await asyncio.sleep(.01)
+            self.assertEqual(1, len(calls))
+        finally:
+            release.set()
+            await asyncio.gather(a, b, return_exceptions=True)
+
+    async def test_cancelled_request_keeps_cpu_lane_until_its_thread_really_finishes(self):
+        import threading
+        entered, release = asyncio.Event(), threading.Event()
+        loop = asyncio.get_running_loop()
+        calls = []
+        def blocked():
+            loop.call_soon_threadsafe(entered.set)
+            if not release.wait(timeout=2):
+                raise RuntimeError('test_release_missing')
+        c = coordinator()
+        a = asyncio.create_task(c._async_run_cpu(blocked))
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        a.cancel()
+        b = asyncio.create_task(c._async_run_cpu(lambda: calls.append('second')))
+        try:
+            await asyncio.sleep(.02)
+            self.assertFalse(calls)
+        finally:
+            release.set()
+            await asyncio.gather(a, b, return_exceptions=True)
+
+    async def test_dst_fold_buckets_preserve_absolute_frames_and_pricing(self):
+        p = classified()
+        p['timezone'] = 'Europe/Warsaw'
+        rows = [{'from': '2026-10-25T02:00:00+02:00', 'to': '2026-10-25T02:00:00+01:00', 'kwh': 1},
+                {'from': '2026-10-25T02:00:00+01:00', 'to': '2026-10-25T03:00:00+01:00', 'kwh': 1}]
+        result = (await coordinator().async_price_queries([query(rows)], profile=p))['results'][0]
+        self.assertTrue(result['complete'])
+        self.assertEqual(.8, result['usageCost'])
+        self.assertEqual(3600000, result['rows'][1]['from'] - result['rows'][0]['from'])
+        self.assertEqual([0, 1], [r['index'] for r in result['rows']])
+
+
 
 class FinalAuthGuardTests(unittest.IsolatedAsyncioTestCase):
     async def exercise(self, handler, mutation, *, profile_missing=True):
