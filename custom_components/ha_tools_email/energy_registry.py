@@ -4,7 +4,7 @@ Callers supply one verified interval and one captured registry snapshot. This
 module makes no historical room claim and does not read HA, price or allocate
 missing consumption. HA IO and revision invalidation belong to the coordinator.
 """
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from math import isfinite
 
 MAX_SOURCES = 512
@@ -55,22 +55,34 @@ def resolve_membership(source_ids, registries, *, captured_at, revision):
 
 
 def _energy(value):
-    if type(value) in (int, float) and isfinite(value) and 0 <= value <= 1e12:
+    if type(value) in (int, float) and 0 <= value <= 1e12 and isfinite(value):
         return Decimal(str(value))
     return None
 
 
-def build_interval_breakdown(grid_kwh, consumers, membership):
+def build_interval_breakdown(grid_kwh, consumers, membership, *, domain='grid_import'):
     """Partition measured parents into direct-child totals and parent residuals.
 
-    Every row must explicitly share the grid_import domain. A site-consumption
-    meter behind PV/battery cannot prove a grid-import partition. A missing or
-    inconsistent value remains unknown; it is never distributed proportionally.
+    Every row must explicitly share the chosen domain. Independent consumption
+    behind PV/battery retains rooms, without claiming a partition of grid import.
+    Decimal strings retain residuals for the single downstream pricing engine.
     """
+    with localcontext() as context:
+        context.prec = 40
+        return _interval_breakdown(grid_kwh, consumers, membership, domain)
+
+
+def _interval_breakdown(grid_kwh, consumers, membership, domain):
     empty = {"status": "unknown", "issues": [], "devices": {}, "areas": {}, "floors": {},
-             "unassigned": {"kwh": None}, "unmeasured": {"kwh": None}, "partition_kwh": None,
+             "unassigned": {"kwh": None, "kwh_decimal": None},
+             "unmeasured": {"kwh": None, "kwh_decimal": None},
+             "partition_kwh": None, "partition_kwh_decimal": None,
+             "energy_domain": domain, "groups_complete": False, "configured_consumers": None,
+             "measured_consumption_kwh": None, "measured_consumption_kwh_decimal": None,
              "membership_as_of": membership.get("captured_at"),
              "registry_revision": membership.get("revision"), "membership_mode": "current_snapshot"}
+    if domain not in ('grid_import', 'site_consumption'):
+        return {**empty, "issues": [{"reason": "unsupported_energy_domain"}]}
     if not isinstance(consumers, list) or len(consumers) > MAX_SOURCES:
         return {**empty, "issues": [{"reason": "invalid_consumers"}]}
     nodes, children = {}, {}
@@ -80,7 +92,7 @@ def build_interval_breakdown(grid_kwh, consumers, membership):
         if (not isinstance(sid, str) or not sid or sid in nodes
                 or (parent is not None and (not isinstance(parent, str) or not parent))):
             return {**empty, "issues": [{"reason": "duplicate_or_invalid_source"}]}
-        if row.get("domain") != "grid_import":
+        if row.get("domain") != domain:
             return {**empty, "issues": [{"reason": "domain_mismatch", "source_id": sid}]}
         nodes[sid] = {"parent": parent, "value": _energy(row.get("kwh"))}
         children.setdefault(parent, []).append(sid)
@@ -108,7 +120,9 @@ def build_interval_breakdown(grid_kwh, consumers, membership):
         assignment = _mapping(memberships.get(sid))
         area_id, floor_id = assignment.get("area_id"), assignment.get("floor_id")
         devices[sid] = {"kwh": None if residual is None else float(residual),
+                        "kwh_decimal": None if residual is None else str(residual),
                         "measured_kwh": None if value is None else float(value),
+                        "measured_kwh_decimal": None if value is None else str(value),
                         "attribution": "parent_residual" if descendants else "measured",
                         "area_id": area_id, "floor_id": floor_id, "parent_id": node["parent"]}
         if area_id is None:
@@ -119,14 +133,20 @@ def build_interval_breakdown(grid_kwh, consumers, membership):
 
     def group(values):
         known = sum((v for v in values if v is not None), Decimal(0))
+        observed = not values or any(v is not None for v in values)
+        complete = all(v is not None for v in values)
         return {"kwh": float(known) if all(v is not None for v in values) else None,
-                "measured_kwh": float(known), "complete": all(v is not None for v in values)}
+                "kwh_decimal": str(known) if complete else None,
+                "measured_kwh": float(known) if observed else None,
+                "measured_kwh_decimal": str(known) if observed else None, "complete": complete}
 
     roots = [nodes[sid]["value"] for sid in children.get(None, [])]
     root_total = sum(roots, Decimal(0)) if all(v is not None for v in roots) else None
     grid = _energy(grid_kwh)
     unmeasured = None
-    if grid is not None and root_total is not None and not any(i["reason"] == "children_exceed_parent" for i in issues):
+    if domain != 'grid_import':
+        issues.append({"reason": "domain_mismatch"})
+    elif grid is not None and root_total is not None and not any(i["reason"] == "children_exceed_parent" for i in issues):
         if root_total > grid:
             issues.append({"reason": "consumption_exceeds_grid_import"})
         else:
@@ -135,8 +155,14 @@ def build_interval_breakdown(grid_kwh, consumers, membership):
         issues.append({"reason": "unknown_measurement"})
     ready = not issues and unmeasured is not None
     return {**empty, "status": "ready" if ready else "partial", "issues": issues,
+            "groups_complete": all(row['kwh_decimal'] is not None for row in devices.values()),
+            "configured_consumers": len(nodes),
+            "measured_consumption_kwh": float(root_total) if nodes and root_total is not None else None,
+            "measured_consumption_kwh_decimal": str(root_total) if nodes and root_total is not None else None,
             "devices": devices, "areas": {key: group(values) for key, values in area_values.items()},
             "floors": {key: group(values) for key, values in floor_values.items()},
             "unassigned": group(unassigned),
-            "unmeasured": {"kwh": None if unmeasured is None else float(unmeasured)},
-            "partition_kwh": float(grid) if ready else None}
+            "unmeasured": {"kwh": None if unmeasured is None else float(unmeasured),
+                           "kwh_decimal": None if unmeasured is None else str(unmeasured)},
+            "partition_kwh": float(grid) if ready else None,
+            "partition_kwh_decimal": str(grid) if ready else None}

@@ -28,14 +28,17 @@ def consumer(sid, kwh, parent=None, domain='grid_import'):
 
 class EnergyRegistryTest(unittest.TestCase):
     def test_decimal_residuals_remain_exact_for_subsequent_cost_calculation(self):
-        rows = [consumer('sensor.parent', 1000000),
-                consumer('sensor.child', .12345678901234568, 'sensor.parent')]
-        r = registry.build_interval_breakdown(1000000, rows, memberships())
-        self.assertEqual('999999.87654321098765432', r['devices']['sensor.parent']['kwh_decimal'])
-        self.assertEqual('0.12345678901234568', r['devices']['sensor.child']['kwh_decimal'])
-        self.assertEqual(Decimal(1000000), sum((Decimal(area['kwh_decimal'])
-                         for area in r['areas'].values()), Decimal(0)))
-        self.assertEqual('0', r['unmeasured']['kwh_decimal'])
+        for parent, residual in [(1000000, '999999.87654321098765432'),
+                                 (1000000000000, '999999999999.87654321098765432')]:
+            with self.subTest(parent=parent):
+                rows = [consumer('sensor.parent', parent),
+                        consumer('sensor.child', .12345678901234568, 'sensor.parent')]
+                r = registry.build_interval_breakdown(parent, rows, memberships())
+                self.assertEqual(residual, r['devices']['sensor.parent']['kwh_decimal'])
+                self.assertEqual('0.12345678901234568', r['devices']['sensor.child']['kwh_decimal'])
+                self.assertEqual(Decimal(parent), sum((Decimal(area['kwh_decimal'])
+                                 for area in r['areas'].values()), Decimal(0)))
+                self.assertEqual('0', r['unmeasured']['kwh_decimal'])
 
     def test_independent_consumption_keeps_rooms_without_claiming_grid_partition(self):
         rows = [consumer('sensor.parent', 100, domain='site_consumption'),
