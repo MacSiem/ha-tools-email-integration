@@ -77,6 +77,14 @@ async def test_native_analysis_selected_comparison_chart_and_policy(hass, hass_s
             assert costs['status'] == 'ready' and costs['delta_cost'] == '0.00'
             assert len(costs['baselines']) == 7
             assert costs['current']['usage_cost'] == costs['baseline']['usage_cost'] == result['totals']['usage_cost']
+            groups = compared['groups']
+            assert groups['reconciles_household_delta']
+            group = groups['unassigned']
+            assert tuple(Decimal(group[key]) for key in ('current_kwh', 'baseline_kwh', 'delta_kwh')) == (Decimal(3), Decimal(3), Decimal(0))
+            assert group['delta_usage_cost'] == '0.00'
+            assert group['costs']['baseline']['period_count'] == 7
+            assert groups['membership_as_of'] == result['groups']['captured_at']
+            assert 'fixed_cost' not in group['costs']['current']
         else:
             group = compared['groups']['unassigned']
         if missing_consumer_hour:
