@@ -56,7 +56,7 @@ _LABELS = {
     'comparison_scope': ('Zakres porównania', 'Comparison scope'),
     'currency': ('Waluta', 'Currency'), 'price_basis': ('Podstawa ceny', 'Price basis'),
 }
-_CSS = ('body{margin:0;background:#eef2f7;color:#202a38;font:13px Arial,sans-serif}'
+_CSS = ('body{margin:0;background:#eef2f7;color:#202a38;font:14px Arial,sans-serif}'
         'table{border-collapse:collapse;width:100%;table-layout:fixed}'
         '.report{max-width:640px;margin:0 auto;background:#fff}'
         'caption,th,td{text-align:left;padding:5px;vertical-align:top;overflow-wrap:anywhere}'
@@ -66,19 +66,19 @@ _CSS = ('body{margin:0;background:#eef2f7;color:#202a38;font:13px Arial,sans-ser
         '.period td{background:#284c80;color:#edf4ff;padding:0 16px 12px;border:0;font-size:12px}'
         '.kpis{margin-top:12px}.kpi-card{padding:5px;border:0}'
         '.kpi-card table{background:#eef4fc;border:1px solid #d8e0eb}'
-        '.kpi-card td{padding:4px 7px;border:0}.kpi-label{font-size:11px;color:#536274}'
-        '.kpi-number{font-size:20px;font-weight:bold}.kpi-unit{font-size:11px}'
-        '.note{font-size:11px;color:#536274}.timeline .chart-column{padding:1px;vertical-align:bottom;border:0}'
+        '.kpi-card td{padding:4px 7px;border:0}.kpi-label{font-size:12px;color:#536274}'
+        '.kpi-number{font-size:20px;font-weight:bold}.kpi-unit{font-size:12px}'
+        '.note{font-size:12px;color:#536274}.timeline .chart-column{padding:1px;vertical-align:bottom;border:0}'
         '.column{height:96px}.column td{padding:0;border:0;line-height:0;font-size:0}'
-        '.axis td{padding:3px 0;border:0;font-size:9px;white-space:normal}'
+        '.axis td{padding:3px 0;border:0;font-size:12px;white-space:normal}'
         '.flow-source{margin-top:10px}.flow-source td,.flow-source th{padding:4px}'
         '.bar-track{background:#e4e9f0}.bar-track td{padding:0;border:0;height:7px;line-height:7px}'
         '.bar-fill,.zone-0{background:#2877cb}.zone-1{background:#8553b9}'
         '.zone-2{background:#c16a18}.zone-3{background:#167d73}.unmeasured{background:#7b8595}'
-        '[data-section="source-times"]{font-size:11px}'
+        '[data-section="source-times"]{font-size:12px}'
         '@media(max-width:420px){.kpi-card{display:block;width:100%!important;box-sizing:border-box}'
         '.kpi-card table{table-layout:auto}.kpi-card .kpi-number{font-size:18px}'
-        'caption,th,td{padding:4px}.header{font-size:19px}.axis td{font-size:8px}}'
+        'caption,th,td{padding:4px}.header{font-size:19px}.axis td{font-size:12px}}'
         '@media(prefers-color-scheme:dark){body{background:#101318;color:#edf1f7}'
         '.report{background:#1b1f26}.header,.period td{background:#284c80;color:#fff}'
         'th,.kpi-card table{background:#272f3d;color:#edf1f7}'
@@ -494,7 +494,8 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     html_parts.append('</tr><tr class="axis">')
     # A label spans its interval group. Putting 05:00 in one 1/24-width
     # cell wraps digits on narrow mail viewports even when ticks are sparse.
-    stride = 1 if chart.get('grain') == 'month' else 3
+    stride = (1 if chart.get('grain') == 'month' else 6
+              if chart.get('grain') == 'day' or hour_cycle == '12' else 3)
     for index in range(0, len(bins), stride):
         point = short_stamp(('chart', 'bins', index, 'start'), clock_only=chart.get('grain') == 'hour')
         if chart.get('grain') != 'hour' and point != unknown:
