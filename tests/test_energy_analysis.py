@@ -1,0 +1,93 @@
+"""A single immutable household calculation assembled from bounded chunks."""
+import copy
+from datetime import datetime, timezone
+from decimal import Decimal
+import importlib.util
+from pathlib import Path
+import sys
+import types
+import unittest
+from unittest.mock import patch
+from tests.test_energy_weighted_comparison import readings
+from tests.test_tariff_history import book, version, tariff
+
+ROOT = Path(__file__).resolve().parents[1] / 'custom_components/ha_tools_email'
+package = types.ModuleType('analysis_fixture'); package.__path__ = [str(ROOT)]
+with patch.dict(sys.modules, {package.__name__: package}):
+    spec = importlib.util.spec_from_file_location(package.__name__ + '.energy_analysis', ROOT / 'energy_analysis.py')
+    analysis = importlib.util.module_from_spec(spec); spec.loader.exec_module(analysis)
+
+
+class EnergyAnalysisTest(unittest.TestCase):
+    def builder(self, b='configured'):
+        if b == 'configured':
+            b = book([version(monthly=31)])
+            b['tariffs'].append(tariff([version(rate=.5, monthly=31)], 'alternative'))
+        return analysis.EnergyAnalysisAccumulator(b,
+            {'start': '2026-01-01T00:00Z', 'end': '2026-01-01T02:00Z', 'timezone': 'UTC', 'kind': 'day'},
+            {'entry_id': 'synthetic', 'tariff_revision': 4, 'registry_revision': 2},
+            generated_at=datetime(2026, 1, 1, 2, 34, tzinfo=timezone.utc))
+
+    def add(self, builder, start, end, value):
+        return builder.add_chunk(readings(start, end, value=value, sources=('sensor.grid',)), start, end)
+
+    def test_two_chunks_price_once_with_identical_alternatives_and_calendar_fees(self):
+        builder = self.builder()
+        self.add(builder, '2026-01-01T00:00Z', '2026-01-01T01:00Z', 1)
+        self.add(builder, '2026-01-01T01:00Z', '2026-01-01T02:00Z', 2)
+        result = builder.finish()
+        self.assertEqual(2, result['schema'])
+        self.assertEqual('ready', result['status'])
+        self.assertEqual(Decimal(3), Decimal(result['totals']['kwh']))
+        self.assertEqual('3.00', result['totals']['energy_cost'])
+        self.assertEqual('0.08', result['totals']['fixed_cost'])
+        self.assertEqual('3.08', result['totals']['total_cost'])
+        other = next(row for row in result['alternatives'] if row['tariff_id'] == 'alternative')
+        self.assertEqual('1.58', other['total_cost'])
+        self.assertEqual('-1.50', other['delta_cost'])
+        self.assertEqual(result['measurement_fingerprint'], other['measurement_fingerprint'])
+        self.assertEqual(7200, result['coverage']['expected_source_seconds'])
+        self.assertEqual(7200, result['coverage']['measured_source_seconds'])
+        original_id = result['snapshot_id']
+        result['totals']['energy_cost'] = 'tampered'
+        again = builder.finish()
+        self.assertEqual('3.00', again['totals']['energy_cost'])
+        self.assertEqual(original_id, again['snapshot_id'])
+        with self.assertRaises(ValueError):
+            self.add(builder, '2026-01-01T02:00Z', '2026-01-01T03:00Z', 1)
+
+    def test_missing_stays_unknown_but_calendar_fees_and_known_costs_remain(self):
+        builder = self.builder()
+        self.add(builder, '2026-01-01T00:00Z', '2026-01-01T01:00Z', None)
+        self.add(builder, '2026-01-01T01:00Z', '2026-01-01T02:00Z', 2)
+        result = builder.finish()
+        self.assertEqual('partial', result['status'])
+        self.assertIsNone(result['totals']['kwh'])
+        self.assertIsNone(result['totals']['total_cost'])
+        self.assertEqual('0.08', result['totals']['fixed_cost'])
+        self.assertEqual('2.00', result['totals']['known_costs']['energy_cost'])
+        self.assertEqual(.5, result['coverage']['ratio'])
+        self.assertIsNone(result['buckets'][0]['kwh'])
+
+    def test_no_tariff_keeps_measured_energy_without_a_fictional_zero_bill(self):
+        builder = self.builder(None)
+        self.add(builder, '2026-01-01T00:00Z', '2026-01-01T01:00Z', 1)
+        self.add(builder, '2026-01-01T01:00Z', '2026-01-01T02:00Z', 2)
+        result = builder.finish()
+        self.assertEqual(Decimal(3), Decimal(result['totals']['kwh']))
+        self.assertIsNone(result['totals']['total_cost'])
+        self.assertEqual('not_configured', result['pricing_status'])
+        self.assertEqual([], result['alternatives'])
+
+    def test_gap_overlap_or_changed_sources_reject_without_poisoning_prior_chunks(self):
+        builder = self.builder()
+        self.add(builder, '2026-01-01T00:00Z', '2026-01-01T01:00Z', 1)
+        with self.assertRaises(ValueError):
+            builder.finish()
+        with self.assertRaises(ValueError):
+            self.add(builder, '2026-01-01T00:00Z', '2026-01-01T01:00Z', 1)
+        changed = readings('2026-01-01T01:00Z', '2026-01-01T02:00Z', sources=('sensor.other',))
+        with self.assertRaisesRegex(ValueError, 'energy_sources_changed'):
+            builder.add_chunk(changed, '2026-01-01T01:00Z', '2026-01-01T02:00Z')
+        self.add(builder, '2026-01-01T01:00Z', '2026-01-01T02:00Z', 2)
+        self.assertEqual('3.08', builder.finish()['totals']['total_cost'])
