@@ -1,5 +1,4 @@
 """Detailed schema2 route must use authenticated identity and final context fences."""
-import copy
 import unittest
 from tests import test_tariff_book_websocket as fixtures
 

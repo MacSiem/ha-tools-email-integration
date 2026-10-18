@@ -190,6 +190,40 @@ async def _ws_set_tariff_book(hass, connection, msg):
 
 
 @websocket_api.websocket_command({
+    vol.Required('type'): f'{DOMAIN}/energy_analysis',
+    vol.Optional('period', default='day'): vol.In(('day', 'week', 'month', 'year')),
+})
+@websocket_api.async_response
+async def _ws_energy_analysis(hass, connection, msg):
+    """Detailed source-aware analysis; identity comes only from the connection."""
+    if not await _snapshot_authorized(hass, connection):
+        connection.send_error(msg['id'], 'unauthorized', 'Active household user required.')
+        return
+    service = hass.data.get(DOMAIN, {}).get('energy_analysis')
+    if service is None:
+        connection.send_error(msg['id'], 'energy_analysis_unavailable', 'Energy analysis is unavailable.')
+        return
+    user_id = connection.user.id
+    try:
+        result = await service.async_get_analysis(msg.get('period', 'day'), user_id)
+        if not await _snapshot_authorized(hass, connection):
+            raise PermissionError('energy_sources_unauthorized')
+        # This last async validation includes the concrete current source access
+        # policy. Do not insert another await before the final context/send.
+        await service.async_validate_result(result, user_id)
+        if (hass.data.get(DOMAIN, {}).get('energy_analysis') is not service
+                or not service.context_is_current(result)):
+            raise RuntimeError('energy_analysis_changed')
+    except PermissionError:
+        connection.send_error(msg['id'], 'unauthorized', 'Energy source access required.')
+        return
+    except Exception:
+        connection.send_error(msg['id'], 'energy_analysis_unavailable', 'Energy analysis is unavailable.')
+        return
+    connection.send_result(msg['id'], result)
+
+
+@websocket_api.websocket_command({
     vol.Required('type'): f'{DOMAIN}/energy_snapshot',
     vol.Optional('profile'): vol.Any(dict, None),
 })
@@ -598,6 +632,7 @@ def async_register_commands(hass: HomeAssistant) -> None:
         _ws_preview_tariff_book,
         _ws_set_tariff_book,
         _ws_energy_snapshot,
+        _ws_energy_analysis,
         _ws_energy_price_queries,
         _ws_set_tariff,
         _ws_get_config,
