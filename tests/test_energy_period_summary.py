@@ -244,3 +244,18 @@ class EnergyPeriodSummaryTest(unittest.TestCase):
         self.assertEqual(values[1], summary['peak_hour']['kwh'])
         self.assertEqual(1767229200000, summary['peak_hour']['from'])
         self.assertEqual(1, summary['peak_hour']['tied_count'])
+
+    def test_unavailable_timezone_keeps_energy_without_inventing_local_peak_time(self):
+        summary = self.build([6, 4], book=self.classified_book(),
+                             zone='Invalid/Timezone').finish()['period_summary']
+        self.assertEqual('0.6', summary['cheap_zone_share']['ratio'])
+        self.assertTrue(summary['zone_breakdown']['reconciles_recorded_kwh'])
+        peak = summary['peak_hour']
+        self.assertEqual('unknown', peak['status'])
+        self.assertEqual('measurement_timezone_unavailable', peak['reason'])
+        self.assertEqual('6.0', peak['kwh'])
+        self.assertEqual('2026-01-01T00:00:00+00:00', peak['start'])
+        self.assertIsNone(peak['local_start'])
+        self.assertIsNone(peak['local_end'])
+        self.assertIsNone(peak['fold'])
+        self.assertIsNone(peak['end_fold'])
