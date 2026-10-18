@@ -18,10 +18,12 @@ class PairedComparisonAccumulator:
         self._periods = [deepcopy(current_period), deepcopy(baseline_period)]
         self._grids = [calendar_grid(p['start'], p['end'], timezone_name, calendar_kind)
                        for p in self._periods]
-        for grid in self._grids:
-            keys = list(grid.values())
-            if any(a >= b for a, b in zip(keys, keys[1:])):
-                raise ValueError('unsupported_calendar_frame_order')
+        common = set(self._grids[0].values()) & set(self._grids[1].values())
+        sequences = [[key for key in grid.values() if key in common] for grid in self._grids]
+        # Multi-hour rollback is not lexicographically sorted. Match in the
+        # actual shared frame order and skip frames absent on the other side.
+        self._aligned = sequences[0] == sequences[1]
+        self._ranks = {key: rank for rank, key in enumerate(sequences[0])}
         self._ends = [_instant(p['end']) for p in self._periods]
         self._cursors = [_instant(p['start']) for p in self._periods]
         self._slots = [None, None]
@@ -55,14 +57,13 @@ class PairedComparisonAccumulator:
                 or end-start > timedelta(hours=168)):
             raise ValueError('comparison_chunk_gap_overlap_or_too_large')
         ids = sorted(validated_source_ids(snapshot))
-        provenance = snapshot.get('measurement_provenance')
-        if (not isinstance(provenance, dict) or set(provenance) != set(ids)
-                or any(not valid_provenance(provenance[sid]) for sid in ids)):
-            raise ValueError('measurement_provenance_unavailable_or_changed')
+        raw_provenance = snapshot.get('measurement_provenance')
+        raw_provenance = raw_provenance if isinstance(raw_provenance, dict) else {}
+        provenance = {sid: raw_provenance[sid] for sid in ids if valid_provenance(raw_provenance.get(sid))}
         if self._ids is not None and (ids != self._ids or provenance != self._provenance):
             raise ValueError('energy_sources_changed')
         grid = {stamp: self._grids[index][stamp] for stamp in hour_grid(start, end)}
-        cells = {sid: source_cells(snapshot, sid, grid) for sid in ids}
+        cells = {sid: source_cells(snapshot, sid, grid) if sid in provenance else {} for sid in ids}
         count = sum(len(values) for values in cells.values())
         total = fsum(value for values in cells.values() for value in values.values())
         if not isfinite(total):
@@ -84,11 +85,21 @@ class PairedComparisonAccumulator:
             self._slots[index] = None
 
     def _drain(self):
+        if not self._aligned:
+            # Actual complete-period totals do not depend on frame alignment.
+            # Conflicting historical common-frame orders cannot supply a
+            # partial matched total; retain own evidence and report unknown.
+            self._slots = [None, None]
+            return
         while True:
             left, right = self._slots
             if left is not None and right is not None:
                 a, b = left['frames'][left['head']], right['frames'][right['head']]
-                if a == b:
+                if a not in self._ranks:
+                    self._advance(0)
+                elif b not in self._ranks:
+                    self._advance(1)
+                elif a == b:
                     values = [[], []]
                     for sid in self._ids:
                         x, y = left['cells'][sid].get(a), right['cells'][sid].get(b)
@@ -99,7 +110,7 @@ class PairedComparisonAccumulator:
                         self._common_totals[i].append(fsum(values[i]))
                     self._advance(0); self._advance(1)
                 else:
-                    self._advance(0 if a < b else 1)
+                    self._advance(0 if self._ranks[a] < self._ranks[b] else 1)
                 continue
             # Unmatched tails already contributed their own actual totals.
             for i in (0, 1):
@@ -128,7 +139,11 @@ class PairedComparisonAccumulator:
                       'measured_current_seconds': self._measured[0]*3600,
                       'measured_baseline_seconds': self._measured[1]*3600,
                       'common_source_seconds': self._common*3600}}
-        if complete or all(value >= .9 for value in (*own, *common)):
+        if not self._aligned:
+            result['reason'] = 'unsupported_common_calendar_order'
+        elif len(self._provenance) != len(self._ids):
+            result['reason'] = 'measurement_provenance_unavailable'
+        if complete or self._aligned and all(value >= .9 for value in (*own, *common)):
             actual, baseline = totals if complete else [fsum(parts) for parts in self._common_totals]
             delta = actual-baseline
             percent = delta/baseline*100 if baseline else None

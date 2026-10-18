@@ -1,7 +1,7 @@
 """Pure seven-day mean from actual compatible source-hour observations.
 
 All eight windows share one intersection when any is incomplete. This daily
-helper is bounded to 25 absolute hours per window; annual IO must stream.
+helper is bounded to 48 absolute hours per window; annual IO must stream.
 """
 from math import fsum, isfinite
 from zoneinfo import ZoneInfoNotFoundError
@@ -27,7 +27,7 @@ def compare_daily_mean7(current, baselines, current_period, baseline_periods, *,
                 or any(snapshot.get('measurement_provenance') != provenance for snapshot in baselines)):
             return {**result, 'reason': 'measurement_provenance_unavailable_or_changed'}
         grids = [calendar_grid(period['start'], period['end'], timezone_name, 'daily') for period in periods]
-        if any(len(grid) > 25 for grid in grids):
+        if any(len(grid) > 48 for grid in grids):
             return {**result, 'reason': 'daily_comparison_window_too_long'}
         measured, totals, shared = [0] * 8, [[] for _ in snapshots], [[] for _ in snapshots]
         common_count = 0

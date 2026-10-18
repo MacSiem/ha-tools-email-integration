@@ -251,8 +251,8 @@ class EnergyAnalysisService:
                     elif pair is not None:
                         compared = await self._cpu(pair.finish, guard)
                     else:
-                        # Mean7 is daily only: at most eight actual 23/24/25h
-                        # source windows, sharing one intersection across all8.
+                        # Mean7 is daily only: eight bounded civil-day windows,
+                        # including multi-hour rollbacks, sharing one mask.
                         days = []
                         for baseline in plan['baseline_periods']:
                             a, b = (datetime.fromisoformat(baseline[key]) for key in ('start', 'end'))
