@@ -10,6 +10,7 @@ class AnalysisWebsocketTest(unittest.IsolatedAsyncioTestCase):
         calls = []
         class Analysis:
             valid = True
+            validation_result = True
             get_hook = None
             validate_hook = None
             async def async_get_analysis(self, kind, user_id):
@@ -23,6 +24,7 @@ class AnalysisWebsocketTest(unittest.IsolatedAsyncioTestCase):
                     raise PermissionError('denied')
                 if self.validate_hook:
                     self.validate_hook()
+                return self.validation_result
             def context_is_current(self, result):
                 return self.valid
         service = Analysis(); hass.data['ha_tools_email']['energy_analysis'] = service
@@ -62,6 +64,13 @@ class AnalysisWebsocketTest(unittest.IsolatedAsyncioTestCase):
             await ws._ws_energy_analysis(hass, connection, {'id': 1})
             self.assertEqual([], results)
             self.assertEqual('energy_analysis_unavailable', errors[-1][1])
+
+    async def test_failed_async_validation_is_rejected_even_when_sync_context_matches(self):
+        ws, hass, service, connection, results, errors, calls = self.fixture()
+        service.validation_result = False
+        await ws._ws_energy_analysis(hass, connection, {'id': 1})
+        self.assertEqual([], results)
+        self.assertEqual('energy_analysis_unavailable', errors[-1][1])
 
     async def test_source_denial_or_private_exception_is_mapped_to_safe_error(self):
         for denied in (True, False):
