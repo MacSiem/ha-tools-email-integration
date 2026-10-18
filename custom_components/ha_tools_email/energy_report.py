@@ -294,7 +294,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
 
     def amount(parts):
         row = fact(parts)
-        return row[2] + (' ' + row[3] if row[3] else '') if row else unknown
+        return user_value(row) + (' ' + row[3] if row[3] else '') if row else unknown
 
     # Known status/scope values get human explanations. Future codes remain in
     # CSV; no technical code is promoted to a user-facing diagnosis or price.
@@ -348,6 +348,11 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         key = row[0].rsplit('.', 1)[-1]
         if key in ('status', 'reason', 'comparison_scope', 'scope', 'price_basis', 'comparison_reason'):
             return words.get(row[2], unknown)
+        if row[4] and (key.startswith('delta_') or key == 'percent'):
+            # A sign is presentation, never a recalculated comparison. The
+            # lossless source fact and CSV keep the producer's original value.
+            if not row[2].startswith(('-', '+')) and Decimal(row[2].replace(',', '.')) > 0:
+                return '+' + row[2]
         return row[2]
 
     def table(title_text, rows, *, section=None):
@@ -416,7 +421,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
 
     def exact(parts):
         row = fact(parts)
-        return row[2] if row else unknown
+        return user_value(row) if row else unknown
 
     def unit(parts):
         row = fact(parts)
@@ -583,7 +588,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         for field in ('percent', 'full_current_kwh', 'full_baseline_kwh'):
             row = fact((*cp, field))
             if row:
-                comparison_details.append((caption + ' · ' + title(field), row[2], row[3], None))
+                comparison_details.append((caption + ' · ' + title(field), user_value(row), row[3], None))
         for field in ('delta_cost', 'delta_total_cost', 'percent', 'status', 'reason', 'comparison_scope'):
             row = fact((*cp, 'costs', field))
             if row and not (field == 'reason' and row[2] == unknown):
