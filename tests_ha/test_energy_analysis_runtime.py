@@ -8,6 +8,7 @@ from homeassistant.components.recorder import models
 from homeassistant.components.recorder.statistics import async_add_external_statistics
 
 from custom_components.ha_tools_email.const import DOMAIN
+from custom_components.ha_tools_email.tariff_history import migrate_tariff_v1
 from tests_ha.test_ha_runtime import _setup
 from tests_ha.test_energy_runtime import profile
 
@@ -35,6 +36,9 @@ async def test_native_analysis_selected_comparison_chart_and_policy(hass, hass_s
     await recorder_mock.async_block_till_done()
     entry, storage = await _setup(hass)
     await storage.async_save_tariff(profile(), expected_revision=0)
+    # Detailed pricing reads the additive schema2 book. A legacy profile is
+    # deliberately not auto-migrated without an explicit semantics decision.
+    await storage.async_save_tariff_book(migrate_tariff_v1(profile(), legacy_combined=False), expected_revision=1)
     client = await hass_ws_client(hass, hass_read_only_access_token)
     msg = {'type': f'{DOMAIN}/energy_analysis', 'period': 'day',
            'anchor': '2026-10-18', 'comparison': 'previous'}
