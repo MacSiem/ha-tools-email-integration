@@ -54,7 +54,9 @@ def _finish(accumulator, context, provenance, comparisons=None, baseline_accumul
         for comparison in result['comparisons'].values():
             if 'chart' not in comparison:
                 comparison['chart'] = unknown_comparison_chart(
-                    result['period'].get('timezone'), result['period'].get('kind'),
+                    result['period'].get('timezone'),
+                    (result['period'].get('cadence') if result['period'].get('kind') == 'report_window'
+                     else result['period'].get('kind')),
                     comparison.get('reason') or 'comparison_projection_unavailable',
                     comparison.get('comparison_scope'))
         if baseline_accumulator is not None:
@@ -217,11 +219,44 @@ class EnergyAnalysisService:
             raise PermissionError('energy_report_actor_required')
         return _digest({'authenticated_user': actor})
 
+    @staticmethod
+    def _report_previous_plan(request, period, now):
+        """Select only an actual full-calendar previous period, before private IO.
+
+        Report kind stays report_window. The named kind below belongs solely to
+        the existing calendar resolver and the baseline chart accumulator.
+        """
+        if request.semantics == 'rolling_completed_hours':
+            return None
+        kind = {'daily': 'day', 'weekly': 'week', 'monthly': 'month'}[request.cadence]
+        resolved = resolve_analysis_periods(kind, now, request.timezone,
+                                          anchor=period['local_start'][:10])
+        current = resolved.get('current') or {}
+        if any(current.get(key) != period[key] for key in ('start', 'end', 'timezone')):
+            raise ValueError('report_comparison_plan_mismatch')
+        plan = resolved.get('comparisons', {}).get('previous')
+        if plan is None:
+            plan = {'status': 'unknown', 'reason': resolved.get('reason') or 'comparison_unavailable',
+                    'baseline_periods': []}
+        # A ready plan must describe exactly one prior calendar window. The
+        # resolver owns all DST/leap/fold alignment and existing period limits.
+        if plan['status'] == 'ready':
+            if len(plan['baseline_periods']) != 1:
+                raise ValueError('report_comparison_plan_mismatch')
+            prior = plan['baseline_periods'][0]
+            if (prior.get('timezone') != request.timezone or prior.get('end') != period['start']
+                    or prior.get('status') != 'ready' or prior.get('partial') is not False
+                    or prior.get('calendar_end') != prior.get('end')):
+                raise ValueError('report_comparison_plan_mismatch')
+        return kind, deepcopy(plan)
+
     def _capture_report(self, request, purpose, actor_signature):
         if type(request) is not ReportWindow or purpose not in ('report_read','report_execute'):
             raise ValueError('invalid_report_request')
         self._check_running()
-        period = request.period(self._clock())
+        now = self._clock()
+        period = request.period(now)
+        previous = self._report_previous_plan(request, period, now)
         configuration = capture_energy_configuration(self._manager.data or {})
         if not configuration['grid_sensors']:
             raise ValueError('energy_analysis_unavailable')
@@ -234,6 +269,11 @@ class EnergyAnalysisService:
             'measurement_timezone':self.hass.config.time_zone,
             'source_signature':configuration['source_signature'],
             'period_signature':_digest(period)}
+        if previous is not None:
+            comparison_period_kind, plan = previous
+            context.update(comparison_kind='previous', comparison_signature=_digest(plan),
+                comparison_timezone=request.timezone, comparison_calendar_kind=request.cadence,
+                comparison_period_kind=comparison_period_kind, report_comparison_plan=plan)
         return configuration, period, context
 
     def _recapture(self, context):
@@ -334,7 +374,9 @@ class EnergyAnalysisService:
         if _report_window is not None:
             if type(_report_window) is not ReportWindow or comparison is not None or anchor is not None:
                 raise ValueError('invalid_report_request')
-            _report_window.period(self._clock())
+            now = self._clock()
+            report_period = _report_window.period(now)
+            self._report_previous_plan(_report_window, report_period, now)
             self._actor_signature(user_id)
         # Admission includes requests waiting for this service's own lock.
         self._check_running()
@@ -356,6 +398,10 @@ class EnergyAnalysisService:
                     self._capture_report(_report_window,purpose,self._actor_signature(user_id))
                     if _report_window is not None else
                     self._capture(kind, anchor, comparison, purpose=purpose))
+                if _report_window is not None:
+                    # Selection is owned by the validated frozen request, never
+                    # by the public comparison argument (rejected above).
+                    comparison = context.get('comparison_kind')
                 # No metadata, Recorder or registry read precedes BOTH gates.
                 await self._require_access(context, configuration, user_id, policy_state=policy_state)
                 self._assert_current(context)
@@ -390,21 +436,30 @@ class EnergyAnalysisService:
                 active_tariff = (next((row for row in state['book']['tariffs']
                     if row['id'] == state['book'].get('active_tariff_id')), None) if state['book'] else None)
                 if comparison is not None:
-                    resolved = resolve_analysis_periods(kind, self._clock(), context['measurement_timezone'],
-                                                       anchor=context['period_anchor'])
+                    if _report_window is not None:
+                        plan = deepcopy(context['report_comparison_plan'])
+                        comparison_timezone = context['comparison_timezone']
+                        comparison_calendar_kind = context['comparison_calendar_kind']
+                        comparison_period_kind = context['comparison_period_kind']
+                    else:
+                        resolved = resolve_analysis_periods(kind, self._clock(), context['measurement_timezone'],
+                                                           anchor=context['period_anchor'])
+                        plan = resolved['comparisons'][comparison]
+                        comparison_timezone = context['measurement_timezone']
+                        comparison_calendar_kind = {'day': 'daily', 'week': 'weekly', 'month': 'monthly', 'year': 'yearly'}[kind]
+                        comparison_period_kind = kind
                     self._assert_current(context)
-                    plan = resolved['comparisons'][comparison]
                     comparisons = {}
                     if plan['status'] == 'ready' and comparison != 'mean7':
                         pair = await self._cpu(partial(PairedComparisonAccumulator, period,
-                            plan['baseline_periods'][0], timezone_name=context['measurement_timezone'],
-                            calendar_kind={'day': 'daily', 'week': 'weekly', 'month': 'monthly', 'year': 'yearly'}[kind],
+                            plan['baseline_periods'][0], timezone_name=comparison_timezone,
+                            calendar_kind=comparison_calendar_kind,
                             tariff=active_tariff), guard)
                         group_pair = await self._cpu(partial(GroupComparisonAccumulator, period,
                             plan['baseline_periods'][0], calendar_plan=pair.calendar_plan,
                             tariff=active_tariff if configuration['consumer_domain'] == 'grid_import' else None), guard)
                         baseline_accumulator = await self._cpu(partial(EnergyAnalysisAccumulator,
-                            deepcopy(state['book']), {**plan['baseline_periods'][0], 'kind': kind}, deepcopy(context),
+                            deepcopy(state['book']), {**plan['baseline_periods'][0], 'kind': comparison_period_kind}, deepcopy(context),
                             generated_at=self._clock(), consumers=deepcopy(configuration['consumers']),
                             membership=membership, consumer_domain=configuration['consumer_domain']), guard)
                 windows = [period, plan['baseline_periods'][0]] if pair is not None else [period]
@@ -561,6 +616,27 @@ class EnergyAnalysisService:
             raise RuntimeError('energy_analysis_context_changed')
         # Legacy aliases are references to producer values, never another price pass.
         period = deepcopy(snapshot['period'])
+        comparisons = deepcopy(snapshot.get('comparisons', {}))
+        previous = comparisons.get('previous')
+        if previous is None:
+            if request.semantics != 'rolling_completed_hours':
+                raise RuntimeError('report_comparison_missing')
+            legacy_comparison = {'status':'unknown','reason':'rolling_or_custom_window',
+                                 'previous_kwh':None,'delta_kwh':None,'percent':None}
+        else:
+            legacy_comparison = {key:deepcopy(previous.get(key)) for key in
+                ('status','reason','current_kwh','delta_kwh','percent','full_current_kwh',
+                 'comparison_scope','coverage')}
+            legacy_comparison.update(previous_kwh=previous.get('baseline_kwh'),
+                                     full_previous_kwh=previous.get('full_baseline_kwh'))
+            prior = previous.get('baseline_periods') or []
+            if prior:
+                for prefix, descriptor in (('current',period),('previous',prior[0])):
+                    for key in ('start','end','local_start','local_end','hours'):
+                        legacy_comparison[prefix+'_'+key] = descriptor.get(key)
+                legacy_comparison.update(timezone=snapshot['context']['comparison_timezone'],
+                    calendar_kind=snapshot['context']['comparison_calendar_kind'],
+                    partial=period.get('partial'), calendar_clamped=prior[0].get('calendar_clamped'))
         summary = {'snapshot_id':snapshot['snapshot_id'],'schema':2,
             'cadence':request.cadence,'total_kwh':snapshot['totals']['kwh'],
             'total_cost':snapshot['totals']['total_cost'],
@@ -568,6 +644,7 @@ class EnergyAnalysisService:
             'period':{**period,'from':period['start'],'to':period['end']},
             'totals':deepcopy(snapshot['totals']),'coverage':deepcopy(snapshot['coverage']),
             'groups':deepcopy(snapshot.get('groups',{})),'chart':deepcopy(snapshot['chart']),
+            'comparisons':comparisons,'comparison':legacy_comparison,
             'source':{'name':'recorder','kind':'grid_import','status':snapshot['status'],
                       'complete':snapshot['coverage']['complete']}}
         return {**report,'subject':'Energy report · '+request.cadence,'body':report['text'],
