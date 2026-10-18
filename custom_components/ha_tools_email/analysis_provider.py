@@ -9,12 +9,35 @@ from datetime import datetime, timezone
 import hashlib
 import json
 
-from .composer import (_energy_grid_import_ids, async_get_energy_metadata,
+from .composer import (_mail_text, _energy_grid_import_ids, async_get_energy_metadata,
                        async_get_energy_usage)
 from .energy_measurements import hour_grid, MAX_SOURCES
 from .feature_access import feature_access_allowed
 from .energy_registry import build_interval_breakdown
 from .tariff_history import _bounded
+
+
+def _consumer_display_names(devices):
+    """Shallow view of display names only; structural fields stay byte-for-byte.
+
+    The caller caps the source list first and still applies the unchanged full
+    JSON/size/depth guard to the entire view, including all unknown RAW fields.
+    No recursive repair, ID normalization or RAW mutation belongs here.
+    """
+    view = devices
+    for index, device in enumerate(devices):
+        name = device.get('name') if isinstance(device, dict) else None
+        if not isinstance(name, str):
+            continue
+        # Preserve the existing JSON budget before allocating a UTF-16 copy of
+        # an already oversized name. The full validator below remains decisive.
+        if len(name) > 4_000_000:
+            _bounded(name)
+        if any(0xD800 <= ord(char) <= 0xDFFF for char in name):
+            if view is devices:
+                view = list(devices)
+            view[index] = {**device, 'name': _mail_text(name)}
+    return view
 
 
 def capture_energy_configuration(preferences):
@@ -27,10 +50,15 @@ def capture_energy_configuration(preferences):
     """
     if not isinstance(preferences, dict):
         raise ValueError('invalid_energy_configuration')
-    _bounded(preferences)
     sources, devices = preferences.get('energy_sources', []), preferences.get('device_consumption', [])
     if not isinstance(sources, list) or not isinstance(devices, list) or len(devices) > MAX_SOURCES:
         raise ValueError('invalid_energy_configuration')
+    display_devices = _consumer_display_names(devices)
+    # Retain every field for validation. Only the direct display-name strings
+    # change; malformed IDs, unknown fields, cycles and size still fail closed.
+    _bounded(preferences if display_devices is devices else
+             {**preferences, 'device_consumption': display_devices})
+    devices = display_devices
     ids = _energy_grid_import_ids(preferences)
     if len(ids) > MAX_SOURCES:
         raise ValueError('invalid_energy_configuration')

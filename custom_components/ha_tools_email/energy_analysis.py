@@ -16,7 +16,7 @@ from .energy_period_summary import build_period_summary
 from .energy_patterns_periods import resolve_patterns_window
 from .energy_patterns import build_patterns_projection
 from .energy_measurements import hour_grid, measurement_evidence
-from .tariff_history import _bounded, price_book, validate_tariff_book
+from .tariff_history import _bounded, calculate_energy_amounts, price_book, validate_tariff_book
 
 
 def _stamp(value):
@@ -120,6 +120,16 @@ def _public_rates(rates):
                              'legacy_combined_monthly'))
         clean['clock'] = _public_clock(rate['clock'])
         clean['profile'] = _public_rate_profile(rate['profile'])
+        clean['zone_usage_rates'] = []
+        for zone in rate['profile']['zones']:
+            # Dynamic intervals override configured fallback zones. Do not label
+            # a static default as the effective rate of a time-varying profile.
+            usage = None
+            if rate['profile'].get('dynamic') is None:
+                usage = calculate_energy_amounts(1, zone.get('energyRate'),
+                    zone.get('variableRate'), rate['rate_semantics'])['usage_cost']
+            clean['zone_usage_rates'].append({'zone_id': zone['id'],
+                'usage_rate': str(usage) if usage is not None else None})
         provenance = rate.get('provenance')
         clean['provenance'] = provenance if isinstance(provenance, str) and len(provenance) <= 256 else None
         result.append(clean)
