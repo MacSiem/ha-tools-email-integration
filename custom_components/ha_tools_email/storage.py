@@ -179,7 +179,7 @@ class EmailStorage:
         if coordinator is None or not getattr(coordinator, 'running', True):
             raise RuntimeError('energy_unavailable')
         result = await coordinator._async_run_cpu(job)
-        if (bucket.get('energy_snapshot') is not coordinator
+        if (getattr(self.hass, 'data', {}).get(DOMAIN, {}).get('energy_snapshot') is not coordinator
                 or not getattr(coordinator, 'running', True)):
             raise RuntimeError('energy_snapshot_unloaded')
         return result
