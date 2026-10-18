@@ -2,7 +2,7 @@
 
 Pure CPU model: callers own Recorder, authorization and current-context fences.
 Only aggregated household hours survive each chunk; raw source matrices do not.
-Consumer groups and comparison arithmetic are attached by the analysis service.
+Optional consumers share this snapshot. Comparison arithmetic and HA IO belong to the service.
 """
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -10,6 +10,7 @@ from decimal import Decimal, localcontext
 import hashlib
 import json
 
+from .energy_consumers import ConsumerPeriod
 from .energy_measurements import hour_grid, measurement_evidence
 from .tariff_history import _bounded, price_book, validate_tariff_book
 
@@ -124,7 +125,8 @@ def _public_rates(rates):
 class EnergyAnalysisAccumulator:
     """Append contiguous chunks and price the actual whole period exactly once."""
 
-    def __init__(self, book, period, context, *, generated_at):
+    def __init__(self, book, period, context, *, generated_at, consumers=None, membership=None,
+                 consumer_domain='grid_import'):
         _bounded(period, 65536)
         _bounded(context, 65536)
         self._start, self._end = _stamp(period['start']), _stamp(period['end'])
@@ -139,9 +141,11 @@ class EnergyAnalysisAccumulator:
         self._rows, self._issues = [], []
         self._ids, self._provenance, self._signature = None, None, None
         self._measured_seconds = 0
+        self._consumers = (ConsumerPeriod(consumers, membership, consumer_domain, self._book, self._hours)
+                           if consumers is not None else None)
         self._result = None
 
-    def add_chunk(self, snapshot, start, end):
+    def add_chunk(self, snapshot, start, end, *, consumer_snapshot=None):
         if self._result is not None:
             raise ValueError('analysis_already_finished')
         start, end = _stamp(start), _stamp(end)
@@ -153,6 +157,8 @@ class EnergyAnalysisAccumulator:
         ids, provenance = sorted(evidence['source_ids']), evidence['measurement_provenance']
         if self._ids is not None and (ids != self._ids or provenance != self._provenance):
             raise ValueError('energy_sources_changed')
+        staged = (self._consumers.prepare_chunk(consumer_snapshot, evidence['hourly_buckets'], start, end)
+                  if self._consumers is not None else None)
         # Commit only after every chunk check has succeeded. A rejected chunk
         # cannot advance the cursor, change coverage or poison an explicit retry.
         if self._ids is None:
@@ -165,6 +171,8 @@ class EnergyAnalysisAccumulator:
             reason = issue['reason']
             if reason not in self._issues:
                 self._issues.append(reason)
+        if self._consumers is not None:
+            self._consumers.commit_chunk(staged)
         self._cursor = end
 
     def finish(self):
@@ -225,6 +233,8 @@ class EnergyAnalysisAccumulator:
                   'fees': deepcopy(active['fees']) if active is not None else None,
                   'rounding': deepcopy(pricing['rounding']) if pricing is not None else None,
                   'issues': list(self._issues)}
+        if self._consumers is not None:
+            result['groups'] = self._consumers.finish(active)
         result['snapshot_id'] = _digest(result)
         self._result = result
         return deepcopy(result)

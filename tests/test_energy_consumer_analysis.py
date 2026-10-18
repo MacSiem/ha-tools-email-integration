@@ -2,7 +2,8 @@
 from decimal import Decimal
 import unittest
 
-from tests.test_energy_analysis import analysis, EnergyAnalysisTest
+from tests import test_energy_analysis as fixtures
+analysis = fixtures.analysis
 from tests.test_energy_weighted_comparison import readings
 from tests.test_tariff_history import book, version
 
@@ -28,7 +29,7 @@ def consumer_readings(start, end, values):
 
 class ConsumerAnalysisTest(unittest.TestCase):
     def builder(self, b=None, domain='grid_import'):
-        base = EnergyAnalysisTest().builder(book([version(monthly=31)]) if b is None else b)
+        base = fixtures.EnergyAnalysisTest().builder(book([version(monthly=31)]) if b is None else b)
         return analysis.EnergyAnalysisAccumulator(base._book, base._period, base._context,
             generated_at=base._generated, consumers=CONSUMERS, membership=MEMBERSHIP,
             consumer_domain=domain)
