@@ -115,14 +115,17 @@ class WeightedComparisonTest(unittest.TestCase):
         self.assertEqual('measurement_provenance_unavailable_or_changed', result['reason'])
 
     def test_malformed_normalization_metadata_is_unavailable_without_exception(self):
-        for field in ('source_unit', 'unit_class'):
-            with self.subTest(field=field):
-                current, previous, period = self.pair()
-                for snapshot in (current, previous):
-                    snapshot['measurement_provenance']['sensor.a'][field] = []
-                result = composer._compare_energy_snapshots(current, previous, period)
-                self.assertEqual('unknown', result['status'])
-                self.assertEqual('measurement_provenance_unavailable_or_changed', result['reason'])
+        for legacy in (False, True):
+            for field in ('source_unit', 'unit_class'):
+                with self.subTest(field=field, legacy=legacy):
+                    current, previous, period = self.pair()
+                    for snapshot in (current, previous):
+                        snapshot['measurement_provenance']['sensor.a'][field] = []
+                        if legacy:
+                            snapshot.pop('source_buckets')
+                    result = composer._compare_energy_snapshots(current, previous, period)
+                    self.assertEqual('unknown', result['status'])
+                    self.assertEqual('measurement_provenance_unavailable_or_changed', result['reason'])
 
     def test_actual_twenty_five_hour_day_keeps_full_calendar_totals(self):
         period = window('2026-10-24T22:00Z', '2026-10-25T23:00Z',
