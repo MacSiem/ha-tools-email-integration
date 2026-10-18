@@ -63,6 +63,10 @@ class ConsumerPeriod:
                 key: value if isinstance(value, str) and len(value) <= 256 else None
                 for key in ('name', 'area_id', 'area_name', 'floor_id', 'floor_name')
                 for value in [raw.get(key)]}
+        for row in consumers:
+            name = row.get('name')
+            if isinstance(name, str) and name.strip() and len(name) <= 256:
+                self._membership['sources'][row['stat_consumption']]['name'] = name
         self._domain, self._hours = domain, hours
         self._states = {sid: _state() for sid in [*self._ids, REMAINDER]}
         self._provenance, self._issues, self._partition = None, set(), True
