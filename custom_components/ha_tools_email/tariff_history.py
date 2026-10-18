@@ -9,6 +9,7 @@ from calendar import monthrange
 from copy import deepcopy
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP, localcontext
+from functools import lru_cache
 import hashlib
 import json
 import re
@@ -91,12 +92,21 @@ def _midnight(day, zone):
 
 
 def _schedule(profile):
+    # Key the expensive selector proof by immutable normalized content. Editing
+    # any rate, rule or validity metadata produces a new key. Never trust a
+    # caller-supplied 'validated' flag; failed proofs are not cached.
+    _schedule_encoded(json.dumps(profile, sort_keys=True, separators=(',', ':'), allow_nan=False))
+
+
+@lru_cache(maxsize=64)
+def _schedule_encoded(encoded):
     """Check static selector equivalence classes with the existing engine.
 
     Twenty-eight representative Gregorian years cover every month/day/weekday
     combination. Exact exception dates and their neighbors are added separately.
     Rule selectors for both today and yesterday cover overnight behavior.
     """
+    profile = json.loads(encoded)
     rules = (profile.get('rules') or []) + (profile.get('exceptions') or [])
     dates = {value for rule in rules for value in (rule.get('dates') or [])}
     if len(rules) > 64 or len(dates) > 366:
@@ -335,6 +345,9 @@ def _price(tariff, rows, coverage, fingerprint):
         a, b = _stamp(row.get('from')), _stamp(row.get('to'))
         valid = a is not None and b is not None and 0 < b - a <= 86400000 and _finite(row.get('kwh')) and 0 <= row['kwh'] <= 1e12 and row.get('unit', 'kWh') == 'kWh'
         result = {'index': index, 'available': False, 'reason': 'invalid_measurement'}
+        if valid and not (start <= a < b <= end):
+            valid = False
+            result['reason'] = 'outside_coverage'
         if valid:
             ordered.append((a, b))
             kwh += _decimal(row['kwh'])
@@ -400,7 +413,8 @@ def _price(tariff, rows, coverage, fingerprint):
     fixed = sum((_decimal(fee['components'][k]) for k in FEE_KEYS), Decimal(0)) if fee['complete'] and compatible else None
     total = usage + fixed if components_complete and measurement_complete and compatible and usage is not None and fixed is not None else None
     currency, basis = next(iter(identities)) if compatible else (None, None)
-    return {'tariff_id': tariff['id'], 'measurement_fingerprint': fingerprint,
+    return {'tariff_id': tariff['id'], 'tariff_name': tariff['name'], 'origin': deepcopy(tariff['origin']),
+            'measurement_fingerprint': fingerprint,
             'currency': currency, 'price_basis': basis, 'timezone': versions[0]['profile']['timezone'],
             'measurement_complete': measurement_complete, 'pricing_complete': pricing_complete,
             'components_complete': components_complete, 'compatible': compatible,
@@ -412,6 +426,8 @@ def _price(tariff, rows, coverage, fingerprint):
             'rates': [{'version_id': v['id'], 'valid_from': v.get('valid_from'), 'valid_to': v.get('valid_to'),
                        'rate_semantics': v['rate_semantics'], 'currency': v['profile']['currency'],
                        'price_basis': v['profile']['priceBasis'], 'clock': deepcopy(v['profile']['clock']),
+                       'profile': deepcopy(v['profile']), 'fixed_monthly': deepcopy(v['fixed_monthly']),
+                       'legacy_combined_monthly': v.get('legacy_combined_monthly'),
                        'provenance': v.get('provenance', 'configured_valid_from')} for v in versions]}
 
 
