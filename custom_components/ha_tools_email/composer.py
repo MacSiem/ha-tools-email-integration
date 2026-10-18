@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from calendar import monthrange
 from datetime import datetime, timedelta, timezone
 from html import escape
 from math import isfinite
@@ -739,7 +740,8 @@ async def async_build_energy_report_payload(
         coverage=snapshot.get("coverage"),
     )
     chart_tariff_rows = []
-    payload["summary"].update({key: value for key, value in snapshot.items() if key not in {"devices", "hourly_buckets"}})
+    payload["summary"].update({key: value for key, value in snapshot.items()
+                               if key not in {"devices", "hourly_buckets", "source_buckets"}})
     storage = (getattr(hass, "data", {}) or {}).get("ha_tools_email", {}).get("storage")
     if storage is not None:
         try:
@@ -810,7 +812,8 @@ async def async_build_energy_report_payload(
                   _calendar_comparison_window(*args))
     if comparison["status"] == "pending":
         previous = await async_get_energy_usage(
-            hass, sensors, datetime.fromisoformat(comparison["previous_start"]), start, cadence,
+            hass, sensors, datetime.fromisoformat(comparison["previous_start"]),
+            datetime.fromisoformat(comparison["previous_end"]), cadence,
         )
         comparison = _compare_energy_snapshots(snapshot, previous, comparison)
     payload["summary"]["comparison"] = comparison
@@ -838,7 +841,7 @@ async def async_build_energy_report_payload(
 def _calendar_comparison_window(
     cadence: str, start: datetime, end: datetime, timezone_name: str | None, explicit: bool,
 ) -> dict[str, Any]:
-    """Recognize exact completed calendar windows; never reinterpret manual rolling usage.
+    """Align full or partial calendar windows; never reinterpret manual rolling usage.
 
     Midnight resolution mirrors scheduler._resolve_wall: first fold and UTC roundtrip
     for gaps. Kept pure here to avoid importing the scheduler's send/composer chain.
@@ -853,36 +856,74 @@ def _calendar_comparison_window(
         zone = None
     if zone is None:
         return {**comparison, "reason": "report_timezone_unavailable"}
+    if (not isinstance(start, datetime) or not isinstance(end, datetime)
+            or start.utcoffset() is None or end.utcoffset() is None):
+        return comparison
+    start, end = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
 
     def midnight(day):
         return datetime(day.year, day.month, day.day, tzinfo=zone, fold=0).astimezone(timezone.utc)
 
-    local_end = end.astimezone(zone).date()
+    day = start.astimezone(zone).date()
+    if start != midnight(day):
+        return comparison
     if cadence == CADENCE_DAILY:
-        day = local_end - timedelta(days=1)
+        limit_day = day + timedelta(days=1)
         previous_day = day - timedelta(days=1)
-    elif cadence == CADENCE_WEEKLY and local_end.weekday() == 0:
-        day = local_end - timedelta(days=7)
+    elif cadence == CADENCE_WEEKLY and day.weekday() == 0:
+        limit_day = day + timedelta(days=7)
         previous_day = day - timedelta(days=7)
-    elif cadence == CADENCE_MONTHLY and local_end.day == 1:
-        day = (local_end - timedelta(days=1)).replace(day=1)
+    elif cadence == CADENCE_MONTHLY and day.day == 1:
+        limit_day = (day.replace(day=28) + timedelta(days=4)).replace(day=1)
         previous_day = (day - timedelta(days=1)).replace(day=1)
+    elif cadence == 'yearly' and day.month == 1 and day.day == 1 and day.year > 1:
+        limit_day = day.replace(year=day.year + 1)
+        previous_day = day.replace(year=day.year - 1)
     else:
         return comparison
-    if end != midnight(local_end) or start != midnight(day):
+    if not start < end <= midnight(limit_day):
         return comparison
+    partial = end < midnight(limit_day)
     previous_start = midnight(previous_day)
+    previous_end, clamped = start, False
+    if partial:
+        local_end = end.astimezone(zone)
+        if cadence == CADENCE_MONTHLY:
+            last_day = monthrange(previous_day.year, previous_day.month)[1]
+            if local_end.day > last_day:
+                # A shorter prior month cannot supply nonexistent extra days.
+                # Compare its actual extent and expose this alignment limit.
+                target_day, clamped = day, True
+            else:
+                target_day = previous_day.replace(day=local_end.day)
+        elif cadence == 'yearly':
+            target_month_days = monthrange(previous_day.year, local_end.month)[1]
+            target_day = previous_day.replace(month=local_end.month,
+                                             day=min(local_end.day, target_month_days))
+            clamped = local_end.day > target_month_days
+        else:
+            target_day = previous_day + (local_end.date() - day)
+        if cadence == CADENCE_MONTHLY and clamped:
+            previous_end = start
+        else:
+            wall = datetime(target_day.year, target_day.month, target_day.day,
+                local_end.hour, local_end.minute, local_end.second, local_end.microsecond,
+                tzinfo=zone, fold=local_end.fold)
+            previous_end = wall.astimezone(timezone.utc)
+            clamped = clamped or (previous_end.astimezone(zone).replace(tzinfo=None)
+                                   != wall.replace(tzinfo=None))
     current_hours = (end - start).total_seconds() / 3600
-    previous_hours = (start - previous_start).total_seconds() / 3600
+    previous_hours = (previous_end - previous_start).total_seconds() / 3600
     comparison.update(timezone=timezone_name, current_start=start.isoformat(), current_end=end.isoformat(),
-                      previous_start=previous_start.isoformat(), previous_end=start.isoformat(),
+                      previous_start=previous_start.isoformat(), previous_end=previous_end.isoformat(),
                       current_local_start=start.astimezone(zone).isoformat(),
                       current_local_end=end.astimezone(zone).isoformat(),
                       previous_local_start=previous_start.astimezone(zone).isoformat(),
-                      previous_local_end=start.astimezone(zone).isoformat(),
-                      current_hours=current_hours, previous_hours=previous_hours)
+                      previous_local_end=previous_end.astimezone(zone).isoformat(),
+                      current_hours=current_hours, previous_hours=previous_hours,
+                      partial=partial, calendar_clamped=clamped)
     # Recorder hourly changes cannot truthfully resolve half/quarter-hour boundaries.
-    if any(bound.timestamp() % 3600 for bound in (previous_start, start, end)):
+    if any(bound.timestamp() % 3600 for bound in (previous_start, previous_end, start, end)):
         return {**comparison, "reason": "calendar_boundary_not_recorder_hour"}
     return {**comparison, "status": "pending", "reason": None}
 
@@ -1109,7 +1150,11 @@ async def async_get_energy_usage(
                 "expected_source_hours": len(expected) * len(ids), "sources": len(ids),
                 "complete_sources": sum(row["complete"] for row in devices),
                 "unavailable_sources": len(ids) - len(devices)}
+    per_source = {sid: [{"from": key * 1000, "to": (key + 3600) * 1000,
+                        "kwh": source_buckets.get(sid, {}).get(key)} for key in sorted(expected)]
+                  for sid in ids}
     return {**snapshot, "status": status, "devices": devices, "hourly_buckets": hourly,
+            "source_buckets": per_source,
             "measurement_provenance": provenance, "coverage": coverage}
 
 
