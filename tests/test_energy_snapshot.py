@@ -185,6 +185,31 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
                 await task
             self.assertIsNone(c.data)
 
+    async def test_same_source_unit_metadata_change_invalidates_normalized_measurement(self):
+        unit = ['kWh']
+        calls = []
+        class Storage:
+            async def async_get_tariff(self):
+                return {'profile': classified(), 'revision': 1}
+        async def metadata(hass, ids):
+            return {'sensor.grid': (1, {'has_sum': True, 'unit_class': 'energy',
+                                        'unit_of_measurement': unit[0]})}
+        async def provider(hass, start, end):
+            calls.append(unit[0])
+            measured = usage()
+            for row in measured['hourly_buckets']:
+                row['kwh'] *= 1 if unit[0] == 'kWh' else .001
+            return measured
+        c = energy.EnergySnapshotCoordinator(types.SimpleNamespace(
+            config=types.SimpleNamespace(time_zone='UTC')), Storage(), provider=provider)
+        with patch.object(energy, 'async_grid_sensors', return_value=[{'entity_id': 'sensor.grid'}]), \
+             patch.object(energy, 'async_get_energy_metadata', metadata):
+            a = await c.async_refresh(now=at('2026-10-18T12:34Z'))
+            unit[0] = 'Wh'
+            b = await c.async_refresh(now=at('2026-10-18T12:34Z'))
+            self.assertEqual(['kWh', 'Wh'], calls)
+            self.assertAlmostEqual(a['today']['usage_cost'] / 1000, b['today']['usage_cost'])
+
     async def test_source_change_during_io_discards_answer(self):
         reads = iter([[{'entity_id': 'sensor.a'}], [{'entity_id': 'sensor.b'}]])
         class Storage:
