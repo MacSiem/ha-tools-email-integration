@@ -93,6 +93,13 @@ def _project_comparison_day(period, context, consumers, membership, domain, grid
         consumer_snapshot=readings, include_group_hours=True)
 
 
+_ACCESS_PURPOSES = {
+    'analysis': ('energy_analysis', 'read'),
+    'report_read': ('energy_reports', 'read'),
+    'report_execute': ('energy_reports', 'execute'),
+}
+
+
 class EnergyAnalysisService:
     def __init__(self, hass, entry_id, coordinator, registry, *,
                  configuration_manager=None, clock=None):
@@ -128,7 +135,10 @@ class EnergyAnalysisService:
             self._cache = None
             raise RuntimeError('energy_snapshot_unloaded')
 
-    def _capture(self, kind, anchor=None, comparison=None):
+    def _capture(self, kind, anchor=None, comparison=None, *, purpose='analysis'):
+        # Server-owned purpose; never accept a client-selected feature gate.
+        if not isinstance(purpose, str) or purpose not in _ACCESS_PURPOSES:
+            raise ValueError('invalid_analysis_purpose')
         self._check_running()
         configuration = capture_energy_configuration(self._manager.data or {})
         if not configuration['grid_sensors']:
@@ -140,7 +150,7 @@ class EnergyAnalysisService:
         if comparison is not None and (not isinstance(comparison, str) or comparison not in resolved['comparisons']):
             raise ValueError('invalid_analysis_comparison')
         period = {**resolved['current'], 'kind': kind}
-        context = {'entry_id': self.entry_id, 'service_generation': self._nonce,
+        context = {'access_purpose': purpose, 'entry_id': self.entry_id, 'service_generation': self._nonce,
                    'tariff_revision': self.storage.current_tariff_revision,
                    'feature_access_revision': self.storage.current_feature_access_revision,
                    'registry_revision': self.registry.revision,
@@ -154,7 +164,7 @@ class EnergyAnalysisService:
         return configuration, period, context
 
     def _assert_current(self, context):
-        _, _, current = self._capture(context['period_kind'], context.get('period_anchor'), context.get('comparison_kind'))
+        _, _, current = self._capture(context['period_kind'], context.get('period_anchor'), context.get('comparison_kind'), purpose=context['access_purpose'])
         if any(context.get(key) != value for key, value in current.items()):
             self._cache = None
             raise RuntimeError('energy_analysis_context_changed')
@@ -177,7 +187,9 @@ class EnergyAnalysisService:
         if state['status'] != 'ready':
             raise PermissionError('energy_feature_unauthorized')
         ids = [row['entity_id'] for row in self._sensors(configuration)]
-        await async_require_energy_source_access(self.hass, user_id, ids, feature_policy=state['policy'])
+        feature, operation = _ACCESS_PURPOSES[context['access_purpose']]
+        await async_require_energy_source_access(self.hass, user_id, ids,
+            feature_policy=state['policy'], feature=feature, operation=operation)
         self._assert_current(context)
 
     async def _guard(self, context, configuration, user_id):
@@ -206,7 +218,9 @@ class EnergyAnalysisService:
         await guard()
         return result
 
-    async def async_get_analysis(self, kind, user_id, *, anchor=None, comparison=None):
+    async def async_get_analysis(self, kind, user_id, *, anchor=None, comparison=None, purpose='analysis'):
+        if not isinstance(purpose, str) or purpose not in _ACCESS_PURPOSES:
+            raise ValueError('invalid_analysis_purpose')
         # Admission includes requests waiting for this service's own lock.
         self._check_running()
         if self._pending >= MAX_PENDING_ANALYSES:
@@ -223,7 +237,7 @@ class EnergyAnalysisService:
                 # Reading settings does not access Recorder, metadata or registry.
                 policy_state = await self.storage.async_get_feature_access()
                 self._check_running()
-                configuration, period, context = self._capture(kind, anchor, comparison)
+                configuration, period, context = self._capture(kind, anchor, comparison, purpose=purpose)
                 # No metadata, Recorder or registry read precedes BOTH gates.
                 await self._require_access(context, configuration, user_id, policy_state=policy_state)
                 self._assert_current(context)
@@ -352,7 +366,7 @@ class EnergyAnalysisService:
         try:
             context = result['context']
             self._assert_current(context)
-            _, period, _ = self._capture(context['period_kind'], context.get('period_anchor'), context.get('comparison_kind'))
+            _, period, _ = self._capture(context['period_kind'], context.get('period_anchor'), context.get('comparison_kind'), purpose=context['access_purpose'])
             return result['period'] == period
         except (KeyError, TypeError, ValueError, RuntimeError, AttributeError):
             return False
@@ -370,7 +384,7 @@ class EnergyAnalysisService:
         self._pending += 1
         try:
             context = deepcopy(result['context'])
-            configuration, _, _ = self._capture(context['period_kind'], context.get('period_anchor'), context.get('comparison_kind'))
+            configuration, _, _ = self._capture(context['period_kind'], context.get('period_anchor'), context.get('comparison_kind'), purpose=context['access_purpose'])
             await self._guard(context, configuration, user_id)
             return self.context_is_current(result)
         except PermissionError:

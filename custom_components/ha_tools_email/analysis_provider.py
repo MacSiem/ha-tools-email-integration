@@ -75,7 +75,8 @@ def capture_energy_configuration(preferences):
     return result
 
 
-async def async_require_energy_source_access(hass, user_id, source_ids, *, feature_policy=None):
+async def async_require_energy_source_access(hass, user_id, source_ids, *, feature_policy=None,
+                                             feature='energy_analysis', operation='read'):
     """Fresh detailed-analysis access, including entity-restricted HA users.
 
     External statistics have no entity policy target. They require admin or
@@ -98,7 +99,7 @@ async def async_require_energy_source_access(hass, user_id, source_ids, *, featu
     # supplies its revision-fenced policy, including on cached results.
     if feature_policy is not None:
         try:
-            allowed = feature_access_allowed(feature_policy, 'energy_analysis', 'read',
+            allowed = feature_access_allowed(feature_policy, feature, operation,
                 user_id=user_id, is_active=user.is_active, is_admin=user.is_admin)
         except ValueError:
             allowed = False
