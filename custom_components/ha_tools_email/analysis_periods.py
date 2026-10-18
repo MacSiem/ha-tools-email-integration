@@ -100,7 +100,7 @@ def _extra_baseline(kind, start, end, target_day, zone):
                 target_end = target_limit
                 clamps.append("calendar_end")
     return _period(target_start, target_end, target_limit, zone,
-                   partial=partial, clamps=clamps)
+                   partial=target_end < target_limit, clamps=clamps)
 
 
 def resolve_analysis_periods(kind, now, timezone_name):
@@ -134,6 +134,8 @@ def resolve_analysis_periods(kind, now, timezone_name):
             day = day.replace(day=1)
         elif kind == "year":
             day = day.replace(month=1, day=1)
+            if day.year == 1:
+                raise ValueError('no_previous_year')
         start, limit = _wall(day, zone), _wall(_next(day, kind), zone)
         if end < start:
             # E.g. a UTC hour preceding local half-hour midnight.
@@ -154,7 +156,7 @@ def resolve_analysis_periods(kind, now, timezone_name):
         previous_day = previous_start.astimezone(zone).date()
         previous_limit = _wall(_next(previous_day, kind), zone)
         prior = _period(previous_start, previous_end, previous_limit, zone,
-                        partial=previous["partial"],
+                        partial=previous_end < previous_limit,
                         clamps=("shared_calendar_alignment",)
                         if previous["calendar_clamped"] else ())
         if previous["status"] != "pending":
