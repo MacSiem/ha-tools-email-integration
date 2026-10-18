@@ -26,6 +26,29 @@ def _digest(value):
                                      allow_nan=False).encode('utf-8')).hexdigest()
 
 
+def _public_context(context):
+    """Reflect only typed calculation tokens, never arbitrary storage metadata."""
+    if not isinstance(context, dict):
+        raise ValueError('invalid_analysis_context')
+    result = {}
+    revisions = ('tariff_revision', 'registry_revision', 'measurement_revision')
+    for key in ('entry_id', *revisions, 'measurement_timezone', 'source_signature'):
+        if key not in context:
+            continue
+        value = context[key]
+        if value is None:
+            result[key] = None
+        elif key in revisions and type(value) is int and value >= 0:
+            result[key] = value
+        elif (key not in ('tariff_revision', 'registry_revision')
+              and isinstance(value, str) and len(value) <= 256):
+            result[key] = value
+        else:
+            raise ValueError('invalid_analysis_context')
+    result['calculator_version'] = 'energy_analysis_v2_1'
+    return result
+
+
 class EnergyAnalysisAccumulator:
     """Append contiguous chunks and price the actual whole period exactly once."""
 
@@ -38,7 +61,7 @@ class EnergyAnalysisAccumulator:
         if self._generated < self._end:
             raise ValueError('future_analysis_measurement')
         self._book = validate_tariff_book(book) if book is not None else None
-        self._period, self._context = deepcopy(period), deepcopy(context)
+        self._period, self._context = deepcopy(period), _public_context(context)
         self._period.update(start=self._start.isoformat(), end=self._end.isoformat())
         self._cursor = self._start
         self._rows, self._issues = [], []
@@ -119,10 +142,12 @@ class EnergyAnalysisAccumulator:
                                      if key not in ('rows', 'fees', 'rates')})
         context = {**self._context, 'grid_source_signature': self._signature}
         result = {'schema': 2, 'generated_at': self._generated.isoformat(), 'context': context,
+                  'active_tariff_id': pricing['active_tariff_id'] if pricing is not None else None,
                   'period': deepcopy(self._period), 'coverage': coverage, 'status': status,
                   'pricing_status': pricing_status, 'totals': totals,
                   'measurement_fingerprint': fingerprint, 'buckets': deepcopy(self._rows),
                   'alternatives': alternatives, 'rates': deepcopy(active['rates']) if active is not None else [],
+                  'fees': deepcopy(active['fees']) if active is not None else None,
                   'rounding': deepcopy(pricing['rounding']) if pricing is not None else None,
                   'issues': list(self._issues)}
         result['snapshot_id'] = _digest(result)
