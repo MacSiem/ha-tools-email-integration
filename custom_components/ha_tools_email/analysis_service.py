@@ -15,6 +15,9 @@ from time import monotonic
 from uuid import uuid4
 
 from .analysis_periods import resolve_analysis_periods
+from .report_window import ReportWindow
+from .report_actor import _ScheduleActor
+from .feature_access import validate_feature_access
 from .energy_patterns_periods import resolve_patterns_window
 from .analysis_provider import (capture_energy_configuration,
                                 async_read_energy_chunk,
@@ -200,7 +203,43 @@ class EnergyAnalysisService:
                    'source_signature': configuration['source_signature']}
         return configuration, window, context
 
+    def _schedule_actor(self, schedule, generation):
+        actor = _ScheduleActor(self, schedule, generation)
+        actor.check()
+        return actor
+
+    @staticmethod
+    def _actor_signature(actor):
+        if type(actor) is _ScheduleActor:
+            actor.check()
+            return _digest({'schedule_capability': actor.token})
+        if type(actor) is not str or not actor or len(actor) > 128:
+            raise PermissionError('energy_report_actor_required')
+        return _digest({'authenticated_user': actor})
+
+    def _capture_report(self, request, purpose, actor_signature):
+        if type(request) is not ReportWindow or purpose not in ('report_read','report_execute'):
+            raise ValueError('invalid_report_request')
+        self._check_running()
+        period = request.period(self._clock())
+        configuration = capture_energy_configuration(self._manager.data or {})
+        if not configuration['grid_sensors']:
+            raise ValueError('energy_analysis_unavailable')
+        context = {'request_kind':'report_window','access_purpose':purpose,
+            'report_request':request.request(),'actor_signature':actor_signature,
+            'entry_id':self.entry_id,'service_generation':self._nonce,
+            'tariff_revision':self.storage.current_tariff_revision,
+            'feature_access_revision':self.storage.current_feature_access_revision,
+            'registry_revision':self.registry.revision,
+            'measurement_timezone':self.hass.config.time_zone,
+            'source_signature':configuration['source_signature'],
+            'period_signature':_digest(period)}
+        return configuration, period, context
+
     def _recapture(self, context):
+        if context.get('request_kind') == 'report_window':
+            return self._capture_report(ReportWindow(**context['report_request']),
+                context['access_purpose'],context['actor_signature'])
         if context.get('request_kind') == 'patterns':
             if context.get('access_purpose') != 'analysis':
                 raise ValueError('invalid_analysis_purpose')
@@ -233,6 +272,30 @@ class EnergyAnalysisService:
             raise RuntimeError('energy_analysis_context_changed')
         if state['status'] != 'ready':
             raise PermissionError('energy_feature_unauthorized')
+        if context.get('request_kind') == 'report_window':
+            if context['actor_signature'] != self._actor_signature(user_id):
+                raise PermissionError('energy_report_actor_mismatch')
+            if type(user_id) is _ScheduleActor:
+                if user_id.service is not self or context['access_purpose'] != 'report_execute':
+                    raise PermissionError('energy_report_actor_mismatch')
+                user_id.check()
+                author = user_id.schedule.get('author_user_id')
+                if author is None:
+                    # Explicit server principal, not individual native entity access.
+                    # Only validated legacy admin defaults permit authorless automation.
+                    policy = validate_feature_access(state['policy'])
+                    mode = policy['features'].get('energy_reports',{}).get('execute',{'mode':'inherit'})['mode']
+                    if mode not in ('inherit','admin'):
+                        raise PermissionError('energy_schedule_author_required')
+                    user_id.check()
+                    self._assert_current(context)
+                    return
+                user_id = author
+            if context['access_purpose'] == 'report_execute':
+                user = await self.hass.auth.async_get_user(user_id)
+                if user is None or not user.is_active or not user.is_admin:
+                    raise PermissionError('energy_report_admin_required')
+                self._assert_current(context)
         ids = [row['entity_id'] for row in self._sensors(configuration)]
         feature, operation = _ACCESS_PURPOSES[context['access_purpose']]
         await async_require_energy_source_access(self.hass, user_id, ids,
@@ -265,9 +328,14 @@ class EnergyAnalysisService:
         await guard()
         return result
 
-    async def async_get_analysis(self, kind, user_id, *, anchor=None, comparison=None, purpose='analysis'):
+    async def async_get_analysis(self, kind, user_id, *, anchor=None, comparison=None, purpose='analysis', _report_window=None):
         if not isinstance(purpose, str) or purpose not in _ACCESS_PURPOSES:
             raise ValueError('invalid_analysis_purpose')
+        if _report_window is not None:
+            if type(_report_window) is not ReportWindow or comparison is not None or anchor is not None:
+                raise ValueError('invalid_report_request')
+            _report_window.period(self._clock())
+            self._actor_signature(user_id)
         # Admission includes requests waiting for this service's own lock.
         self._check_running()
         if self._pending >= MAX_PENDING_ANALYSES:
@@ -284,7 +352,10 @@ class EnergyAnalysisService:
                 # Reading settings does not access Recorder, metadata or registry.
                 policy_state = await self.storage.async_get_feature_access()
                 self._check_running()
-                configuration, period, context = self._capture(kind, anchor, comparison, purpose=purpose)
+                configuration, period, context = (
+                    self._capture_report(_report_window,purpose,self._actor_signature(user_id))
+                    if _report_window is not None else
+                    self._capture(kind, anchor, comparison, purpose=purpose))
                 # No metadata, Recorder or registry read precedes BOTH gates.
                 await self._require_access(context, configuration, user_id, policy_state=policy_state)
                 self._assert_current(context)
@@ -468,6 +539,39 @@ class EnergyAnalysisService:
             raise
         finally:
             self._pending -= 1
+
+    async def async_prepare_report(self, request, actor, *, purpose, language,
+                                   timezone_name, hour_cycle, date_language=None):
+        """One authorized snapshot/render artifact; CSV is download data only."""
+        from .energy_report import render_energy_analysis, validate_report_preferences
+        options = {'language':language,'timezone_name':timezone_name,'hour_cycle':hour_cycle}
+        if date_language is not None:
+            options['date_language'] = date_language
+        validate_report_preferences(**options)
+        if purpose not in ('report_read','report_execute'):
+            raise ValueError('invalid_report_purpose')
+        if type(request) is not ReportWindow:
+            raise ValueError('invalid_report_request')
+        request.period(self._clock())
+        snapshot = await self.async_get_analysis('report_window',actor,purpose=purpose,_report_window=request)
+        if not await self.async_validate_result(snapshot,actor):
+            raise RuntimeError('energy_analysis_context_changed')
+        report = await self.coordinator._async_run_cpu(partial(render_energy_analysis,snapshot,**options))
+        if not await self.async_validate_result(snapshot,actor) or not self.context_is_current(snapshot):
+            raise RuntimeError('energy_analysis_context_changed')
+        # Legacy aliases are references to producer values, never another price pass.
+        period = deepcopy(snapshot['period'])
+        summary = {'snapshot_id':snapshot['snapshot_id'],'schema':2,
+            'cadence':request.cadence,'total_kwh':snapshot['totals']['kwh'],
+            'total_cost':snapshot['totals']['total_cost'],
+            'currency':snapshot['totals']['currency'],'status':snapshot['status'],
+            'period':{**period,'from':period['start'],'to':period['end']},
+            'totals':deepcopy(snapshot['totals']),'coverage':deepcopy(snapshot['coverage']),
+            'groups':deepcopy(snapshot.get('groups',{})),'chart':deepcopy(snapshot['chart']),
+            'source':{'name':'recorder','kind':'grid_import','status':snapshot['status'],
+                      'complete':snapshot['coverage']['complete']}}
+        return {**report,'subject':'Energy report · '+request.cadence,'body':report['text'],
+            'summary':summary,'period':period,'context':deepcopy(snapshot['context'])}
 
     async def async_get_report(self, kind, user_id, *, language, timezone_name,
                                hour_cycle, anchor=None, comparison=None, date_language=None):

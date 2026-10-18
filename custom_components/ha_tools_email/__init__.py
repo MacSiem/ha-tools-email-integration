@@ -39,7 +39,7 @@ from .const import (
     VERSION,
 )
 from .composer import _mail_text
-from .scheduler import async_start_scheduler, async_stop_scheduler
+from .scheduler import async_start_scheduler, async_stop_scheduler, async_reload_schedules
 from .smtp import open_smtp_connection
 from .history import PartialSMTPAcceptance, async_dispatch_attempt
 from .storage import EmailStorage
@@ -210,6 +210,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         registry.start()
         await coordinator.async_start()
         await hass.config_entries.async_forward_entry_setups(entry, ['sensor', 'binary_sensor'])
+        await async_reload_schedules(hass)
     except BaseException:
         # Cancellation is also a setup failure: remove listeners and prevent an
         # in-flight analysis from publishing through a half-initialized entry.

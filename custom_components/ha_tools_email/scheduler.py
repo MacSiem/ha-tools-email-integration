@@ -271,6 +271,8 @@ async def async_reload_schedules(hass: Any) -> None:
     for schedule in schedules:
         if not schedule.get("enabled", True):
             continue
+        if schedule.get("kind") == KIND_ENERGY_REPORT and bucket.get("energy_analysis") is None:
+            continue
         try:
             normalize_schedule_calendar(schedule)
             parse_schedule_time(schedule["time"])
@@ -360,6 +362,8 @@ async def async_send_now(
     period_mode: str | None = None,
     report_timezone: str | None = None,
     max_entries: int | None = None,
+    actor=None,
+    report_preferences=None,
 ) -> dict[str, Any]:
     """Compose and send a report immediately."""
     bucket = hass.data[DOMAIN]
@@ -381,6 +385,7 @@ async def async_send_now(
         cadence=cadence,
         recipients=recipients or [],
         now=now,
+        **({"actor":actor,"report_preferences":report_preferences} if kind == KIND_ENERGY_REPORT else {}),
         **options,
     )
 
@@ -399,6 +404,8 @@ async def async_send_report(
     report_timezone: str | None = None,
     period_semantics: str | None = None,
     max_entries: int | None = None,
+    actor=None,
+    report_preferences=None,
 ) -> dict[str, Any]:
     """Compose and send one report through the existing SMTP send path."""
     from .composer import async_build_report_payload
@@ -409,26 +416,82 @@ async def async_send_report(
     payload = {}
     to = ""
     schedule_generation = bucket.get("schedule_generation", 0)
+    energy = kind == KIND_ENERGY_REPORT
+    service = bucket.get('energy_analysis') if energy else None
+    load_config, send = bucket[DATA_LOAD_CONFIG], bucket[DATA_SEND_EMAIL]
+    smtp_revision = storage.current_smtp_revision if energy else None
+    schedule_revision = storage.current_schedule_revision if energy else None
+    if energy:
+        if service is None:
+            raise RuntimeError('energy_analysis_not_ready')
+        # Freeze once before the first await, including the legacy rolling default.
+        from .report_window import resolve_report_window
+        request = resolve_report_window(cadence,now,report_timezone or hass.config.time_zone,
+            mode='calendar' if expected_schedule is not None or period_semantics == 'previous_completed_calendar_period' else 'rolling',
+            bounds=report_window)
+        report_window = tuple(datetime.fromisoformat(x) for x in (request.start,request.end))
+        period_semantics = request.semantics
+        if actor is None and expected_schedule is not None:
+            actor = service._schedule_actor(expected_schedule,schedule_generation)
+        service._actor_signature(actor)
+
+    def fence():
+        if not energy:
+            return
+        if (hass.data.get(DOMAIN) is not bucket or bucket.get('storage') is not storage
+                or bucket.get(DATA_LOAD_CONFIG) is not load_config
+                or bucket.get(DATA_SEND_EMAIL) is not send
+                or bucket.get('schedule_generation',0) != schedule_generation):
+            raise RuntimeError('email_delivery_context_changed')
+        if energy:
+            service._check_running()
+            if (bucket.get('energy_analysis') is not service
+                    or storage.current_smtp_revision != smtp_revision
+                    or storage.current_schedule_revision != schedule_revision):
+                raise RuntimeError('email_delivery_context_changed')
+
     async def prepare():
         nonlocal payload, to
-        cfg = await bucket[DATA_LOAD_CONFIG]()
-        to = ", ".join(recipients) if recipients else cfg.get("default_recipient", "")
+        fence()
+        if not energy:
+            # Preserve the log path's original config -> compose ordering and IO.
+            cfg = await load_config()
+            to = ", ".join(recipients) if recipients else cfg.get("default_recipient", "")
+        # Energy must pass feature/native gates inside the real guarded service
+        # before the first SMTP configuration read. No legacy engine fallback.
         payload = await async_build_report_payload(
             hass, storage, kind=kind, cadence=cadence, now=now,
             **({"window_start": report_window[0], "window_end": report_window[1]} if report_window else {}),
             **({"report_timezone": report_timezone} if report_timezone is not None else {}),
             **({"period_semantics": period_semantics} if period_semantics is not None else {}),
             **({"max_entries": max_entries} if max_entries is not None else {}),
+            **({"actor":actor,"purpose":"report_execute","report_preferences":report_preferences} if energy else {}),
         )
+        if energy:
+            fence()
+            if not service.context_is_current(payload):
+                raise RuntimeError('energy_analysis_context_changed')
+            cfg = await load_config()
+            fence()
+            to = ", ".join(recipients) if recipients else cfg.get("default_recipient", "")
         # Recorder/config awaits can allow an administrator's edit/delete.
         # Re-read immediately before the shared dispatcher crosses into SMTP.
         if expected_schedule is not None:
             current = await storage.async_get_schedule(schedule_id)
             if current != expected_schedule or bucket.get("schedule_generation", 0) != schedule_generation:
                 raise ValueError("schedule_changed_before_dispatch")
+        if energy:
+            # Schedule re-read above precedes the final native authorization await.
+            if not await service.async_validate_result(payload,actor):
+                raise RuntimeError('energy_analysis_context_changed')
+            if not service.context_is_current(payload):
+                raise RuntimeError('energy_analysis_context_changed')
+        # No await remains before history's existing executor handoff. Nothing
+        # here claims the ability to recall a message after that handoff.
+        fence()
         return cfg, to, payload["subject"], payload["body"], payload["html"]
     dispatch = await async_dispatch_attempt(
-        hass, storage, bucket[DATA_SEND_EMAIL], prepare,
+        hass, storage, send, prepare,
         source="schedule" if schedule_id is not None else "manual",
         kind=kind, cadence=cadence,
         period=fire_period_key({"cadence": cadence}, now),

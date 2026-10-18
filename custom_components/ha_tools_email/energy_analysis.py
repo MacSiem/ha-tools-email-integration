@@ -59,7 +59,7 @@ def _pick(value, keys):
 
 
 def _public_period(period):
-    scalar_keys = ('status', 'reason', 'kind', 'start', 'end', 'local_start', 'local_end',
+    scalar_keys = ('status', 'reason', 'kind', 'semantics', 'cadence', 'grain', 'start', 'end', 'local_start', 'local_end',
                    'start_fold', 'end_fold', 'timezone', 'hours', 'partial', 'calendar_end',
                    'calendar_local_end', 'calendar_hours', 'recorder_hour_aligned', 'calendar_clamped')
     result = _pick(period, scalar_keys)

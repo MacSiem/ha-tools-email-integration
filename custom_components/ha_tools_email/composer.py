@@ -551,8 +551,16 @@ async def async_build_report_payload(
     report_timezone: str | None = None,
     period_semantics: str | None = None,
     max_entries: int | None = None,
+    actor=None,
+    purpose: str = "report_read",
+    report_preferences: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compose a report payload from Home Assistant runtime data."""
+    if kind == KIND_ENERGY_REPORT:
+        return await async_build_energy_report_payload(hass,cadence=cadence,now=now,
+            window_start=window_start,window_end=window_end,report_timezone=report_timezone,
+            actor=actor,purpose=purpose,report_preferences=report_preferences,
+            period_semantics=period_semantics)
     presentation = _ha_presentation(hass)
     now = _aware(now or datetime.now(timezone.utc))
     if kind == KIND_LOG_DIGEST:
@@ -728,128 +736,32 @@ async def async_grid_sensors(hass: Any) -> list[dict[str, Any]]:
 
 
 async def async_build_energy_report_payload(
-    hass: Any,
-    *,
-    cadence: str,
-    now: datetime | None = None,
-    window_start: datetime | None = None,
-    window_end: datetime | None = None,
-    report_timezone: str | None = None,
-    compare_calendar: bool = True,
-    presentation: dict[str, Any] | None = None,
-    _finalize: bool = True,
+    hass: Any, *, cadence: str, now: datetime | None = None,
+    window_start: datetime | None = None, window_end: datetime | None = None,
+    report_timezone: str | None = None, compare_calendar: bool = True,
+    presentation: dict[str, Any] | None = None, _finalize: bool = True,
+    actor=None, purpose: str = 'report_read', report_preferences=None,
+    period_semantics: str | None = None,
 ) -> dict[str, Any]:
-    """Compose an energy report from recorder statistics."""
-    now = _aware(now or datetime.now(timezone.utc))
+    """Actual Energy composition: schema2 producer and its common renderer only."""
+    from .report_window import resolve_report_window
+    bucket = hass.data.get('ha_tools_email',{})
+    service = bucket.get('energy_analysis')
+    if service is None:
+        raise RuntimeError('energy_analysis_not_ready')
+    if (window_start is None) != (window_end is None):
+        raise ValueError('invalid_report_window')
+    # Existing caller defaults are preserved only as legacy presentation context.
     presentation = presentation or _ha_presentation(hass)
-    end = (_aware(window_end).astimezone(timezone.utc) if window_end is not None else
-           _aware(now or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0))
-    start = _aware(window_start).astimezone(timezone.utc) if window_start is not None else _period_start(cadence, end)
-    sensors = await async_grid_sensors(hass)
-    snapshot = await async_get_energy_usage(hass, sensors, start, end, cadence)
-    payload = build_energy_report_payload(
-        snapshot["devices"], cadence=cadence, now=now or end, presentation=presentation, _finalize=False,
-        currency=getattr(getattr(hass, "config", None), "currency", "") or "",
-        price_per_kwh=None, _include_charts=False, source_kind="grid",
-        coverage=snapshot.get("coverage"),
-    )
-    chart_tariff_rows = []
-    payload["summary"].update({key: value for key, value in snapshot.items()
-                               if key not in {"devices", "hourly_buckets", "source_buckets"}})
-    storage = (getattr(hass, "data", {}) or {}).get("ha_tools_email", {}).get("storage")
-    if storage is not None:
-        try:
-            tariff_state = await storage.async_get_tariff()
-            tariff_profile = tariff_state["profile"]
-        except Exception:
-            tariff_profile = {"schema": 0}
-        if tariff_profile is not None:
-            from .tariff import price_measurements
-            costs = price_measurements(tariff_profile, snapshot, start, end,
-                                       start.timestamp() % 3600 == 0 and end.timestamp() % 3600 == 0)
-            # The report only renders known measured usage charges; monthly fees
-            # remain separate metadata, never a prorated or total household bill.
-            breakdown = {}
-            if costs["complete"]:
-                for row in costs["rows"]:
-                    key = (tuple(row["zones"]), row["energyRate"], row["variableRate"])
-                    zone = breakdown.setdefault(key, {"zone": row["zone"], "zones": row["zones"],
-                                                      "zoneAttribution": row["zoneAttribution"], "kwh": 0,
-                                                      "energyRate": row["energyRate"], "variableRate": row["variableRate"],
-                                                      "energyCost": 0, "variableCost": 0})
-                    zone["kwh"] += row["kwh"]
-                    zone["energyCost"] += row["energyCost"]
-                    zone["variableCost"] = (None if zone["variableCost"] is None or row["variableCost"] is None
-                                            else zone["variableCost"] + row["variableCost"])
-                for zone in breakdown.values():
-                    zone["usageCost"] = (zone["energyCost"] + zone["variableCost"]
-                                         if zone["variableCost"] is not None else None)
-            safe_currency = costs["currency"] if isinstance(costs["currency"], str) and len(costs["currency"]) == 3 and costs["currency"].isascii() and costs["currency"].isupper() and costs["currency"].isalpha() else ""
-            fields = {key: costs[key] for key in ("energyCost", "variableCost", "usageCost", "fixedMonthly", "priceBasis")}
-            fields.update(currency=safe_currency, tariff_complete=costs["complete"],
-                          tariff_issues=costs["issues"], zoneBreakdown=list(breakdown.values()))
-            payload["summary"].update(fields)
-            payload["summary"]["total_cost"] = costs["usageCost"]
-            charge = _energy_cost_text(costs["usageCost"], safe_currency) if costs["usageCost"] is not None else "Usage cost unavailable"
-            payload["body"] = payload["body"].replace("Tariff not configured", "Usage cost unavailable")
-            payload["html"] = payload["html"].replace("Tariff not configured", "Usage cost unavailable")
-            total_kwh = payload["summary"]["total_kwh"]
-            if total_kwh is not None:
-                previous_total = f"Total: {total_kwh:.2f} kWh / Usage cost unavailable"
-                actual_total = f"Total: {total_kwh:.2f} kWh / {charge}"
-                payload["body"] = payload["body"].replace(previous_total, actual_total, 1)
-                payload["html"] = payload["html"].replace(escape(previous_total), escape(actual_total), 1)
-            energy_text = (_energy_cost_text(costs["energyCost"], safe_currency)
-                           if costs["energyCost"] is not None else "unavailable")
-            variable_text = (_energy_cost_text(costs["variableCost"], safe_currency)
-                             if costs["variableCost"] is not None else "unavailable")
-            fixed_text = (_energy_cost_text(costs["fixedMonthly"], safe_currency)
-                          if costs["fixedMonthly"] is not None else "unknown")
-            line = (f"Measured tariff ({costs['priceBasis'] or 'unknown'}): energy {energy_text}; "
-                    f"variable fees {variable_text}; usage cost {charge}. "
-                    f"Fixed monthly fee: {fixed_text}, shown separately without proration.")
-            payload["body"] += "\n\n" + line
-            append_mail_html(payload, f"<p>{escape(line)}</p>")
-            chart_tariff_rows = costs["rows"]
-    payload["summary"]["period"] = {"start": start.isoformat(), "end": end.isoformat(), "cadence": cadence}
-    context = f"Grid import from Energy Dashboard. Recorder window: {_report_date(start, presentation)} → {_report_date(end, presentation)} (completed hours)."
-    if snapshot["status"] == "partial":
-        context = "Incomplete energy statistics; period total withheld. " + context
-    payload["body"] += "\n\n" + context
-    append_mail_html(payload, f"<p>{escape(context)}</p>")
-    config = getattr(hass, "config", None)
-    timezone_name = report_timezone if report_timezone is not None else getattr(config, "time_zone", None)
-    # ZoneInfo can read tzdata; resolve it away from HA's event loop.
-    args = (cadence, start, end, timezone_name, compare_calendar and window_start is not None and window_end is not None)
-    executor = getattr(hass, "async_add_executor_job", None)
-    comparison = (await executor(_calendar_comparison_window, *args) if executor else
-                  _calendar_comparison_window(*args))
-    if comparison["status"] == "pending":
-        previous = await async_get_energy_usage(
-            hass, sensors, datetime.fromisoformat(comparison["previous_start"]),
-            datetime.fromisoformat(comparison["previous_end"]), cadence,
-        )
-        comparison = _compare_energy_snapshots(snapshot, previous, comparison)
-    payload["summary"]["comparison"] = comparison
-    comparison_lines = _energy_comparison_lines(comparison, presentation)
-    payload["body"] += "\n\n" + "\n".join(comparison_lines)
-    comparison_html = ('<div class="mail-card" style="margin:16px 0;padding:14px 16px;'
-                       'background:#eff6ff;border:1px solid #bfdbfe">'
-                       '<h2 style="font-size:16px;margin:0 0 10px">Previous period comparison</h2>'
-                       + "".join(f'<p style="margin:6px 0">{escape(line)}</p>' for line in comparison_lines)
-                       + '</div>')
-    append_mail_html(payload, comparison_html)
-    interactive_url = (safe_energy_url(getattr(config, "external_url", None))
-                       or safe_energy_url(getattr(config, "internal_url", None)))
-    attach_mail_charts(payload, build_energy_chart_model(
-        payload["summary"], snapshot.get("hourly_buckets", []), chart_tariff_rows,
-        timezone_name=report_timezone if report_timezone is not None else getattr(config, "time_zone", None),
-        interactive_url=interactive_url, source_kind="grid",
-    ), row_label=lambda chart, row: _energy_chart_label(
-        chart, row, payload["summary"]["visualization"], presentation))
-    if _finalize:
-        _finish_plain(payload, now, presentation)
-    return payload
+    zone = report_timezone or getattr(hass.config,'time_zone','UTC')
+    mode = 'calendar' if period_semantics == 'previous_completed_calendar_period' or (
+        period_semantics is None and window_start is not None and compare_calendar) else 'rolling'
+    request = resolve_report_window(cadence,now or datetime.now(timezone.utc),zone,mode=mode,
+        bounds=(window_start,window_end) if window_start is not None else None)
+    preferences = dict(report_preferences) if report_preferences is not None else {
+        'language':presentation['language'],
+        'timezone_name':getattr(presentation['zone'],'key','UTC'),'hour_cycle':'24'}
+    return await service.async_prepare_report(request,actor,purpose=purpose,**preferences)
 
 
 def _calendar_comparison_window(

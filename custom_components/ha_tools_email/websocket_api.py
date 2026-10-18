@@ -683,7 +683,8 @@ async def _ws_get_config(
 ) -> None:
     """Return non-secret SMTP state and schedules."""
     config = await _safe_smtp_config(hass)
-    config["schedules"] = await _storage(hass).async_list_schedules()
+    config["schedules"] = [{key:value for key,value in row.items() if key != "author_user_id"}
+                           for row in await _storage(hass).async_list_schedules()]
     connection.send_result(msg["id"], config)
 
 
@@ -720,7 +721,7 @@ async def _ws_list_schedules(
         except (ValueError, TypeError, KeyError):
             # No private parser errors or stored credentials in metadata.
             pass
-        result.append({**row, **metadata})
+        result.append({**{key:value for key,value in row.items() if key != "author_user_id"}, **metadata})
     connection.send_result(msg["id"], {"schedules": result})
 
 
@@ -753,7 +754,13 @@ async def _ws_set_schedule(
             schedule = msg.get("schedule")
             if not isinstance(schedule, dict):
                 raise ValueError("schedule object is required")
-            saved = await storage.async_upsert_schedule(schedule)
+            if any(key in schedule for key in ('author_user_id','actor','actor_id','purpose','server_actor')):
+                raise ValueError('reserved_schedule_actor_field')
+            user = await hass.auth.async_get_user(connection.user.id)
+            if user is None or not user.is_active or not user.is_admin:
+                raise PermissionError('schedule_admin_required')
+            saved = await storage.async_upsert_schedule(schedule,author_user_id=connection.user.id)
+            saved = {key:value for key,value in saved.items() if key != 'author_user_id'}
             result = {"schedule": saved}
     except ValueError as err:
         connection.send_error(msg["id"], "invalid_payload", str(err))
@@ -763,7 +770,8 @@ async def _ws_set_schedule(
         return
 
     await async_reload_schedules(hass)
-    schedules = await storage.async_list_schedules()
+    schedules = [{key:value for key,value in row.items() if key != "author_user_id"}
+                 for row in await storage.async_list_schedules()]
     hass.bus.async_fire(EVENT_SCHEDULES_CHANGED, {"schedules": schedules})
     result["schedules"] = schedules
     connection.send_result(msg["id"], result)
@@ -775,6 +783,7 @@ async def _ws_set_schedule(
         vol.Required("kind"): vol.In(sorted(VALID_KINDS)),
         vol.Required("cadence"): vol.In(sorted(VALID_CADENCES)),
         vol.Optional("recipients", default=[]): vol.Any([str], str),
+        vol.Optional("report_preferences"): dict,
         vol.Optional("period_mode"): vol.In(["rolling", "calendar"]),
         vol.Optional("timezone"): str,
         vol.Optional("max_entries"): vol.All(int, vol.Range(min=1, max=1000)),
@@ -797,6 +806,8 @@ async def _ws_send_now(
             kind=msg["kind"],
             cadence=msg["cadence"],
             recipients=recipients,
+            **({"actor":connection.user.id} if msg["kind"] == "energy_report" else {}),
+            **({"report_preferences":msg["report_preferences"]} if msg["kind"] == "energy_report" and "report_preferences" in msg else {}),
             **({"period_mode": msg["period_mode"]} if "period_mode" in msg else {}),
             **({"report_timezone": msg["timezone"]} if "timezone" in msg else {}),
             **({"max_entries": msg["max_entries"]} if "max_entries" in msg else {}),
@@ -810,6 +821,7 @@ async def _ws_send_now(
 @websocket_api.websocket_command(
     {
         vol.Required("type"): f"{DOMAIN}/preview_energy_report",
+        vol.Optional("report_preferences"): dict,
         vol.Required("cadence"): vol.In(sorted(VALID_CADENCES)),
         vol.Optional("calendar_period"): bool,
         vol.Optional("format"): vol.In(["summary", "mail"]),
@@ -824,41 +836,17 @@ async def _ws_preview_energy_report(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Read Recorder without sending; completed calendar periods are explicit opt-in."""
-    if msg.get("format") == "mail":
-        await _async_preview_mail(hass, connection, msg, "energy_report")
+    """Legacy admin projections from the single authorized report path."""
+    if 'calendar_period' in msg and type(msg['calendar_period']) is not bool:
+        connection.send_error(msg['id'],'invalid_payload','calendar_period must be boolean')
         return
-    if "period_mode" in msg:
-        connection.send_error(msg["id"], "invalid_payload", "period_mode requires format=mail")
+    if msg.get('format') != 'mail' and 'period_mode' in msg:
+        connection.send_error(msg['id'],'invalid_payload','period_mode requires format=mail')
         return
-    calendar_period = msg.get("calendar_period", False)
-    if type(calendar_period) is not bool or "timezone" in msg and not calendar_period:
-        connection.send_error(msg["id"], "invalid_payload", "Timezone requires calendar_period=true.")
+    if msg.get('format') != 'mail' and 'timezone' in msg and not msg.get('calendar_period',False):
+        connection.send_error(msg['id'],'invalid_payload','Timezone requires calendar_period=true.')
         return
-    if not calendar_period:
-        # Keep the existing dashboard's current-period request and response intact.
-        payload = await async_build_energy_report_payload(hass, cadence=msg["cadence"])
-        connection.send_result(msg["id"], payload["summary"])
-        return
-    now = _utcnow()
-    local_zone = getattr(getattr(hass, "config", None), "time_zone", None)
-    context = {"cadence": msg["cadence"]}
-    if "timezone" in msg:
-        context["timezone"] = msg["timezone"]
-    try:
-        await asyncio.to_thread(normalize_schedule_calendar, context)
-        zone = effective_schedule_timezone(context, now, local_zone)
-        start, end = calendar_report_window(context, now, local_timezone=local_zone)
-    except (ValueError, TypeError, KeyError):
-        connection.send_error(msg["id"], "invalid_payload", "Invalid calendar timezone.")
-        return
-    report_zone = getattr(zone, "key", str(zone))
-    payload = await async_build_energy_report_payload(hass, cadence=msg["cadence"], now=now,
-        window_start=start, window_end=end, report_timezone=report_zone)
-    summary = dict(payload["summary"])
-    summary.update(cadence=msg["cadence"], effective_timezone=report_zone,
-        period={**summary["period"], "semantics": "previous_completed_calendar_period"})
-    connection.send_result(msg["id"], summary)
+    await _async_preview_mail(hass,connection,msg,'energy_report')
 
 
 @websocket_api.websocket_command({
@@ -940,7 +928,24 @@ async def _async_preview_mail(hass, connection, msg, kind) -> None:
     payload = await async_build_report_payload(hass, _bucket(hass).get("storage"),
         kind=kind, cadence=msg["cadence"], now=now,
         window_start=start, window_end=end, **options,
+        **({"actor":connection.user.id,"purpose":"report_read",
+             "report_preferences":msg.get("report_preferences")} if kind == "energy_report" else {}),
         **({"max_entries": limit} if kind == "log_digest" else {}))
+    if kind == 'energy_report':
+        service = _bucket(hass).get('energy_analysis')
+        if service is None or not await service.async_validate_result(payload,connection.user.id):
+            raise RuntimeError('energy_analysis_context_changed')
+        if not service.context_is_current(payload):
+            raise RuntimeError('energy_analysis_context_changed')
+        if msg.get('format') != 'mail':
+            connection.send_result(msg['id'],payload['summary'])
+        else:
+            connection.send_result(msg['id'],{**{key:payload[key] for key in
+                ('snapshot_id','subject','body','html','csv','period')},
+                'cadence':msg['cadence'],'generated_at':now.isoformat(),
+                'effective_timezone':payload['period']['timezone'],
+                'source':payload['summary']['source']})
+        return
     summary = payload["summary"]
     source = summary.get("source") or {
         "name": "recorder", "kind": "grid_import", "status": summary.get("status", "no_data"),

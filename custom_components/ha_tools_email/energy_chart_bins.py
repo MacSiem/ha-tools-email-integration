@@ -14,6 +14,8 @@ from .energy_zone_bins import ZoneBreakdown, zone_labels
 
 def build_chart_bins(rows, period, active):
     grain = {'day': 'hour', 'week': 'day', 'month': 'day', 'year': 'month', 'rolling_local_dates': 'day'}.get(period.get('kind'))
+    if period.get('kind') == 'report_window':
+        grain = period.get('grain') if period.get('grain') in ('hour','day') else None
     chart = {'status': 'unknown', 'reason': None, 'timezone': period.get('timezone'),
              'grain': grain, 'fixed_fee_scope': 'household_period_only',
              'coverage_kind': 'complete_household_hours', 'bins': []}

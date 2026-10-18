@@ -134,6 +134,8 @@ class EmailStorage:
         self._data: dict[str, Any] | None = None
         self._tariff_only_loaded: dict[str, Any] | None = None
         self._book_pending = 0
+        self._smtp_revision = 0
+        self._schedule_revision = 0
 
     async def async_load(self) -> dict[str, Any]:
         """Load storage, creating defaults when absent."""
@@ -383,6 +385,15 @@ class EmailStorage:
         """Return the full persisted state."""
         return await self.async_load()
 
+    @property
+    def current_schedule_revision(self):
+        return self._schedule_revision
+
+    @property
+    def current_smtp_revision(self):
+        """Process-local, secret-free confirmed SMTP configuration generation."""
+        return self._smtp_revision
+
     async def async_get_smtp_config(self) -> dict[str, Any]:
         """Return the SMTP configuration from Store with defaults applied."""
         data = await self.async_load()
@@ -402,6 +413,7 @@ class EmailStorage:
                 security["password_via_options"] = bool(password_via_options)
             await self._store.async_save_confirmed(candidate)
             self._data = candidate
+            self._smtp_revision += 1
 
     async def async_password_via_options(self) -> bool:
         """Return True when the stored password was entered through the options flow."""
@@ -430,6 +442,7 @@ class EmailStorage:
         candidate["smtp_config"] = clean
         await self._store.async_save_confirmed(candidate)
         self._data = candidate
+        self._smtp_revision += 1
         await self.hass.async_add_executor_job(_remove_legacy_config, legacy_path)
         _LOGGER.info("Migrated SMTP configuration to Home Assistant Store")
 
@@ -447,10 +460,14 @@ class EmailStorage:
                 return deepcopy(schedule)
         return None
 
-    async def async_upsert_schedule(self, schedule: dict[str, Any]) -> dict[str, Any]:
+    async def async_upsert_schedule(self, schedule: dict[str, Any], *, author_user_id=None) -> dict[str, Any]:
         """Validate an explicit save, preserving other Store sections verbatim."""
         if not isinstance(schedule, dict):
             raise ValueError("schedule must be an object")
+        if any(key in schedule for key in ('author_user_id','actor','actor_id','purpose','server_actor')):
+            raise ValueError('reserved_schedule_actor_field')
+        if author_user_id is not None and (type(author_user_id) is not str or not author_user_id):
+            raise ValueError('invalid_schedule_author')
         # Reject calendar fields before any load/save or SMTP side effect.
         await asyncio.to_thread(normalize_schedule_calendar, schedule)
         async with self._lock:
@@ -464,6 +481,8 @@ class EmailStorage:
                           if isinstance(row, dict) and self._stored_schedule_id(row) == schedule_id), None)
             existing = rows[index] if index is not None else {}
             merged = {**existing, **schedule}
+            if author_user_id is not None:
+                merged["author_user_id"] = author_user_id
             if schedule.get("use_ha_timezone") is True:
                 merged.pop("timezone", None)
             # Canonical edits supersede inherited aliases, explicit conflicts fail.
@@ -486,6 +505,7 @@ class EmailStorage:
             candidate["schedules"] = rows
             await self._store.async_save_confirmed(candidate)
             self._data = candidate
+            self._schedule_revision += 1
             return deepcopy(clean)
 
     async def async_delete_schedule(self, schedule_id: str) -> bool:
@@ -503,6 +523,7 @@ class EmailStorage:
                 data["scheduler_state"].pop(schedule_id, None)
                 await self._store.async_save_confirmed(data)
                 self._data = data
+                self._schedule_revision += 1
             return removed
 
     async def async_get_digest_state(self, kind: str, cadence: str) -> dict[str, Any]:
