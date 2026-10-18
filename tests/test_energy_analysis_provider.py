@@ -108,7 +108,16 @@ class AnalysisProviderTest(unittest.TestCase):
                 self.assertEqual(grid, result['grid'])
                 self.assertEqual(devices, result['consumers'])
                 self.assertEqual([(['sensor.grid'], metadata), (['sensor.parent', 'sensor.child'], metadata)], observed)
-                self.assertEqual(4, guard.await_count)
+                # Revocation after either history query prevents publication;
+                # after the first query it also prevents the consumer read.
+                for boundary in (1, 2):
+                    observed.clear()
+                    async def revoked():
+                        if len(observed) >= boundary:
+                            raise PermissionError('source_access_denied')
+                    with self.assertRaises(PermissionError):
+                        await provider.async_read_energy_chunk(object(), config, START, END, guard=revoked)
+                    self.assertEqual(boundary, len(observed))
                 observed.clear()
                 with self.assertRaisesRegex(ValueError, 'analysis_chunk_too_large'):
                     await provider.async_read_energy_chunk(object(), config, START, '2026-01-09T00:00Z', guard=guard)

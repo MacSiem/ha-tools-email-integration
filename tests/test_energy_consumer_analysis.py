@@ -61,6 +61,18 @@ class ConsumerAnalysisTest(unittest.TestCase):
         result['groups']['areas']['kitchen']['usage_cost'] = 'tampered'
         self.assertEqual('120.00', builder.finish()['groups']['areas']['kitchen']['usage_cost'])
 
+    def test_configured_energy_device_name_overrides_registry_label_without_mutation(self):
+        import copy
+        config = copy.deepcopy(CONSUMERS); config[0]['name'] = 'Configured house meter'
+        base = fixtures.EnergyAnalysisTest().builder()
+        builder = analysis.EnergyAnalysisAccumulator(base._book, base._period, base._context,
+            generated_at=base._generated, consumers=config, membership=MEMBERSHIP)
+        config[0]['name'] = 'mutated caller config'
+        self.add(builder, START, MID, 130, (100, 40, 10))
+        self.add(builder, MID, END, 130, (100, 40, 10))
+        self.assertEqual('Configured house meter', builder.finish()['groups']['devices'][IDS[0]]['name'])
+        self.assertEqual('Kitchen meter', MEMBERSHIP['sources'][IDS[0]]['name'])
+
     def test_period_component_cents_reconcile_devices_rooms_and_household(self):
         b = book([version(rate=.005, monthly=0)])
         b['tariffs'][0]['versions'][0]['profile']['zones'][0]['variableRate'] = .005
