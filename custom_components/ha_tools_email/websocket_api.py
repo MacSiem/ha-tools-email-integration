@@ -387,6 +387,45 @@ async def _ws_set_tariff_book(hass, connection, msg):
 
 
 @websocket_api.websocket_command({
+    vol.Required('type'): f'{DOMAIN}/energy_patterns',
+    vol.Required('days'): vol.In((7, 30)),
+})
+@websocket_api.async_response
+async def _ws_energy_patterns(hass, connection, msg):
+    """Only the server chooses clock, timezone, sources and access purpose."""
+    if (set(msg) - {'id', 'type', 'days'} or type(msg.get('days')) is not int
+            or msg['days'] not in (7, 30)):
+        connection.send_error(msg['id'], 'invalid_patterns_selection', 'Choose 7 or 30 local days.')
+        return
+    if not await _snapshot_authorized(hass, connection):
+        connection.send_error(msg['id'], 'unauthorized', 'Active household user required.')
+        return
+    service = hass.data.get(DOMAIN, {}).get('energy_analysis')
+    if service is None:
+        connection.send_error(msg['id'], 'energy_patterns_unavailable', 'Energy patterns are unavailable.')
+        return
+    user_id = connection.user.id
+    try:
+        result = await service.async_get_patterns(msg['days'], user_id)
+        if not await _snapshot_authorized(hass, connection):
+            raise PermissionError('energy_sources_unauthorized')
+        if await service.async_validate_result(result, user_id) is not True:
+            raise RuntimeError('energy_analysis_changed')
+        if (hass.data.get(DOMAIN, {}).get('energy_analysis') is not service
+                or result.get('context', {}).get('access_purpose') != 'analysis'
+                or result.get('context', {}).get('request_kind') != 'patterns'
+                or not service.context_is_current(result)):
+            raise RuntimeError('energy_analysis_changed')
+    except PermissionError:
+        connection.send_error(msg['id'], 'unauthorized', 'Energy source access required.')
+        return
+    except Exception:
+        connection.send_error(msg['id'], 'energy_patterns_unavailable', 'Energy patterns are unavailable.')
+        return
+    connection.send_result(msg['id'], result)
+
+
+@websocket_api.websocket_command({
     vol.Required('type'): f'{DOMAIN}/energy_analysis',
     vol.Optional('period', default='day'): vol.In(('day', 'week', 'month', 'year')),
     vol.Optional('anchor'): str,
@@ -927,6 +966,7 @@ def async_register_commands(hass: HomeAssistant) -> None:
         _ws_set_tariff_book,
         _ws_energy_snapshot,
         _ws_energy_analysis,
+        _ws_energy_patterns,
         _ws_energy_report,
         _ws_energy_price_queries,
         _ws_set_tariff,

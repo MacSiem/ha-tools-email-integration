@@ -1,13 +1,13 @@
 """Actual WS handler and real service, only native HA/Recorder IO fixtures."""
 from datetime import datetime,timezone
 import unittest
-from tests.test_tariff_book_websocket import BookWebsocketTest
+from tests import test_tariff_book_websocket as book_ws
 from tests.test_energy_analysis_service import Harness
 
 
 class PatternsWebsocketTest(unittest.IsolatedAsyncioTestCase):
     def harness(self):
-        ws,_,_,_,connection,results,errors=BookWebsocketTest().fixture()
+        ws,_,_,_,connection,results,errors=book_ws.BookWebsocketTest().fixture()
         h=Harness();h.book=None;h.now=datetime(2026,5,6,tzinfo=timezone.utc)
         connection.user.is_admin=False
         return ws,h,connection,results,errors

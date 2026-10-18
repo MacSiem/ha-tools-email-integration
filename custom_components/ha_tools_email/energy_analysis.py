@@ -12,6 +12,8 @@ import json
 
 from .energy_consumers import ConsumerPeriod
 from .energy_chart_bins import build_chart_bins
+from .energy_patterns_periods import resolve_patterns_window
+from .energy_patterns import build_patterns_projection
 from .energy_measurements import hour_grid, measurement_evidence
 from .tariff_history import _bounded, price_book, validate_tariff_book
 
@@ -127,7 +129,7 @@ class EnergyAnalysisAccumulator:
     """Append contiguous chunks and price the actual whole period exactly once."""
 
     def __init__(self, book, period, context, *, generated_at, consumers=None, membership=None,
-                 consumer_domain='grid_import'):
+                 consumer_domain='grid_import', patterns_window=None):
         _bounded(period, 65536)
         _bounded(context, 65536)
         self._start, self._end = _stamp(period['start']), _stamp(period['end'])
@@ -135,6 +137,16 @@ class EnergyAnalysisAccumulator:
         self._generated = _stamp(generated_at)
         if self._generated < self._end:
             raise ValueError('future_analysis_measurement')
+        self._patterns_window = None
+        if patterns_window is not None:
+            _bounded(patterns_window, 65536)
+            if (not isinstance(patterns_window, dict) or consumers is not None
+                    or patterns_window != resolve_patterns_window(
+                        patterns_window.get('days'), self._generated, patterns_window.get('timezone'))
+                    or patterns_window.get('status') != 'ready'
+                    or period != patterns_window):
+                raise ValueError('invalid_patterns_window')
+            self._patterns_window = deepcopy(patterns_window)
         self._book = validate_tariff_book(book) if book is not None else None
         self._period, self._context = _public_period(period), _public_context(context)
         self._period.update(start=self._start.isoformat(), end=self._end.isoformat())
@@ -225,6 +237,24 @@ class EnergyAnalysisAccumulator:
         status = 'ready' if complete and totals['total_cost'] is not None else 'partial'
         pricing_status = ('not_configured' if self._book is None else 'no_active_tariff' if active is None
                           else 'ready' if totals['total_cost'] is not None else 'partial')
+        if self._patterns_window is not None:
+            patterns = build_patterns_projection(self._rows, active, self._patterns_window)
+            result = {'schema': 2, 'kind': 'patterns', 'generated_at': self._generated.isoformat(),
+                'context': {**self._context, 'grid_source_signature': self._signature},
+                'active_tariff_id': pricing['active_tariff_id'] if pricing is not None else None,
+                'window': deepcopy(self._patterns_window), 'coverage': coverage,
+                'status': 'partial' if patterns['partial_window'] else status,
+                'reason': 'incomplete_local_days' if patterns['partial_window'] else None,
+                'pricing_status': pricing_status, 'totals': totals,
+                'measurement_fingerprint': fingerprint, 'patterns': patterns,
+                'rates': _public_rates(active['rates']) if active is not None else [],
+                'fees': {'scope': 'household_period_only',
+                         'details': deepcopy(active['fees']) if active is not None else None},
+                'rounding': deepcopy(pricing['rounding']) if pricing is not None else None,
+                'issues': list(self._issues)}
+            result['snapshot_id'] = _digest(result)
+            self._result = result
+            return deepcopy(result)
         alternatives = []
         if pricing is not None:
             alternative_keys = ('tariff_id', 'tariff_name', 'origin', 'measurement_fingerprint',

@@ -15,6 +15,7 @@ from time import monotonic
 from uuid import uuid4
 
 from .analysis_periods import resolve_analysis_periods
+from .energy_patterns_periods import resolve_patterns_window
 from .analysis_provider import (capture_energy_configuration,
                                 async_read_energy_chunk,
                                 async_require_energy_source_access)
@@ -86,6 +87,14 @@ def _finish(accumulator, context, provenance, comparisons=None, baseline_accumul
             groups['membership_as_of'] = result['groups'].get('captured_at')
             groups['domain_provenance'] = provenance
             result['comparisons']['mean7']['groups'] = groups
+    result.pop('snapshot_id', None)
+    result['snapshot_id'] = _digest(result)
+    return result
+
+
+def _finish_patterns(accumulator, context):
+    result = accumulator.finish()
+    result['context'].update(deepcopy(context))
     result.pop('snapshot_id', None)
     result['snapshot_id'] = _digest(result)
     return result
@@ -173,8 +182,36 @@ class EnergyAnalysisService:
                            comparison_signature=_digest(resolved['comparisons'][comparison]))
         return configuration, period, context
 
+    def _capture_patterns(self, days):
+        self._check_running()
+        window = resolve_patterns_window(days, self._clock(), self.hass.config.time_zone)
+        if window['status'] != 'ready':
+            raise ValueError(window['reason'])
+        configuration = capture_energy_configuration(self._manager.data or {})
+        if not configuration['grid_sensors']:
+            raise ValueError('energy_analysis_unavailable')
+        context = {'request_kind': 'patterns', 'access_purpose': 'analysis',
+                   'patterns_days': days, 'window_signature': _digest(window),
+                   'entry_id': self.entry_id, 'service_generation': self._nonce,
+                   'tariff_revision': self.storage.current_tariff_revision,
+                   'feature_access_revision': self.storage.current_feature_access_revision,
+                   'registry_revision': self.registry.revision,
+                   'measurement_timezone': window['timezone'],
+                   'source_signature': configuration['source_signature']}
+        return configuration, window, context
+
+    def _recapture(self, context):
+        if context.get('request_kind') == 'patterns':
+            if context.get('access_purpose') != 'analysis':
+                raise ValueError('invalid_analysis_purpose')
+            return self._capture_patterns(context['patterns_days'])
+        if context.get('request_kind') is not None:
+            raise ValueError('invalid_analysis_request_kind')
+        return self._capture(context['period_kind'], context.get('period_anchor'),
+                             context.get('comparison_kind'), purpose=context['access_purpose'])
+
     def _assert_current(self, context):
-        _, _, current = self._capture(context['period_kind'], context.get('period_anchor'), context.get('comparison_kind'), purpose=context['access_purpose'])
+        _, _, current = self._recapture(context)
         if any(context.get(key) != value for key, value in current.items()):
             self._cache = None
             raise RuntimeError('energy_analysis_context_changed')
@@ -371,6 +408,67 @@ class EnergyAnalysisService:
         finally:
             self._pending -= 1
 
+    async def async_get_patterns(self, days, user_id):
+        """Rolling local-date household patterns on the existing guarded lane."""
+        if type(days) is not int or days not in (7, 30):
+            raise ValueError('invalid_patterns_days')
+        self._check_running()
+        if self._pending >= MAX_PENDING_ANALYSES:
+            raise RuntimeError('energy_analysis_busy')
+        self._pending += 1
+        try:
+            async with self._lock:
+                self._check_running()
+                if self._manager is None:
+                    from homeassistant.components.energy.data import async_get_manager
+                    self._manager = await async_get_manager(self.hass)
+                    self._check_running()
+                policy_state = await self.storage.async_get_feature_access()
+                self._check_running()
+                configuration, window, context = self._capture_patterns(days)
+                await self._require_access(context, configuration, user_id, policy_state=policy_state)
+                self._assert_current(context)
+                state = await self.storage.async_get_tariff_book()
+                self._check_running()
+                if context['tariff_revision'] is None:
+                    context['tariff_revision'] = state['revision']
+                self._assert_current(context)
+                if state['revision'] != context['tariff_revision']:
+                    raise RuntimeError('energy_analysis_context_changed')
+                guard = partial(self._guard, context, configuration, user_id)
+                await guard()
+                key = _digest(context)
+                if self._cache is not None:
+                    cached_key, at, cached = self._cache
+                    if cached_key == key and 0 <= monotonic()-at < CACHE_SECONDS:
+                        result = deepcopy(cached)
+                        self._assert_current(context)
+                        return result
+                    self._cache = None
+                accumulator = await self._cpu(partial(EnergyAnalysisAccumulator,
+                    deepcopy(state['book']), deepcopy(window), deepcopy(context),
+                    generated_at=self._clock(), patterns_window=deepcopy(window)), guard)
+                cursor, end = (datetime.fromisoformat(window[field]) for field in ('start', 'end'))
+                while cursor < end:
+                    stop = min(cursor+timedelta(hours=168), end)
+                    await guard()
+                    chunk = await async_read_energy_chunk(self.hass, configuration, cursor, stop,
+                                                          guard=guard, include_consumers=False)
+                    await guard()
+                    await self._cpu(partial(accumulator.add_chunk, chunk['grid'], cursor, stop), guard)
+                    del chunk
+                    cursor = stop
+                result = await self._cpu(partial(_finish_patterns, accumulator, deepcopy(context)), guard)
+                # No await after this final fence before detached cache/return.
+                self._assert_current(context)
+                self._cache = (key, monotonic(), deepcopy(result))
+                return deepcopy(result)
+        except BaseException:
+            self._cache = None
+            raise
+        finally:
+            self._pending -= 1
+
     async def async_get_report(self, kind, user_id, *, language, timezone_name,
                                hour_cycle, anchor=None, comparison=None, date_language=None):
         """Render the same authorized calculation without requiring SMTP."""
@@ -400,7 +498,10 @@ class EnergyAnalysisService:
         try:
             context = result['context']
             self._assert_current(context)
-            _, period, _ = self._capture(context['period_kind'], context.get('period_anchor'), context.get('comparison_kind'), purpose=context['access_purpose'])
+            _, period, _ = self._recapture(context)
+            if context.get('request_kind') == 'patterns':
+                return (result.get('kind') == 'patterns' and result.get('window') == period
+                        and context.get('access_purpose') == 'analysis')
             return result['period'] == period
         except (KeyError, TypeError, ValueError, RuntimeError, AttributeError):
             return False
@@ -418,7 +519,7 @@ class EnergyAnalysisService:
         self._pending += 1
         try:
             context = deepcopy(result['context'])
-            configuration, _, _ = self._capture(context['period_kind'], context.get('period_anchor'), context.get('comparison_kind'), purpose=context['access_purpose'])
+            configuration, _, _ = self._recapture(context)
             await self._guard(context, configuration, user_id)
             return self.context_is_current(result)
         except PermissionError:
