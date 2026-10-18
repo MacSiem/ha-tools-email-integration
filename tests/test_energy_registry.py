@@ -1,5 +1,6 @@
 """Registry attribution and disjoint household energy, without HA imports."""
 import copy
+from decimal import Decimal
 import importlib.util
 from pathlib import Path
 import unittest
@@ -26,6 +27,31 @@ def consumer(sid, kwh, parent=None, domain='grid_import'):
 
 
 class EnergyRegistryTest(unittest.TestCase):
+    def test_decimal_residuals_remain_exact_for_subsequent_cost_calculation(self):
+        rows = [consumer('sensor.parent', 1000000),
+                consumer('sensor.child', .12345678901234568, 'sensor.parent')]
+        r = registry.build_interval_breakdown(1000000, rows, memberships())
+        self.assertEqual('999999.87654321098765432', r['devices']['sensor.parent']['kwh_decimal'])
+        self.assertEqual('0.12345678901234568', r['devices']['sensor.child']['kwh_decimal'])
+        self.assertEqual(Decimal(1000000), sum((Decimal(area['kwh_decimal'])
+                         for area in r['areas'].values()), Decimal(0)))
+        self.assertEqual('0', r['unmeasured']['kwh_decimal'])
+
+    def test_independent_consumption_keeps_rooms_without_claiming_grid_partition(self):
+        rows = [consumer('sensor.parent', 100, domain='site_consumption'),
+                consumer('sensor.child', 40, 'sensor.parent', domain='site_consumption'),
+                consumer('sensor.free', 10, domain='site_consumption')]
+        r = registry.build_interval_breakdown(130, rows, memberships(), domain='site_consumption')
+        self.assertEqual('site_consumption', r['energy_domain'])
+        self.assertTrue(r['groups_complete'])
+        self.assertEqual(60, r['areas']['kitchen']['kwh'])
+        self.assertEqual(40, r['areas']['office']['kwh'])
+        self.assertEqual(10, r['unassigned']['kwh'])
+        self.assertEqual(110, r['measured_consumption_kwh'])
+        self.assertIsNone(r['unmeasured']['kwh'])
+        self.assertIsNone(r['partition_kwh'])
+        self.assertIn('domain_mismatch', [issue['reason'] for issue in r['issues']])
+
     def test_entity_override_device_fallback_and_external_stat(self):
         m = memberships()
         self.assertEqual('kitchen', m['sources']['sensor.parent']['area_id'])
