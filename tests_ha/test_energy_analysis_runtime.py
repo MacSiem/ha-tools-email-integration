@@ -1,4 +1,6 @@
 """Detailed analysis through actual HA auth, Energy manager, Recorder SQL and WS."""
+import csv
+from io import StringIO
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -117,4 +119,46 @@ async def test_native_analysis_selected_comparison_chart_and_policy(hass, hass_s
     denied = await client.receive_json()
     assert not denied['success'] and denied['error']['code'] == 'unauthorized'
     assert 'result' not in denied
+    if not missing_source and not missing_consumer_hour and comparison == 'previous':
+        report_msg = {**msg, 'type': f'{DOMAIN}/energy_report', 'language': 'pl',
+                      'timezone': 'America/Los_Angeles', 'hour_cycle': '12'}
+        await client.send_json_auto_id(report_msg)
+        report_denied = await client.receive_json()
+        assert not report_denied['success'] and report_denied['error']['code'] == 'unauthorized'
+        # Report permission is independent: analysis remains admin-only.
+        await storage.async_save_feature_access({'schema': 1, 'features': {
+            'energy_analysis': {'read': {'mode': 'admin'}},
+            'energy_reports': {'read': {'mode': 'household'}}}}, expected_revision=1)
+        await client.send_json_auto_id(report_msg)
+        report_response = await client.receive_json()
+        assert report_response['success'], report_response
+        report = report_response['result']
+        assert report['context']['access_purpose'] == 'report_read'
+        assert report['display'] == {'language': 'pl', 'timezone': 'America/Los_Angeles', 'hour_cycle': '12'}
+        rows = list(csv.DictReader(StringIO(report['csv'])))
+        assert all(row['snapshot_id'] == report['snapshot_id'] for row in rows)
+        usage = next(row for row in rows if row['field'] == 'totals.kwh')
+        assert Decimal(usage['value'].replace(',', '.')) == Decimal(result['totals']['kwh'])
+        assert '<table' in report['html'] and '<svg' not in report['html']
+        assert report['snapshot_id'] in report['html'] and report['snapshot_id'] in report['text']
+        await storage.async_save_feature_access({'schema': 1, 'features': {
+            'energy_reports': {'read': {'mode': 'admin'}}}}, expected_revision=2)
+        await client.send_json_auto_id(report_msg)
+        denied_report = await client.receive_json()
+        assert not denied_report['success'] and denied_report['error']['code'] == 'unauthorized'
+        assert 'result' not in denied_report
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_native_household_ack_and_delivery_for_analysis_feature_events(
+        hass, hass_ws_client, hass_read_only_access_token):
+    client = await hass_ws_client(hass, hass_read_only_access_token)
+    for event in ('ha_tools_email_energy_analysis_updated', 'ha_tools_email_feature_access_updated'):
+        await client.send_json_auto_id({'type': 'subscribe_events', 'event_type': event})
+        ack = await client.receive_json()
+        assert ack['success'], ack
+        hass.bus.async_fire(event, {'revision': 7})
+        delivered = await client.receive_json()
+        assert delivered['type'] == 'event'
+        assert delivered['event']['event_type'] == event
+        assert delivered['event']['data'] == {'revision': 7}
