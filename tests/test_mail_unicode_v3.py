@@ -23,6 +23,14 @@ class MailUnicodeTests(unittest.TestCase):
         self.assertEqual([], message.defects)
         self.assertNotIn(b'SYNTHETIC-TRANSPORT-ONLY', raw)
 
+    def test_polish_generated_presentation_survives_actual_mime_encoding(self):
+        payload=charts.c.build_log_digest_payload([],cadence='monthly',now=charts.NOW,
+            presentation=charts.c._presentation('pl_PL','Europe/Warsaw'))
+        self.assertIn('HA Log Digest – miesięczny',payload['subject'])
+        self.assertIn('paź',payload['html'])
+        self.assertIn('Wygenerowano przez HA Tools Email',payload['body'])
+        self.assert_mime_fields(payload)
+
     def test_long_valid_polish_and_emoji_are_complete_and_html_is_escaped(self):
         # Cross the old client 200 UTF-16-unit boundary with a non-BMP scalar.
         text = 'a' * 199 + '😀 Żółć 🧑🏽\u200d💻 <script>alert("x")</script> & koniec' + 'z' * 500

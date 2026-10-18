@@ -16,6 +16,14 @@ class CalendarLogContextTest(unittest.TestCase):
         payload = asyncio.run(composer.async_build_log_digest_payload(
             hass, object(), cadence="daily", now=now, window_start=end-timedelta(days=1),
             window_end=end, manual_window=True))
+        caveat="Occurrences in retained aggregates; not exact events or complete event history."
+        for field in ('body','html'):
+            self.assertEqual(1,payload[field].count(caveat))
+            self.assertEqual(1,payload[field].count('How to read these numbers'))
+            self.assertIn('¹',payload[field])
+            self.assertIn('rows displayed;',payload[field])
+            self.assertIn('Unknown means a gap or unavailable value; zero is measured zero.',payload[field])
+            self.assertGreater(payload[field].index('How to read these numbers'),payload[field].index('Current diagnostics'))
         self.assertIsNone(payload["summary"]["total"])
         self.assertEqual(0, payload["summary"]["unique_problems"])
         self.assertEqual(3, payload["summary"]["current_context"]["total"])

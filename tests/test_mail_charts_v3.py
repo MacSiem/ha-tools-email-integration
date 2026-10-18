@@ -43,6 +43,9 @@ class MailChartSpecification(unittest.TestCase):
         html = m.render_charts_html(model)
         self.assertIn('Zero axis: 0', html)
         self.assertIn('-2 occurrences', html)
+        self.assertIn('class="mail-bar-value"',html)
+        self.assertIn('height:10px',html)
+        self.assertLess(html.index('aria-hidden="true"'),html.index('-2 occurrences'))
         self.assertIn('1e-12 occurrences', html)
         # No minimum-pixel bar that invents positive usage for zero or missing.
         zero_model = m.build_log_chart_model({'level_counts': {'A': 0, 'B': None}, 'logger_counts': {}})
@@ -148,6 +151,14 @@ class MailChartSpecification(unittest.TestCase):
         self.assertIn('retained aggregates', payload['html'])
         self.assertIn('Unique problems: 2', payload['body'])
         self.assertIn('Unique problems: 2', payload['html'])
+        caveat='Occurrences in retained aggregates; not exact events or complete event history.'
+        for field in ('html','body'):
+            self.assertEqual(1,payload[field].count(caveat))
+            self.assertEqual(1,payload[field].count('How to read these numbers'))
+            self.assertIn('rows displayed;',payload[field])
+            self.assertIn('Unknown means a gap or unavailable value; zero is measured zero.',payload[field])
+        self.assertIn('mail-severity-error',payload['html'])
+        self.assertIn('mail-severity-warning',payload['html'])
 
     def test_escape_long_labels_inline_table_mobile_and_no_active_content(self):
         label = '<b onclick="x">' + 'x'*400 + '</b>'
