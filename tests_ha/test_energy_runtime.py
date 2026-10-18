@@ -177,3 +177,32 @@ async def test_native_recorder_external_import_without_state_prices_daily_moneta
     assert state.attributes['device_class'] == 'monetary'
     assert state.attributes['unit_of_measurement'] == 'EUR'
     assert 'state_class' not in state.attributes
+
+
+async def test_native_timestamp_and_cheap_transition_publish_aware_values(hass, hass_storage, freezer):
+    freezer.move_to('2026-10-18T12:30:00+00:00')
+    await hass.config.async_set_time_zone('UTC')
+    entry, storage = await _setup(hass)
+    tariff = profile()
+    tariff['zones'][0]['classification'] = 'expensive'
+    tariff['zones'].append({'id': 'night', 'energyRate': .4,
+                            'variableRate': .1, 'classification': 'cheap'})
+    tariff['rules'] = [{'zone': 'night', 'intervals': [{'from': '22:00', 'to': '06:00'}]}]
+    await storage.async_save_tariff(tariff, expected_revision=0)
+    coordinator = hass.data[DOMAIN]['energy_snapshot']
+    registry = er.async_get(hass)
+
+    def state(key, domain='sensor'):
+        return hass.states.get(registry.async_get_entity_id(
+            domain, DOMAIN, f'{entry.entry_id}_energy_{key}'))
+
+    await coordinator.async_refresh()
+    assert state('next_cheap').state == '2026-10-18T22:00:00+00:00'
+    assert state('next_cheap').attributes['device_class'] == 'timestamp'
+    assert state('cheap', 'binary_sensor').state == 'off'
+    assert float(state('price').state) == 1.2
+    freezer.move_to('2026-10-18T22:30:00+00:00')
+    await coordinator.async_refresh()
+    assert state('cheap', 'binary_sensor').state == 'on'
+    assert float(state('price').state) == .5
+    assert state('next_cheap').state == '2026-10-19T22:00:00+00:00'
