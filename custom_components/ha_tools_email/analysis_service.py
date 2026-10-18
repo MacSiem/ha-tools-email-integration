@@ -227,9 +227,12 @@ class EnergyAnalysisService:
                     plan = resolved['comparisons'][comparison]
                     comparisons = {}
                     if plan['status'] == 'ready' and comparison != 'mean7':
+                        active_tariff = (next((row for row in state['book']['tariffs']
+                            if row['id'] == state['book'].get('active_tariff_id')), None) if state['book'] else None)
                         pair = await self._cpu(partial(PairedComparisonAccumulator, period,
                             plan['baseline_periods'][0], timezone_name=context['measurement_timezone'],
-                            calendar_kind={'day': 'daily', 'week': 'weekly', 'month': 'monthly', 'year': 'yearly'}[kind]), guard)
+                            calendar_kind={'day': 'daily', 'week': 'weekly', 'month': 'monthly', 'year': 'yearly'}[kind],
+                            tariff=active_tariff), guard)
                         baseline_accumulator = await self._cpu(partial(EnergyAnalysisAccumulator,
                             deepcopy(state['book']), {**plan['baseline_periods'][0], 'kind': kind}, deepcopy(context),
                             generated_at=self._clock(), consumers=deepcopy(configuration['consumers']),
