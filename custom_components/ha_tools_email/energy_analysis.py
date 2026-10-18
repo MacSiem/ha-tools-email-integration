@@ -62,7 +62,10 @@ def _public_period(period):
     scalar_keys = ('status', 'reason', 'kind', 'semantics', 'cadence', 'grain', 'start', 'end', 'local_start', 'local_end',
                    'start_fold', 'end_fold', 'timezone', 'hours', 'partial', 'calendar_end',
                    'calendar_local_end', 'calendar_hours', 'recorder_hour_aligned', 'calendar_clamped')
-    result = _pick(period, scalar_keys)
+    # HA YAML text (NodeStrClass) is still text. Publish plain JSON strings;
+    # retain strict rejection of nontext objects and numeric subclasses.
+    result = {key: str(value) if isinstance(value, str) else value
+              for key, value in _pick(period, scalar_keys).items()}
     if any(value is not None and type(value) not in (str, bool, int, float) for value in result.values()):
         raise ValueError('invalid_analysis_period')
     if 'clamps' in period:
