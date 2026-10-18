@@ -103,7 +103,9 @@ async def _feature_authorized(hass, connection, feature, operation, *, token=Non
                 or not _feature_context_current(hass, storage, state['revision'])):
             return None
         return token
-    except (AttributeError, KeyError, TypeError, ValueError, RuntimeError):
+    except Exception:
+        # Fail closed without exposing Store or authentication error details.
+        # Cancellation inherits BaseException and still propagates normally.
         return None
 
 
