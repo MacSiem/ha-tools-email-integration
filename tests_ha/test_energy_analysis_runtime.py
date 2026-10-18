@@ -143,6 +143,22 @@ async def test_native_analysis_selected_comparison_chart_and_policy(hass, hass_s
         assert Decimal(usage['value'].replace(',', '.')) == Decimal(result['totals']['kwh'])
         assert '<table' in report['html'] and '<svg' not in report['html']
         assert report['snapshot_id'] in report['html'] and report['snapshot_id'] in report['text']
+        # Display date preference is independent of the Polish labels/numbers.
+        await client.send_json_auto_id({**report_msg, 'date_language': 'en'})
+        english_dates_response = await client.receive_json()
+        assert english_dates_response['success'], english_dates_response
+        english_dates = english_dates_response['result']
+        assert english_dates['snapshot_id'] == report['snapshot_id']
+        assert english_dates['display'] == {**report['display'], 'date_language': 'en'}
+        english_rows = {row['field']: row for row in csv.DictReader(StringIO(english_dates['csv']))}
+        polish_rows = {row['field']: row for row in rows}
+        assert 'Oct' in english_rows['period.start']['value']
+        assert 'paź' in polish_rows['period.start']['value']
+        assert english_rows['totals.kwh']['value'] == polish_rows['totals.kwh']['value']
+        await client.send_json_auto_id({**report_msg, 'date_language': 'de'})
+        invalid_dates = await client.receive_json()
+        assert not invalid_dates['success'] and invalid_dates['error']['code'] == 'invalid_format'
+        assert 'result' not in invalid_dates
         await storage.async_save_feature_access({'schema': 1, 'features': {
             'energy_reports': {'read': {'mode': 'admin'}}}}, expected_revision=2)
         await client.send_json_auto_id(report_msg)

@@ -74,3 +74,13 @@ class EnergyReportWebsocketTest(unittest.IsolatedAsyncioTestCase):
         service.hook=fail
         await ws._ws_energy_report(hass,connection,msg)
         self.assertEqual([],results);self.assertNotIn('private',errors[-1][2]);self.assertEqual('energy_report_unavailable',errors[-1][1])
+
+
+    async def test_date_language_forwards_as_optional_preference(self):
+        ws,hass,storage,service,connection,results,errors,calls,msg=self.fixture()
+        msg['date_language']='en'
+        await ws._ws_energy_report(hass,connection,msg)
+        self.assertEqual([],errors)
+        self.assertEqual('en',calls[0][2]['date_language'])
+        self.assertEqual('pl',calls[0][2]['language'])
+        self.assertEqual(1,len(results))

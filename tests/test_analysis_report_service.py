@@ -11,7 +11,9 @@ class AnalysisReportServiceTest(unittest.IsolatedAsyncioTestCase):
     def fixture(self):
         h=Harness();h.user.is_admin=True
         calls=[]
-        def validate(language,timezone_name,hour_cycle):
+        def validate(language,timezone_name,hour_cycle, *, date_language=None):
+            if date_language is not None and date_language not in ('en','pl'):
+                raise ValueError('report_date_language_required')
             if language not in ('en','pl') or timezone_name not in ('UTC','Europe/Warsaw') or hour_cycle not in ('12','24'):
                 raise ValueError('invalid_report_preferences')
         def render_energy_analysis(snapshot,**options):
@@ -81,3 +83,22 @@ class AnalysisReportServiceTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(RuntimeError):
                 await h.subject.async_get_report('day','user',language='en',timezone_name='UTC',hour_cycle='24')
         self.assertEqual(1,len(calls))
+
+
+    async def test_optional_date_language_is_forwarded_and_echoed_only_when_supplied(self):
+        h,calls,renderer=self.fixture()
+        with h.patches(),patch.dict(sys.modules,{service.__package__+'.energy_report':renderer}):
+            result=await h.subject.async_get_report('day','user',language='en',
+                timezone_name='UTC',hour_cycle='24',date_language='pl')
+        self.assertEqual('pl', calls[0][1]['date_language'])
+        self.assertEqual('pl', result['display']['date_language'])
+        self.assertEqual('en', result['display']['language'])
+
+    async def test_invalid_date_language_preflights_before_recorder_and_cpu(self):
+        h,calls,renderer=self.fixture()
+        with h.patches(),patch.dict(sys.modules,{service.__package__+'.energy_report':renderer}):
+            with self.assertRaisesRegex(ValueError,'report_date_language_required'):
+                await h.subject.async_get_report('day','user',language='en',
+                    timezone_name='UTC',hour_cycle='24',date_language='de')
+        self.assertEqual([],calls)
+        self.assertEqual([],h.queries)

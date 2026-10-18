@@ -114,7 +114,7 @@ class EnergyReportTest(unittest.TestCase):
         self.assertEqual('241,00', rows['totals.total_cost']['value'])
         self.assertEqual('1 sty 2026', rows['rates.0.valid_from']['value'])
         self.assertEqual('10 paź 2026', rows['fees.days.0.day']['value'])
-        self.assertIn('09.10.2026 05:00:00 PM -0700', rows['period.start']['value'])
+        self.assertIn('9 paź 2026 05:00:00 PM -0700', rows['period.start']['value'])
         self.assertEqual('Brak danych', rows['chart.bins.0.fixed_cost']['value'])
         self.assertIn('Niezmierzone', result['text'])
 
@@ -249,3 +249,97 @@ class EnergyReportTest(unittest.TestCase):
             self.assertEqual({'s'}, {row['unit'] for row in counters})
             self.assertTrue(any(row['value']=='86400' for row in counters))
             self.assertEqual('EUR',rows['comparisons.previous.costs.current.energy_cost']['unit'])
+
+
+    def test_approved_sections_precede_details_and_use_email_safe_bars(self):
+        result = self.render()
+        titles = ['Measured energy', 'Period cost', 'Cheap-zone share',
+                  'Measured timeline', 'From the grid to devices',
+                  'Selected comparisons', 'Rooms', 'Floors', 'Cost and rates']
+        for kind in ('html', 'text'):
+            positions = [result[kind].index(title) for title in titles]
+            self.assertEqual(sorted(positions), positions)
+            self.assertIn('No published period share', result[kind])
+            self.assertNotIn('source signature', result[kind])
+            self.assertNotIn('calculator version', result[kind])
+            self.assertLess(result[kind].index('Cost and rates'), result[kind].index('Details ·'))
+        self.assertIn('max-width:640px', result['html'])
+        self.assertIn('class="bar-fill', result['html'])
+        self.assertIn('width="100%"', result['html'])
+        self.assertIn('prefers-color-scheme:dark', result['html'])
+        for forbidden in ('<svg', '<canvas', '<img', '<script', 'display:flex', 'display:grid', 'url('):
+            self.assertNotIn(forbidden, result['html'])
+        rows = self.rows(result)
+        for field in ('totals.kwh', 'totals.total_cost', 'chart.bins.0.kwh',
+                      'groups.devices.sensor.device.kwh', 'groups.unmeasured.kwh',
+                      'fees.components.subscription', 'rates.0.fixed_monthly.subscription'):
+            row = rows[field]
+            self.assertIn(row['value'], Markup(result['html']).cells)
+            self.assertIn(row['value'], result['text'])
+
+    def test_date_language_is_independent_of_ui_language_and_calendar_timezone(self):
+        for language, date_language, heading, day, number in (
+            ('en', 'pl', 'Energy report', '10 paź 2026', '241.00'),
+            ('pl', 'en', 'Raport energii', 'Oct 10, 2026', '241,00')):
+            result = self.render(language=language, date_language=date_language,
+                                 timezone_name='America/New_York')
+            rows = self.rows(result)
+            self.assertIn(heading, result['text'])
+            self.assertEqual(day, rows['fees.days.0.day']['value'])
+            self.assertEqual(number, rows['totals.total_cost']['value'])
+            self.assertIn('20:00:00 -0400 [America/New_York]', rows['period.start']['value'])
+            utc = self.rows(self.render(language=language, date_language=date_language,
+                                       timezone_name='UTC'))
+            self.assertEqual(rows['fees.days.0.day']['value'], utc['fees.days.0.day']['value'])
+        for invalid in ('de', '', False, 12):
+            with self.assertRaisesRegex(ValueError, 'report_date_language_required'):
+                REPORT.validate_report_preferences('en', 'UTC', '24', date_language=invalid)
+            with self.assertRaises(ValueError):
+                self.render(date_language=invalid)
+
+    def test_only_actual_comparison_and_scope_are_presented(self):
+        pair = self.snapshot['comparisons'].pop('previous')
+        pair['comparison_scope'] = 'common_measurements'
+        pair['status'] = 'partial'
+        self.snapshot['comparisons']['same_weekday'] = pair
+        result = self.render()
+        for kind in ('text', 'html'):
+            self.assertIn('Same weekday', result[kind])
+            self.assertIn('Common measurements only', result[kind])
+            self.assertIn('Incomplete data', result[kind])
+            self.assertNotIn('Previous period', result[kind])
+            self.assertNotIn('7-day mean', result[kind])
+        self.snapshot['comparisons']['mean7'] = copy.deepcopy(pair)
+        result = self.render()
+        self.assertIn('7-day mean', result['text'])
+        self.assertIn('Same weekday', result['text'])
+
+    def test_zone_proof_has_labels_without_guessing_cheap_or_summing_cents(self):
+        self.snapshot['chart']['bins'][0]['zone_breakdown'] = {
+            'status': 'ready', 'currency': 'PLN', 'price_basis': 'gross',
+            'zones': [{'zone_id': 'night', 'label': '<Night>', 'kwh': '3.1400',
+                       'recorded_kwh': '3.1400', 'usage_cost': '9.9900', 'complete': True}],
+            'unattributed': {'recorded_kwh': None, 'reasons': ['missing_measurement']}}
+        result = self.render()
+        self.assertIn('&lt;Night&gt;', result['html'])
+        self.assertIn('<Night>', result['text'])
+        self.assertIn('9.9900', Markup(result['html']).cells)
+        self.assertEqual('PLN', self.rows(result)['chart.bins.0.zone_breakdown.zones.0.usage_cost']['unit'])
+        self.assertIn('No published period share', result['text'])
+        self.assertNotIn('class="bar-fill cheap"', result['html'])
+        self.assertIn('class="bar-fill zone-0"', result['html'])
+
+    def test_unknown_price_basis_does_not_give_comparison_delta_a_currency(self):
+        costs = self.snapshot['comparisons']['previous']['costs']
+        costs['current']['price_basis'] = None
+        costs['baseline']['price_basis'] = None
+        rows = self.rows(self.render())
+        self.assertEqual('Unknown', rows['comparisons.previous.costs.delta_cost']['unit'])
+        self.assertEqual('EUR', rows['comparisons.previous.costs.current.usage_cost']['unit'])
+
+    def test_future_fields_stay_lossless_in_csv_without_becoming_user_prices(self):
+        self.snapshot['future_projection'] = {'unclassified_amount': '9.8765432100123456789'}
+        result = self.render()
+        self.assertEqual('9.8765432100123456789', self.rows(result)[
+            'future_projection.unclassified_amount']['value'])
+        self.assertNotIn('unclassified amount', result['html'])
