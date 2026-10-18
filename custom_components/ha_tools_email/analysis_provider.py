@@ -74,6 +74,35 @@ def capture_energy_configuration(preferences):
     return result
 
 
+async def async_require_energy_source_access(hass, user_id, source_ids):
+    """Fresh detailed-analysis access, including entity-restricted HA users.
+
+    External statistics have no entity policy target. They require admin or
+    broad entity-read access; restricted users must not gain them by treating
+    their statistic ID as an entity ID. No role/access result survives an await.
+    The caller derives user_id from the authenticated connection, never input.
+    """
+    from homeassistant.auth.permissions.const import POLICY_READ
+    from homeassistant.core import valid_entity_id
+
+    if (not isinstance(source_ids, list) or len(source_ids) > 2 * MAX_SOURCES
+            or any(not isinstance(sid, str) or not sid for sid in source_ids)):
+        raise ValueError('invalid_energy_configuration')
+    ids = tuple(source_ids)
+    user = await hass.auth.async_get_user(user_id)
+    if user is None or not user.is_active:
+        raise PermissionError('energy_sources_unauthorized')
+    if user.is_admin:
+        return
+    permissions = getattr(user, 'permissions', None)
+    if permissions is None:
+        raise PermissionError('energy_sources_unauthorized')
+    if permissions.access_all_entities(POLICY_READ):
+        return
+    if any(not valid_entity_id(sid) or not permissions.check_entity(sid, POLICY_READ) for sid in ids):
+        raise PermissionError('energy_sources_unauthorized')
+
+
 async def async_capture_energy_configuration(hass):
     from homeassistant.components.energy.data import async_get_manager
     manager = await async_get_manager(hass)
