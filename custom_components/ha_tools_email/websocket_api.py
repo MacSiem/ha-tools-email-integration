@@ -210,7 +210,8 @@ async def _ws_energy_analysis(hass, connection, msg):
             raise PermissionError('energy_sources_unauthorized')
         # This last async validation includes the concrete current source access
         # policy. Do not insert another await before the final context/send.
-        await service.async_validate_result(result, user_id)
+        if await service.async_validate_result(result, user_id) is not True:
+            raise RuntimeError('energy_analysis_changed')
         if (hass.data.get(DOMAIN, {}).get('energy_analysis') is not service
                 or not service.context_is_current(result)):
             raise RuntimeError('energy_analysis_changed')
