@@ -483,3 +483,19 @@ class EnergyReportTest(unittest.TestCase):
         rows = self.rows(result)
         self.assertEqual('Unknown', rows['chart.bins.0.zone_breakdown.zones.0.usage_cost']['value'])
         self.assertEqual('PLN', rows['chart.bins.0.zone_breakdown.zones.0.known_costs.energy_cost']['unit'])
+
+    def test_comparison_changes_show_signs_without_changing_exported_producer_numbers(self):
+        compared = self.snapshot['comparisons']['previous']
+        compared['delta_kwh'] = '17.2500'
+        compared['percent'] = 7.125
+        compared['costs']['delta_cost'] = '13.37'
+        compared['costs']['delta_total_cost'] = '-2.46'
+        result = self.render()
+        self.assertIn('+17.2500 kWh', Markup(result['html']).cells)
+        self.assertIn('+13.37', Markup(result['html']).cells)
+        self.assertIn('-2.46', Markup(result['html']).cells)
+        self.assertIn('+7.125', Markup(result['html']).cells)
+        self.assertIn('+17.2500 kWh', result['text'])
+        rows = self.rows(result)
+        self.assertEqual('17.2500', rows['comparisons.previous.delta_kwh']['value'])
+        self.assertEqual('13.37', rows['comparisons.previous.costs.delta_cost']['value'])
