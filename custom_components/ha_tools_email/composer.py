@@ -505,9 +505,9 @@ def render_energy_report_html(
                          f'<td width="{100-percent:.5g}%" bgcolor="#e2e8f0" height="6"></td></tr></table>')
     return _report_frame(title, now, f"""
       <div class="mail-card" style="padding:22px;background:#eaf7f4;border:1px solid #b6ded6;border-radius:12px">
-      <p style="margin:0;color:#285e58;font-size:13px;font-weight:700">{label.upper()}</p>
+      <p style="margin:0;color:#172b4d;font-size:13px;font-weight:700">{label.upper()}</p>
       <p style="margin:6px 0;color:#115e59;font-size:38px;font-weight:700;line-height:1.1">{metric} <span style="font-size:18px">kWh</span></p>
-      <p style="margin:10px 0 0;color:#285e58">{escape(total_text)}</p></div>
+      <p style="margin:10px 0 0;color:#172b4d">{escape(total_text)}</p></div>
       {coverage_html}
       <h2 style="font-size:18px;margin:26px 0 12px">{"Grid import sources" if source_kind == "grid" else "Top consumers"}</h2>
       <p style="color:#52647b;font-size:13px">Share of recorded usage. Missing readings are never filled with zero.</p>
