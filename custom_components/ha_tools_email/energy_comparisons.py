@@ -6,6 +6,8 @@ helper is bounded to 48 absolute hours per window; annual IO must stream.
 from math import fsum, isfinite
 from zoneinfo import ZoneInfoNotFoundError
 
+from .energy_comparison_chart import Mean7ChartProjection, unknown_mean7_chart
+
 from .energy_measurements import (calendar_grid, source_cells, validated_source_ids,
                                   valid_provenance)
 
@@ -13,22 +15,28 @@ from .energy_measurements import (calendar_grid, source_cells, validated_source_
 def compare_daily_mean7(current, baselines, current_period, baseline_periods, *, timezone_name, tariff=None):
     result = {'status': 'unknown', 'reason': 'incomplete_statistics', 'baseline_kind': 'mean7',
               'current_kwh': None, 'baseline_kwh': None, 'delta_kwh': None, 'percent': None,
-              'full_current_kwh': None, 'full_baseline_kwh': None}
+              'full_current_kwh': None, 'full_baseline_kwh': None,
+              'chart': unknown_mean7_chart(timezone_name, 'incomplete_statistics')}
     if not isinstance(baselines, list) or not isinstance(baseline_periods, list) or len(baselines) != 7 or len(baseline_periods) != 7:
-        return {**result, 'reason': 'seven_baselines_required'}
+        return {**result, 'reason': 'seven_baselines_required',
+                    'chart': unknown_mean7_chart(timezone_name, 'seven_baselines_required')}
     snapshots, periods = [current, *baselines], [current_period, *baseline_periods]
     try:
         ids = validated_source_ids(current)
         if any(set(validated_source_ids(snapshot)) != set(ids) for snapshot in baselines):
-            return {**result, 'reason': 'source_set_changed'}
+            return {**result, 'reason': 'source_set_changed',
+                    'chart': unknown_mean7_chart(timezone_name, 'source_set_changed')}
         provenance = current.get('measurement_provenance')
         if (not isinstance(provenance, dict) or set(provenance) != set(ids)
                 or any(not valid_provenance(provenance[sid]) for sid in ids)
                 or any(snapshot.get('measurement_provenance') != provenance for snapshot in baselines)):
-            return {**result, 'reason': 'measurement_provenance_unavailable_or_changed'}
+            return {**result, 'reason': 'measurement_provenance_unavailable_or_changed',
+                    'chart': unknown_mean7_chart(timezone_name, 'measurement_provenance_unavailable_or_changed')}
         grids = [calendar_grid(period['start'], period['end'], timezone_name, 'daily') for period in periods]
         if any(len(grid) > 48 for grid in grids):
-            return {**result, 'reason': 'daily_comparison_window_too_long'}
+            return {**result, 'reason': 'daily_comparison_window_too_long',
+                    'chart': unknown_mean7_chart(timezone_name, 'daily_comparison_window_too_long')}
+        projection = Mean7ChartProjection(grids, timezone_name)
         measured, totals, shared = [0] * 8, [[] for _ in snapshots], [[] for _ in snapshots]
         common_count = 0
         chosen_full = [{} for _ in snapshots] if tariff is not None else None
@@ -37,6 +45,7 @@ def compare_daily_mean7(current, baselines, current_period, baseline_periods, *,
             cells = [source_cells(snapshot, sid, grid) for snapshot, grid in zip(snapshots, grids)]
             common = set.intersection(*(set(values) for values in cells))
             common_count += len(common)
+            projection.add_source(cells, common)
             for index, values in enumerate(cells):
                 measured[index] += len(values)
                 totals[index].append(fsum(values.values()))
@@ -59,6 +68,7 @@ def compare_daily_mean7(current, baselines, current_period, baseline_periods, *,
                                 'measured_baseline_seconds': [count * 3600 for count in measured[1:]]})
         complete = all(value is not None for value in full)
         def priced(value):
+            value['chart'] = projection.finish(value, len(ids), common_count)
             if tariff is not None:
                 from .energy_mean7_costs import price_mean7
                 value['costs'] = price_mean7(chosen_full if complete else chosen_common,

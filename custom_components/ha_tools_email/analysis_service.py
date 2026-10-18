@@ -23,6 +23,7 @@ from .const import DOMAIN
 from .energy import _source_signature
 from .energy_analysis import EnergyAnalysisAccumulator
 from .energy_comparison_stream import PairedComparisonAccumulator
+from .energy_comparison_chart import unknown_comparison_chart
 from .energy_comparisons import compare_daily_mean7
 from .energy_group_comparisons import compare_period_groups
 from .energy_group_stream import GroupComparisonAccumulator
@@ -46,6 +47,12 @@ def _finish(accumulator, context, provenance, comparisons=None, baseline_accumul
     result['groups']['domain_provenance'] = provenance
     if comparisons is not None:
         result['comparisons'] = deepcopy(comparisons)
+        for comparison in result['comparisons'].values():
+            if 'chart' not in comparison:
+                comparison['chart'] = unknown_comparison_chart(
+                    result['period'].get('timezone'), result['period'].get('kind'),
+                    comparison.get('reason') or 'comparison_projection_unavailable',
+                    comparison.get('comparison_scope'))
         if baseline_accumulator is not None:
             baseline = baseline_accumulator.finish()
             baseline['groups']['domain_provenance'] = provenance

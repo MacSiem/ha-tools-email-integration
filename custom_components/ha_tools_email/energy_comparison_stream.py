@@ -10,6 +10,7 @@ from decimal import Decimal, localcontext
 from math import fsum, isfinite
 
 from .energy_measurements import hour_grid, source_cells, validated_source_ids, valid_provenance, _instant
+from .energy_comparison_chart import PairChartProjection
 
 from .tariff_history import (HistoricalTariffRates, calculate_energy_amounts,
                              FEE_KEYS, ROUNDING, _fees, _money)
@@ -29,6 +30,7 @@ class PairedComparisonAccumulator:
             raise ValueError('validated_comparison_calendar_plan_required')
         calendar_plan.validate_matches((current_period, baseline_period), timezone_name, calendar_kind)
         self._calendar_plan = calendar_plan
+        self._chart = PairChartProjection(calendar_plan)
         self._periods = calendar_plan.periods
         self._grids = calendar_plan.grids
         self._aligned = calendar_plan.aligned
@@ -93,14 +95,15 @@ class PairedComparisonAccumulator:
             for stamp, frame in grid.items():
                 values = [values[frame] for values in cells.values() if frame in values]
                 self._add_cost(own_cost, stamp, values)
+        chart_own = self._chart.prepare_own(index, grid, cells)
         # No state mutation before the complete incoming chunk is validated.
         if self._ids is None:
             self._ids, self._provenance = ids, deepcopy(provenance)
-        self._slots[index] = {'frames': list(grid.values()), 'cells': cells, 'head': 0}
+        self._chart.commit_own(index, chart_own)
+        self._slots[index] = {'frames': list(grid.values()), 'cells': cells, 'head': 0,
+                              'stamps': list(grid)}
         if self._rates:
             self._own_costs[index] = own_cost
-            # Keep the actual UTC hour beside its calendar frame in this slot.
-            self._slots[index]['stamps'] = list(grid)
         self._measured[index] += count
         self._totals[index].append(total)
         self._cursors[index] = end
@@ -148,6 +151,7 @@ class PairedComparisonAccumulator:
             if x is not None and y is not None:
                 self._common += 1
                 values[0].append(x); values[1].append(y)
+        self._chart.matched(left['stamps'][left['head']], right['stamps'][right['head']], values)
         for i in (0, 1):
             self._common_totals[i].append(fsum(values[i]))
             if self._rates:
@@ -192,6 +196,7 @@ class PairedComparisonAccumulator:
             with localcontext() as context:
                 context.prec = 40
                 result['costs'] = self._finish_costs(result, complete)
+        result['chart'] = self._chart.finish(result, len(self._ids), self._common)
         self._result = result
         return deepcopy(result)
 
