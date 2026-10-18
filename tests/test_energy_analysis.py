@@ -112,6 +112,11 @@ class EnergyAnalysisTest(unittest.TestCase):
         p['future_internal'] = {'reference': '!secret synthetic'}
         p['zones'][0]['future_internal'] = {'keep_in_config': True}
         p['clock']['future_internal'] = {'keep_in_config': True}
+        # The schema1 engine ignores non-string labels and civil-clock offsets;
+        # its public rate description must expose their effective values only.
+        p['zones'][0]['label'] = {'future_internal': {'keep_in_config': True}}
+        p['clock']['offsetMinutes'] = {'future_internal': {'keep_in_config': True}}
+        p['allowNegativeEnergy'] = {'future_internal': {'keep_in_config': True}}
         p['rules'] = [{'zone': 'day', 'intervals': [{'from': '00:00', 'to': '24:00',
                                                      'future_internal': {'keep': True}}]}]
         original = copy.deepcopy(b)
@@ -124,6 +129,9 @@ class EnergyAnalysisTest(unittest.TestCase):
         self.assertNotIn('future_internal', rate['profile']['zones'][0])
         self.assertNotIn('future_internal', rate['profile']['rules'][0]['intervals'][0])
         self.assertNotIn('future_internal', rate['clock'])
+        self.assertEqual('day', rate['profile']['zones'][0]['label'])
+        self.assertEqual({'mode': 'civil'}, rate['clock'])
+        self.assertIs(False, rate['profile']['allowNegativeEnergy'])
         self.assertNotIn('unrelated_private_state', result['period'])
         self.assertEqual(original, b)
 
