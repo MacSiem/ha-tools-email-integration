@@ -119,9 +119,10 @@ def measurement_evidence(snapshot, start, end):
         values = [cells.get(stamp) for cells in per_source.values()]
         value = _sum(values) if all(value is not None for value in values) else None
         hourly.append({'from': stamp, 'to': stamp + 3600000, 'kwh': value})
-    observed = _sum(value for cells in per_source.values() for value in cells.values())
-    recorded = _sum(row['kwh'] for row in hourly if row['kwh'] is not None)
-    if observed is None or recorded is None:
+    observed = _sum(value for cells in per_source.values() for value in cells.values()) if measured else None
+    known_hours = [row['kwh'] for row in hourly if row['kwh'] is not None]
+    recorded = _sum(known_hours) if known_hours else None
+    if (measured and observed is None) or (known_hours and recorded is None):
         issues.append({'reason': 'unrepresentable_measurement_sum'})
     complete = measured == expected and all(row['kwh'] is not None for row in hourly) and not issues
     coverage = {'complete': complete, 'ratio': measured / expected,
