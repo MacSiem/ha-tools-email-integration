@@ -115,6 +115,21 @@ class ConsumerAnalysisTest(unittest.TestCase):
         self.add(builder, MID, END, 130, (100, 40, 10))
         self.assertEqual('120', builder.finish()['groups']['areas']['kitchen']['kwh'])
 
+    def test_partial_household_keeps_complete_room_component_period_rounding(self):
+        b = book([version(rate=.0025, monthly=0)])
+        b['tariffs'][0]['versions'][0]['profile']['zones'][0]['variableRate'] = .0025
+        builder = self.builder(b)
+        self.add(builder, START, MID, None, (1, 0, 0))
+        self.add(builder, MID, END, 2, (1, 0, 0))
+        result = builder.finish(); groups = result['groups']
+        self.assertFalse(groups['partition_complete'])
+        self.assertIsNone(result['totals']['usage_cost'])
+        for row in (groups['devices'][IDS[0]], groups['areas']['kitchen'], groups['floors']['ground']):
+            self.assertEqual('0.01', row['energy_cost'])
+            self.assertEqual('0.01', row['variable_cost'])
+            self.assertEqual('0.02', row['usage_cost'])
+            self.assertEqual('0.02', row['known_costs']['usage_cost'])
+
     def test_mixed_legacy_and_component_versions_reconcile_known_parts_before_usage(self):
         b = book([version(rate=.005, monthly=0)])
         legacy = b['tariffs'][0]['versions'][0]
