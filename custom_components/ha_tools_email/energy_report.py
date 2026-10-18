@@ -492,10 +492,20 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     if not bins:
         html_parts.append('<td>' + escape(unknown) + '</td>')
     html_parts.append('</tr><tr class="axis">')
-    for index in range(len(bins)):
+    # A label spans its interval group. Putting 05:00 in one 1/24-width
+    # cell wraps digits on narrow mail viewports even when ticks are sparse.
+    stride = 1 if chart.get('grain') == 'month' else 3
+    for index in range(0, len(bins), stride):
         point = short_stamp(('chart', 'bins', index, 'start'), clock_only=chart.get('grain') == 'hour')
-        tick = point if index % 3 == 0 or index == len(bins)-1 else ''
-        html_parts.append('<td>' + escape(tick) + '</td>')
+        if chart.get('grain') != 'hour' and point != unknown:
+            date_part = point.rsplit(' ', 2 if hour_cycle == '12' else 1)[0]
+            if chart.get('grain') == 'month':
+                words_in_date = date_part.split()
+                point = words_in_date[1] if dates_pl else words_in_date[0]
+            else:
+                point = date_part.rsplit(' ', 1)[0].rstrip(',')
+        span = min(stride, len(bins)-index)
+        html_parts.append('<td colspan="' + str(span) + '">' + escape(point) + '</td>')
     html_parts.append('</tr></table>')
 
     groups = snapshot.get('groups') or {}
