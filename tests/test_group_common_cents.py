@@ -14,7 +14,7 @@ class CommonGroupCentsTest(unittest.TestCase):
 
     def compare(self, *, mismatch=False, dynamic=False):
         ids = ('sensor.a', 'sensor.b', 'sensor.c')
-        members = fixtures.registry_model.resolve_membership(ids, {
+        members = fixtures.registry_model.resolve_membership(list(ids), {
             'entities': {sid: {'area_id': 'area'+str(i)} for i, sid in enumerate(ids)},
             'areas': {'area'+str(i): {'floor_id': 'upstairs'} for i in range(3)},
             'floors': {'upstairs': {'name': 'Upstairs'}}}, revision=2, captured_at='2026-01-03T00:00Z')
