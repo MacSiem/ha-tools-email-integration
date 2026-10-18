@@ -371,6 +371,45 @@ async def _ws_energy_analysis(hass, connection, msg):
 
 
 @websocket_api.websocket_command({
+    vol.Required('type'): f'{DOMAIN}/energy_report',
+    vol.Optional('period', default='day'): vol.In(('day', 'week', 'month', 'year')),
+    vol.Optional('anchor'): str,
+    vol.Optional('comparison'): str,
+    vol.Required('language'): vol.In(('pl', 'en')),
+    vol.Required('timezone'): str,
+    vol.Required('hour_cycle'): vol.In(('12', '24')),
+})
+@websocket_api.async_response
+async def _ws_energy_report(hass, connection, msg):
+    """Read-only report in HA; identity and feature purpose are server-owned."""
+    if not await _feature_authorized(hass, connection, 'energy_reports', 'read'):
+        connection.send_error(msg['id'], 'unauthorized', 'Report access required.')
+        return
+    service = hass.data.get(DOMAIN, {}).get('energy_analysis')
+    if service is None:
+        connection.send_error(msg['id'], 'energy_report_unavailable', 'Energy report is unavailable.')
+        return
+    user_id = connection.user.id
+    try:
+        result = await service.async_get_report(msg.get('period', 'day'), user_id,
+            language=msg['language'], timezone_name=msg['timezone'], hour_cycle=msg['hour_cycle'],
+            **{key: msg[key] for key in ('anchor', 'comparison') if key in msg})
+        if await service.async_validate_result(result, user_id) is not True:
+            raise RuntimeError('energy_analysis_changed')
+        if (hass.data.get(DOMAIN, {}).get('energy_analysis') is not service
+                or result.get('context', {}).get('access_purpose') != 'report_read'
+                or not service.context_is_current(result)):
+            raise RuntimeError('energy_analysis_changed')
+    except PermissionError:
+        connection.send_error(msg['id'], 'unauthorized', 'Report or source access required.')
+        return
+    except Exception:
+        connection.send_error(msg['id'], 'energy_report_unavailable', 'Energy report is unavailable.')
+        return
+    connection.send_result(msg['id'], result)
+
+
+@websocket_api.websocket_command({
     vol.Required('type'): f'{DOMAIN}/energy_snapshot',
     vol.Optional('profile'): vol.Any(dict, None),
 })
@@ -832,6 +871,7 @@ def async_register_commands(hass: HomeAssistant) -> None:
         _ws_set_tariff_book,
         _ws_energy_snapshot,
         _ws_energy_analysis,
+        _ws_energy_report,
         _ws_energy_price_queries,
         _ws_set_tariff,
         _ws_get_config,
