@@ -15,15 +15,15 @@ class AnalysisComparisonsTest(unittest.IsolatedAsyncioTestCase):
         h.now = datetime(2026, 10, 18, 12, 34, tzinfo=timezone.utc)
         return h
 
-    async def test_historical_year_pair_streams_each_grid_once_and_consumers_only_current(self):
+    async def test_historical_year_pair_streams_each_grid_and_consumer_domain_once(self):
         h = self.harness()
         with h.patches():
             result = await h.subject.async_get_analysis('year', 'user', anchor='2024-06-15', comparison='previous')
             compared = result['comparisons']['previous']
             self.assertEqual('ready', compared['status'])
             self.assertEqual((87840, 87600, 240), tuple(compared[k] for k in ('current_kwh', 'baseline_kwh', 'delta_kwh')))
-            self.assertEqual(159, len(h.queries))
-            self.assertEqual(53, sum(ids == ('sensor.device',) for ids, _, _ in h.queries))
+            self.assertEqual(212, len(h.queries))
+            self.assertEqual(106, sum(ids == ('sensor.device',) for ids, _, _ in h.queries))
             self.assertTrue(all(0 < (end-start).total_seconds() <= 168*3600 for _, start, end in h.queries))
             self.assertEqual('previous', result['context']['comparison_kind'])
             payload = copy.deepcopy(result); fingerprint = payload.pop('snapshot_id')
