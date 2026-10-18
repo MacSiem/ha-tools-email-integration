@@ -305,6 +305,7 @@ class EnergyTariff:
         low, high = bisect_right(self._boundaries, start), bisect_right(self._boundaries, end - 1)
         checkpoints.update(self._boundaries[low:high])
         zone_ids = {first['zone']}
+        classifications = {first.get('classification')}
         for stamp in sorted(checkpoints):
             next_rate = self.rate_at(stamp)
             if not next_rate['available']:
@@ -312,16 +313,22 @@ class EnergyTariff:
             if (first['energyRate'], first['variableRate']) != (next_rate['energyRate'], next_rate['variableRate']):
                 return dict(self._unavailable('mixed_rate_bucket'), **frame)
             zone_ids.add(next_rate['zone'])
+            classifications.add(next_rate.get('classification'))
         energy = kwh * first['energyRate']
         variable = None if first['variableRate'] is None else kwh * first['variableRate']
         usage = None if variable is None else energy + variable
         if any(v is not None and not _finite(v) for v in (energy, variable, usage)):
             return dict(self._unavailable('nonfinite_cost'), **frame)
         ids = sorted(zone_ids)
+        # Only metadata from the same existing checkpoint loop. Dynamic
+        # overrides supply their own classification; never borrow zone labels.
+        classification = (next(iter(classifications)) if len(classifications) == 1
+                          and classifications <= {'cheap', 'expensive', 'mixed'} else
+                          'mixed' if classifications <= {'cheap', 'expensive', 'mixed'} else None)
         return dict(available=True, **frame, kwh=kwh, zone=ids[0] if len(ids) == 1 else None,
                     zones=ids, zoneAttribution='single' if len(ids) == 1 else 'multiple', energyRate=first['energyRate'],
                     variableRate=first['variableRate'], energyCost=energy, variableCost=variable,
-                    usageCost=usage)
+                    usageCost=usage, classification=classification)
 
     def price_buckets(self, rows, coverage=None):
         issues, priced = [], []

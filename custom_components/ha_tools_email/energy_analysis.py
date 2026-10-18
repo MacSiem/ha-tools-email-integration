@@ -12,6 +12,7 @@ import json
 
 from .energy_consumers import ConsumerPeriod
 from .energy_chart_bins import build_chart_bins
+from .energy_period_summary import build_period_summary
 from .energy_patterns_periods import resolve_patterns_window
 from .energy_patterns import build_patterns_projection
 from .energy_measurements import hour_grid, measurement_evidence
@@ -276,6 +277,7 @@ class EnergyAnalysisAccumulator:
                   'rounding': deepcopy(pricing['rounding']) if pricing is not None else None,
                   'issues': list(self._issues)}
         result['chart'] = build_chart_bins(self._rows, self._period, active)
+        result['period_summary'] = build_period_summary(self._rows, self._period, active, totals)
         if self._consumers is not None:
             result['groups'] = self._consumers.finish(active)
         result['snapshot_id'] = _digest(result)
