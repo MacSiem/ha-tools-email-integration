@@ -128,6 +128,7 @@ class SnapshotTests(unittest.TestCase):
                         measurement_provenance={'PRIVATE': 'PRIVATE'})
         p = classified()
         p['private'] = 'PRIVATE'
+        p['clock']['private'] = 'PRIVATE'
         self.assertNotIn('PRIVATE', str(self.snapshot(p, measured=measured)))
 
 

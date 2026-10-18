@@ -222,9 +222,6 @@ class MailChartSpecification(unittest.TestCase):
                       'zoneAttribution':'single'} for r in buckets]
         costs = {'complete':True,'issues':[],'rows':cost_rows,'currency':'PLN','priceBasis':'gross',
                  'energyCost':1.5,'variableCost':.6000000000000001,'usageCost':2.1,'fixedMonthly':99}
-        class Tariff:
-            def __init__(self, profile): pass
-            def price_buckets(self, rows, coverage): return copy.deepcopy(costs)
         class Storage:
             async def async_get_tariff(self): return {'profile':{'schema':1}}
         async def snapshot(*args):
@@ -233,7 +230,7 @@ class MailChartSpecification(unittest.TestCase):
         package_module = ModuleType('chart_fixture_pkg')
         package_module.__path__ = []
         tariff_module = ModuleType('chart_fixture_pkg.tariff')
-        tariff_module.EnergyTariff = Tariff
+        tariff_module.price_measurements = lambda *args, **kwargs: copy.deepcopy(costs)
         hass = SimpleNamespace(data={'ha_tools_email':{'storage':Storage()}},
                                config=SimpleNamespace(currency='PLN',time_zone='Europe/Warsaw',
                                                       external_url='https://ha.example.test'))
