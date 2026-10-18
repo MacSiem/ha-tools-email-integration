@@ -37,7 +37,9 @@ class PriceQueriesTests(unittest.IsolatedAsyncioTestCase):
                    query([{**rows[0], 'kwh': None}])]
         before = copy.deepcopy(queries)
         sentinel = c.data = {'entities': 'unchanged'}
-        with patch.object(energy, 'async_grid_sensors', side_effect=AssertionError('no Recorder measurements')):
+        with patch.object(energy, 'async_grid_sensors', side_effect=AssertionError('no Recorder measurements')), \
+             patch.object(energy, 'async_get_energy_metadata', side_effect=AssertionError('no Recorder metadata')), \
+             patch.object(energy, 'async_get_energy_usage', side_effect=AssertionError('no Recorder history')):
             result = await c.async_price_queries(queries)
         self.assertEqual((1, 1, 'shared'), (result['schema'], result['tariff_revision'], result['profile_source']))
         expected = energy.EnergyTariff(classified())
@@ -241,6 +243,28 @@ class FinalAuthGuardTests(unittest.IsolatedAsyncioTestCase):
         result, errors = await self.exercise('_ws_energy_price_queries', None, profile_missing=False)
         self.assertTrue(result)
         self.assertFalse(errors)
+
+    async def test_price_handler_returns_fixed_errors_without_private_input_or_exception(self):
+        ws, _ = load_websocket()
+        user = types.SimpleNamespace(id='user', is_active=True)
+        class Auth:
+            async def async_get_user(self, uid):
+                return user
+        c = coordinator()
+        errors, results = [], []
+        hass = types.SimpleNamespace(auth=Auth(), data={'ha_tools_email': {'energy_snapshot': c}})
+        conn = types.SimpleNamespace(user=user, send_result=lambda *v: results.append(v), send_error=lambda *v: errors.append(v))
+        await ws._ws_energy_price_queries(hass, conn, {'id': 1, 'queries': [query([{'PRIVATE': 'x' * 524288}])]})
+        self.assertEqual('invalid_energy_price_queries', errors[-1][1])
+        await ws._ws_energy_price_queries(hass, conn, {'id': 2, 'queries': [query()], 'profile': {'schema': 0, 'PRIVATE': True}})
+        self.assertEqual('invalid_tariff_profile', errors[-1][1])
+        async def fail(*args, **kwargs):
+            raise OSError('SMTP_PRIVATE_PATH')
+        c.async_price_queries = fail
+        await ws._ws_energy_price_queries(hass, conn, {'id': 3, 'queries': [query()]})
+        self.assertEqual('energy_unavailable', errors[-1][1])
+        self.assertFalse(results)
+        self.assertNotIn('PRIVATE', str(errors))
 
     async def test_daily_monetary_sensor_does_not_claim_measurement_or_implicit_totals(self):
         sensor, _ = entity_modules()

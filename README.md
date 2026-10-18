@@ -116,6 +116,16 @@ entities or save settings. The response contains bounded current/next_cheap/toda
 sections and actual tariff currency, without meter identifiers, SMTP settings or
 raw profiles. Active household users can read it; tariff writes remain admin-only.
 
+Historical cards can batch their supplied intervals through
+`ha_tools_email/energy_price_queries` with `{queries: [{buckets, coverage?}], profile?}`.
+Results retain the order, completeness and rows of `EnergyTariff.price_buckets`.
+These are calculations over card-supplied data, never new household measurements
+and never input to the five global entities. The endpoint performs no Recorder,
+SMTP or settings writes. It permits up to 64 queries, 2048 buckets, 2048 total
+measured hours, 512 KiB of input and a weighted tariff-work budget; complex
+profiles may reach that work budget earlier. All calculations share one bounded
+CPU lane with snapshots, including across reloads and cancellation.
+
 Profiles may explicitly set `classification` to `cheap`, `expensive` or `mixed` on
 zones and dynamic intervals. Missing classification stays unknown; prices and names
 do not imply a cheap period. The primary current price includes energy and variable
