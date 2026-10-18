@@ -302,6 +302,19 @@ def load_websocket():
         spec = importlib.util.spec_from_file_location(name, ROOT / 'websocket_api.py')
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
+    if hasattr(module, 'async_require_energy_source_access'):
+        original_access = module.async_require_energy_source_access
+        async def source_access(*args, **kwargs):
+            # Stub only native type/policy constants; execute the real provider
+            # permission check against each fixture's actual auth/permissions.
+            native_core = types.ModuleType('homeassistant.core')
+            native_core.valid_entity_id = lambda sid: ':' not in sid and len(sid.split('.')) == 2
+            native_const = types.ModuleType('homeassistant.auth.permissions.const')
+            native_const.POLICY_READ = 'read'
+            with patch.dict(sys.modules, {native_core.__name__: native_core,
+                                          native_const.__name__: native_const}):
+                return await original_access(*args, **kwargs)
+        module.async_require_energy_source_access = source_access
     return module, storage
 
 

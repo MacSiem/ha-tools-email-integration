@@ -171,14 +171,16 @@ class FinalCalendarContextTests(unittest.IsolatedAsyncioTestCase):
                         now=instant, measurement_timezone='UTC',
                         profile_source='override' if override else 'shared'))
         async def answer(*args, **kwargs):
+            if 'guard' in kwargs:
+                await kwargs['guard'](['sensor.grid'])
             return copy.deepcopy(response)
         c.async_snapshot = c.async_price_queries = answer
-        user = types.SimpleNamespace(id='household', is_active=True)
+        user = types.SimpleNamespace(id='household', is_active=True, is_admin=False, permissions=types.SimpleNamespace(access_all_entities=lambda _: True))
         calls = []
         class Auth:
             async def async_get_user(self, uid):
                 calls.append(uid)
-                if len(calls) == 2:
+                if len(calls) == (2 if historical else 3):
                     await asyncio.sleep(0)
                     if mutation == 'zone':
                         hass.config.time_zone = 'Europe/Warsaw'
@@ -197,7 +199,7 @@ class FinalCalendarContextTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(energy, 'datetime', Clock):
             await getattr(ws, '_ws_energy_price_queries' if historical else '_ws_energy_snapshot')(
                 hass, connection, msg)
-        self.assertEqual(2, len(calls))
+        self.assertEqual(2 if historical else 3, len(calls))
         return results, errors
 
     async def test_final_authorization_await_rejects_zone_hour_and_day_changes(self):

@@ -201,9 +201,10 @@ class PriceQueriesTests(unittest.IsolatedAsyncioTestCase):
 class FinalAuthGuardTests(unittest.IsolatedAsyncioTestCase):
     async def exercise(self, handler, mutation, *, profile_missing=True):
         ws, _ = load_websocket()
-        user = types.SimpleNamespace(id='user', is_active=True)
+        user = types.SimpleNamespace(id='user', is_active=True, is_admin=False, permissions=types.SimpleNamespace(access_all_entities=lambda _: True))
         c = coordinator()
         async def snapshot(**kwargs):
+            await kwargs['guard'](['sensor.grid'])
             return {'safe': True}
         c.async_snapshot = snapshot
         calls = []
@@ -212,7 +213,7 @@ class FinalAuthGuardTests(unittest.IsolatedAsyncioTestCase):
         class Auth:
             async def async_get_user(self, uid):
                 calls.append(uid)
-                if len(calls) == 2:
+                if len(calls) == (3 if handler == '_ws_energy_snapshot' else 2):
                     await asyncio.sleep(0)
                     if mutation == 'stop':
                         c.async_stop()
@@ -249,7 +250,7 @@ class FinalAuthGuardTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_price_handler_returns_fixed_errors_without_private_input_or_exception(self):
         ws, _ = load_websocket()
-        user = types.SimpleNamespace(id='user', is_active=True)
+        user = types.SimpleNamespace(id='user', is_active=True, is_admin=False, permissions=types.SimpleNamespace(access_all_entities=lambda _: True))
         class Auth:
             async def async_get_user(self, uid):
                 return user

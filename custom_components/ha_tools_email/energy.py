@@ -345,11 +345,30 @@ class EnergySnapshotCoordinator:
         finally:
             self._snapshot_pending -= 1
 
-    async def async_refresh(self, *, now=None):
-        with self._snapshot_admission():
-            return await self._async_refresh(now=now)
+    async def _async_check_source_access(self, guard, sensors=None):
+        """Reauthorize this request against current concrete source IDs.
 
-    async def _async_refresh(self, *, now=None):
+        None is the trusted background/internal path. Denial propagates without
+        invalidating shared entity data or retaining a user/guard on the cache.
+        If sources changed, authorize their new IDs before any metadata read.
+        """
+        if guard is None:
+            return
+        current = await async_grid_sensors(self.hass)
+        self._check_running()
+        ids = [row['entity_id'] for row in current]
+        await guard(ids)
+        self._check_running()
+        if sensors is not None and ids != [row['entity_id'] for row in sensors]:
+            self._measurement_key = None
+            self._invalidate()
+            raise RuntimeError('energy_sources_changed')
+
+    async def async_refresh(self, *, now=None, guard=None):
+        with self._snapshot_admission():
+            return await self._async_refresh(now=now, guard=guard)
+
+    async def _async_refresh(self, *, now=None, guard=None):
         async with self._lock:
             self._check_running()
             real_time = now is None
@@ -358,8 +377,10 @@ class EnergySnapshotCoordinator:
             start, end, aligned = measurement_window(now, tz)
             sensors = await async_grid_sensors(self.hass)
             self._check_running()
+            await self._async_check_source_access(guard, sensors)
             metadata = await async_get_energy_metadata(self.hass, [row['entity_id'] for row in sensors])
             self._check_running()
+            await self._async_check_source_access(guard, sensors)
             key = (start, end, tz, _source_signature(sensors, metadata))
             # Price edits reuse measurement history; normalization metadata is checked independently.
             expired = self._measurement_at is None or (now - self._measurement_at).total_seconds() >= 300
@@ -371,10 +392,13 @@ class EnergySnapshotCoordinator:
                 else:
                     measured = await async_get_energy_usage(self.hass, sensors, start, end, 'daily', metadata=metadata)
                 self._check_running()
+                await self._async_check_source_access(guard)
                 # A source/timezone change during Recorder IO invalidates the answer.
                 latest = await async_grid_sensors(self.hass)
+                await self._async_check_source_access(guard, latest)
                 latest_meta = await async_get_energy_metadata(self.hass, [row['entity_id'] for row in latest])
                 self._check_running()
+                await self._async_check_source_access(guard, latest)
                 if tz != self.hass.config.time_zone or _source_signature(latest, latest_meta) != key[3]:
                     self._measurement_key = None
                     self._invalidate()
@@ -382,6 +406,7 @@ class EnergySnapshotCoordinator:
                 self._measurement, self._measurement_key, self._measurement_at = measured, key, now
             state = await self.storage.async_get_tariff()
             self._check_running()
+            await self._async_check_source_access(guard, sensors)
             if real_time:
                 finished = datetime.now(timezone.utc)
                 if measurement_window(finished, self.hass.config.time_zone)[:2] != (start, end):
@@ -391,14 +416,19 @@ class EnergySnapshotCoordinator:
             self._model_boundaries = EnergyTariff(state.get('profile'))._boundaries
             result = await self._async_build_snapshot(state, self._measurement, now=now, measurement_timezone=tz)
             self._check_running()
+            await self._async_check_source_access(guard)
             # CPU work runs off-loop. Reject answers overtaken by a confirmed edit,
             # source normalization change, HA calendar change, or unload.
             latest = await async_grid_sensors(self.hass)
+            await self._async_check_source_access(guard, latest)
             latest_meta = await async_get_energy_metadata(self.hass, [row['entity_id'] for row in latest])
+            await self._async_check_source_access(guard, latest)
             latest_state = await self.storage.async_get_tariff()
             self._check_running()
+            await self._async_check_source_access(guard, latest)
             if (tz != self.hass.config.time_zone or _source_signature(latest, latest_meta) != key[3]
                     or latest_state['revision'] != state['revision']
+                    or getattr(self.storage, 'current_tariff_revision', latest_state['revision']) != state['revision']
                     or (real_time and measurement_window(datetime.now(timezone.utc), tz)[:2] != (start, end))):
                 self._invalidate()
                 raise RuntimeError('energy_snapshot_changed')
@@ -408,24 +438,27 @@ class EnergySnapshotCoordinator:
                 listener()
             return deepcopy(self.data)
 
-    async def async_snapshot(self, *, profile=_OVERRIDE_UNSET, now=None):
+    async def async_snapshot(self, *, profile=_OVERRIDE_UNSET, now=None, guard=None):
         with self._snapshot_admission():
-            return await self._async_snapshot(profile=profile, now=now)
+            return await self._async_snapshot(profile=profile, now=now, guard=guard)
 
-    async def _async_snapshot(self, *, profile=_OVERRIDE_UNSET, now=None):
+    async def _async_snapshot(self, *, profile=_OVERRIDE_UNSET, now=None, guard=None):
         if profile is _OVERRIDE_UNSET:
-            return await self._async_refresh(now=now)
+            return await self._async_refresh(now=now, guard=guard)
         clean = validate_tariff_profile(profile)
-        await self._async_refresh(now=now)
+        await self._async_refresh(now=now, guard=guard)
         # Capture the shared measurement/window before awaiting pure CPU work.
         instant = datetime.fromisoformat(self.data['generated_at'])
         tz, key = self.data['measurement_timezone'], self._measurement_key
         result = await self._async_build_snapshot({'profile': clean, 'revision': None}, self._measurement,
             now=instant, measurement_timezone=tz, profile_source='override')
         self._check_running()
+        await self._async_check_source_access(guard)
         latest = await async_grid_sensors(self.hass)
+        await self._async_check_source_access(guard, latest)
         latest_meta = await async_get_energy_metadata(self.hass, [row['entity_id'] for row in latest])
         self._check_running()
+        await self._async_check_source_access(guard, latest)
         if (tz != self.hass.config.time_zone or _source_signature(latest, latest_meta) != key[3]
                 or (now is None and measurement_window(datetime.now(timezone.utc), tz)[:2] != key[:2])):
             self._invalidate()

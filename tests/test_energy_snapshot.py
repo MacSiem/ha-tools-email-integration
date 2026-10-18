@@ -431,18 +431,20 @@ class EntityContractTests(unittest.IsolatedAsyncioTestCase):
 class WebsocketSnapshotTests(unittest.IsolatedAsyncioTestCase):
     async def test_revoked_during_io_never_receives_result_and_override_is_forwarded(self):
         from tests.test_tariff_profile import load_websocket
-        ws, _ = load_websocket()
-        user = types.SimpleNamespace(id='user-id', is_active=True)
+        ws, mod = load_websocket()
+        user = types.SimpleNamespace(id='user-id', is_active=True, is_admin=False, permissions=types.SimpleNamespace(access_all_entities=lambda _: True))
         class Auth:
             async def async_get_user(self, uid):
                 return user
         calls, results, errors = [], [], []
         class Coordinator:
             async def async_snapshot(self, **kwargs):
-                calls.append(kwargs)
+                calls.append({k: v for k, v in kwargs.items() if k != 'guard'})
+                await kwargs['guard'](['sensor.grid'])
                 user.is_active = False
                 return {'safe': True}
         hass = types.SimpleNamespace(auth=Auth(), data={'ha_tools_email': {'energy_snapshot': Coordinator()}})
+        hass.data['ha_tools_email']['storage'] = mod.EmailStorage(hass)
         connection = types.SimpleNamespace(user=user, send_result=lambda *args: results.append(args),
                                            send_error=lambda *args: errors.append(args))
         await ws._ws_energy_snapshot(hass, connection, {'id': 1, 'profile': None})
@@ -454,8 +456,8 @@ class WebsocketSnapshotTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_safe_read_and_bounded_failure(self):
         from tests.test_tariff_profile import load_websocket
-        ws, _ = load_websocket()
-        user = types.SimpleNamespace(id='user-id', is_active=True)
+        ws, mod = load_websocket()
+        user = types.SimpleNamespace(id='user-id', is_active=True, is_admin=False, permissions=types.SimpleNamespace(access_all_entities=lambda _: True))
         class Auth:
             async def async_get_user(self, uid):
                 return user
@@ -464,10 +466,12 @@ class WebsocketSnapshotTests(unittest.IsolatedAsyncioTestCase):
             async def async_snapshot(self, **kwargs):
                 if self.fail:
                     raise OSError('SMTP PRIVATE PATH')
+                await kwargs['guard'](['sensor.grid'])
                 return {'safe': True}
         coordinator = Coordinator()
         results, errors = [], []
         hass = types.SimpleNamespace(auth=Auth(), data={'ha_tools_email': {'energy_snapshot': coordinator}})
+        hass.data['ha_tools_email']['storage'] = mod.EmailStorage(hass)
         connection = types.SimpleNamespace(user=user, send_result=lambda *args: results.append(args),
                                            send_error=lambda *args: errors.append(args))
         await ws._ws_energy_snapshot(hass, connection, {'id': 1})

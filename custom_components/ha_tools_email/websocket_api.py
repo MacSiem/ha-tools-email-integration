@@ -20,6 +20,7 @@ from .scheduler import (async_reload_schedules, async_send_now, calculate_next_f
 from .storage import EmailStorage, TariffRevisionConflict, FeatureAccessRevisionConflict
 from .feature_access import default_feature_access, effective_feature_capabilities, feature_access_allowed
 from .tariff import TariffValidationError
+from .analysis_provider import async_require_energy_source_access
 
 
 def _bucket(hass: HomeAssistant) -> dict[str, Any]:
@@ -372,25 +373,50 @@ async def _ws_energy_analysis(hass, connection, msg):
 })
 @websocket_api.async_response
 async def _ws_energy_snapshot(hass, connection, msg):
-    if not await _snapshot_authorized(hass, connection):
-        connection.send_error(msg['id'], 'unauthorized', 'Active household user required.')
+    access = await _feature_authorized(hass, connection, 'energy_analysis', 'read')
+    if access is None:
+        connection.send_error(msg['id'], 'unauthorized', 'Energy analysis access required.')
         return
     coordinator = hass.data.get(DOMAIN, {}).get('energy_snapshot')
     if coordinator is None:
         connection.send_error(msg['id'], 'energy_unavailable', 'Energy snapshot is unavailable.')
         return
+    storage, state = access
+    last_ids = None
+
+    def current():
+        return (_feature_context_current(hass, storage, state['revision'])
+                and hass.data.get(DOMAIN, {}).get('energy_snapshot') is coordinator
+                and getattr(coordinator, 'running', not getattr(coordinator, '_stopped', False)))
+
+    async def guard(source_ids):
+        nonlocal last_ids
+        if not current():
+            raise RuntimeError('energy_snapshot_changed')
+        # The coordinator supplies actual configured IDs before private IO.
+        # One fresh HA user is checked against BOTH feature and resource rights.
+        await async_require_energy_source_access(hass, connection.user.id, source_ids,
+                                                 feature_policy=state['policy'])
+        if not current():
+            raise RuntimeError('energy_snapshot_changed')
+        last_ids = list(source_ids)
+
     try:
-        result = await coordinator.async_snapshot(**({'profile': msg['profile']} if 'profile' in msg else {}))
+        result = await coordinator.async_snapshot(guard=guard,
+            **({'profile': msg['profile']} if 'profile' in msg else {}))
+        if last_ids is None:
+            raise RuntimeError('energy_source_guard_not_called')
+        await guard(last_ids)
+        # No await between the final identity/context checks and sending.
+        if not _energy_context_current(hass, coordinator, result):
+            raise RuntimeError('energy_snapshot_changed')
+    except PermissionError:
+        connection.send_error(msg['id'], 'unauthorized', 'Energy source access required.')
+        return
     except TariffValidationError:
         connection.send_error(msg['id'], 'invalid_tariff_profile', 'Tariff profile is invalid.')
         return
     except Exception:
-        connection.send_error(msg['id'], 'energy_unavailable', 'Energy snapshot is unavailable.')
-        return
-    if not await _snapshot_authorized(hass, connection):
-        connection.send_error(msg['id'], 'unauthorized', 'Active household user required.')
-        return
-    if not _energy_context_current(hass, coordinator, result):
         connection.send_error(msg['id'], 'energy_unavailable', 'Energy snapshot is unavailable.')
         return
     connection.send_result(msg['id'], result)
