@@ -387,5 +387,7 @@ class GroupComparisonAccumulator:
                     return ready and state['common_mask_equals_house']
                 result['reconciles_household_delta'] = all(same_selected_mask(key, state)
                     for key, state in zip(self._keys, self._states))
+            from .energy_group_cents import reconcile_common_costs
+            reconcile_common_costs(result, household, self._identity, self._keys, self._states)
             self._result = result
         return deepcopy(self._result)

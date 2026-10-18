@@ -55,16 +55,20 @@ def _finish(accumulator, context, provenance, comparisons=None, baseline_accumul
             comparison = result['comparisons'][context['comparison_kind']]
             comparison['baseline_analysis'] = summary
             groups = compare_period_groups(result['groups'], baseline['groups'], comparison)
+            groups['reconciles_household_cost_delta'] = False
             if group_pair is not None:
                 streamed = group_pair.finish(comparison)
-                # Keep the established complete-period cent reconciliation.
-                # Only incomplete group rows need the independent hourly mask.
+                # A proven partial cost allocation includes every row, even
+                # structural zero partitions whose old energy totals are full.
+                # Complete calendar groups retain ConsumerPeriod allocation.
+                adjusted_costs = streamed['reconciles_household_cost_delta']
+                groups['reconciles_household_cost_delta'] = adjusted_costs
                 for level in ('devices', 'areas', 'floors'):
                     for key, row in groups[level].items():
-                        if row['reason'] == 'group_common_measurements_required':
+                        if adjusted_costs or row['reason'] == 'group_common_measurements_required':
                             groups[level][key] = streamed[level][key]
                 for key in ('unassigned', 'unmeasured'):
-                    if groups[key]['reason'] == 'group_common_measurements_required':
+                    if adjusted_costs or groups[key]['reason'] == 'group_common_measurements_required':
                         groups[key] = streamed[key]
                 if not groups['reconciles_household_delta']:
                     groups['reconciles_household_delta'] = streamed['reconciles_household_delta']
