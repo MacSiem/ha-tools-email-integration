@@ -9,6 +9,7 @@ from decimal import Decimal, localcontext
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .energy_consumers import COMPONENTS, _reconcile
+from .energy_zone_bins import ZoneBreakdown, zone_labels
 
 
 def build_chart_bins(rows, period, active):
@@ -23,6 +24,7 @@ def build_chart_bins(rows, period, active):
     except (KeyError, TypeError, ValueError, ZoneInfoNotFoundError):
         return {**chart, 'reason': 'measurement_timezone_unavailable'}
     groups = {}
+    labels = zone_labels(active)
     priced = active['rows'] if active is not None else []
     compatible = active is not None and active['compatible']
     with localcontext() as context:
@@ -34,7 +36,8 @@ def build_chart_bins(rows, period, active):
                 groups[key] = {'from': hour['from'], 'to': hour['to'], 'rows': 0, 'measured': 0,
                     'energy': Decimal(0), 'expected_seconds': 0, 'measured_seconds': 0,
                     'amounts': dict.fromkeys(COMPONENTS, Decimal(0)),
-                    'known': dict.fromkeys(COMPONENTS, 0), 'usage_known': 0}
+                    'known': dict.fromkeys(COMPONENTS, 0), 'usage_known': 0,
+                    'zone_breakdown': ZoneBreakdown(active, labels)}
             state = groups[key]
             seconds = (hour['to']-hour['from'])/1000
             state['to'] = hour['to']; state['rows'] += 1
@@ -43,6 +46,7 @@ def build_chart_bins(rows, period, active):
                 state['energy'] += Decimal(str(hour['kwh']))
                 state['measured'] += 1; state['measured_seconds'] += seconds
             price = priced[index] if index < len(priced) else {}
+            state['zone_breakdown'].add(hour, price, index)
             amounts = price.get('costs', {}) if price.get('available') and compatible else {}
             for component in COMPONENTS:
                 value = amounts.get(component)
@@ -80,4 +84,5 @@ def build_chart_bins(rows, period, active):
                 'usage_cost': usage, 'fixed_cost': None, 'total_cost': None,
                 'currency': active['currency'] if compatible else None,
                 'price_basis': active['price_basis'] if compatible else None})
+            bins[-1]['zone_breakdown'] = state['zone_breakdown'].finish(bins[-1])
         return {**chart, 'status': 'ready', 'reason': None, 'bins': bins}
