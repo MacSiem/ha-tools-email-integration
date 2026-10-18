@@ -91,6 +91,67 @@ class AnalysisProviderTest(unittest.TestCase):
                 self.assertEqual(1, meta.await_count); usage.assert_not_awaited()
         asyncio.run(run())
 
+    def permission_modules(self):
+        core = types.ModuleType('homeassistant.core')
+        core.valid_entity_id = lambda sid: isinstance(sid, str) and ':' not in sid and len(sid.split('.')) == 2
+        const = types.ModuleType('homeassistant.auth.permissions.const'); const.POLICY_READ = 'read'
+        return patch.dict(sys.modules, {core.__name__: core, const.__name__: const})
+
+    def test_concrete_source_access_allows_normal_household_and_authorized_entity_subset(self):
+        async def run():
+            user = types.SimpleNamespace(is_active=True, is_admin=False, permissions=types.SimpleNamespace(
+                access_all_entities=lambda policy: True, check_entity=lambda sid, policy: False))
+            hass = types.SimpleNamespace(auth=types.SimpleNamespace(async_get_user=AsyncMock(return_value=user)))
+            await provider.async_require_energy_source_access(hass, 'synthetic-user', ['sensor.grid', 'external:meter'])
+            user.permissions.access_all_entities = lambda policy: False
+            user.permissions.check_entity = lambda sid, policy: sid == 'sensor.grid'
+            await provider.async_require_energy_source_access(hass, 'synthetic-user', ['sensor.grid'])
+            with self.assertRaises(PermissionError):
+                await provider.async_require_energy_source_access(hass, 'synthetic-user', ['sensor.grid', 'sensor.denied'])
+            with self.assertRaises(PermissionError):
+                await provider.async_require_energy_source_access(hass, 'synthetic-user', ['external:meter'])
+        with self.permission_modules():
+            asyncio.run(run())
+
+    def test_source_access_rechecks_user_role_and_activity_instead_of_caching(self):
+        async def run():
+            user = types.SimpleNamespace(is_active=True, is_admin=True, permissions=None)
+            hass = types.SimpleNamespace(auth=types.SimpleNamespace(async_get_user=AsyncMock(return_value=user)))
+            await provider.async_require_energy_source_access(hass, 'synthetic-user', ['external:meter'])
+            user.is_admin = False
+            with self.assertRaises(PermissionError):
+                await provider.async_require_energy_source_access(hass, 'synthetic-user', ['external:meter'])
+            user.is_admin = True; user.is_active = False
+            with self.assertRaises(PermissionError):
+                await provider.async_require_energy_source_access(hass, 'synthetic-user', ['sensor.grid'])
+            hass.auth.async_get_user.return_value = None
+            with self.assertRaises(PermissionError):
+                await provider.async_require_energy_source_access(hass, 'synthetic-user', ['sensor.grid'])
+        with self.permission_modules():
+            asyncio.run(run())
+
+    def test_actual_user_revoked_during_grid_history_prevents_consumer_query_and_result(self):
+        async def run():
+            config = provider.capture_energy_configuration(prefs())
+            user = types.SimpleNamespace(is_active=True, is_admin=False, permissions=types.SimpleNamespace(
+                access_all_entities=lambda policy: True))
+            hass = types.SimpleNamespace(auth=types.SimpleNamespace(async_get_user=AsyncMock(return_value=user)))
+            async def guard():
+                await provider.async_require_energy_source_access(hass, 'synthetic-user',
+                    ['sensor.grid', 'sensor.parent', 'sensor.child'])
+            observed = []
+            async def revoked_during_history(*args, **kwargs):
+                observed.append([row['entity_id'] for row in args[1]])
+                user.is_active = False
+                return readings(START, END, sources=('sensor.grid',))
+            with patch.object(provider, 'async_get_energy_metadata', AsyncMock(return_value={})), \
+                 patch.object(provider, 'async_get_energy_usage', side_effect=revoked_during_history):
+                with self.assertRaises(PermissionError):
+                    await provider.async_read_energy_chunk(hass, config, START, END, guard=guard)
+            self.assertEqual([['sensor.grid']], observed)
+        with self.permission_modules():
+            asyncio.run(run())
+
     def test_separate_bounded_queries_use_same_metadata_and_recheck_after_each_read(self):
         async def run():
             config = provider.capture_energy_configuration(prefs())
