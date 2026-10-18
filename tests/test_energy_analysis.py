@@ -19,12 +19,13 @@ with patch.dict(sys.modules, {package.__name__: package}):
 
 
 class EnergyAnalysisTest(unittest.TestCase):
-    def builder(self, b='configured', context=None):
+    def builder(self, b='configured', context=None, period_extra=None):
         if b == 'configured':
             b = book([version(monthly=31)])
             b['tariffs'].append(tariff([version(rate=.5, monthly=31)], 'alternative'))
-        return analysis.EnergyAnalysisAccumulator(b,
-            {'start': '2026-01-01T00:00Z', 'end': '2026-01-01T02:00Z', 'timezone': 'UTC', 'kind': 'day'},
+        period = {'start': '2026-01-01T00:00Z', 'end': '2026-01-01T02:00Z', 'timezone': 'UTC', 'kind': 'day'}
+        period.update(period_extra or {})
+        return analysis.EnergyAnalysisAccumulator(b, period,
             context if context is not None else {'entry_id': 'synthetic', 'tariff_revision': 4, 'registry_revision': 2},
             generated_at=datetime(2026, 1, 1, 2, 34, tzinfo=timezone.utc))
 
@@ -104,6 +105,27 @@ class EnergyAnalysisTest(unittest.TestCase):
         self.assertNotIn('smtp_config', result['context'])
         self.assertNotIn('unrelated_private_state', result['context'])
         self.assertEqual('synthetic', result['context']['entry_id'])
+
+    def test_rate_and_period_extensions_are_preserved_in_config_but_not_reflected(self):
+        b = book([version(monthly=31)])
+        p = b['tariffs'][0]['versions'][0]['profile']
+        p['future_internal'] = {'reference': '!secret synthetic'}
+        p['zones'][0]['future_internal'] = {'keep_in_config': True}
+        p['clock']['future_internal'] = {'keep_in_config': True}
+        p['rules'] = [{'zone': 'day', 'intervals': [{'from': '00:00', 'to': '24:00',
+                                                     'future_internal': {'keep': True}}]}]
+        original = copy.deepcopy(b)
+        builder = self.builder(b, period_extra={'unrelated_private_state': {'keep_in_config': True}})
+        self.add(builder, '2026-01-01T00:00Z', '2026-01-01T01:00Z', 1)
+        self.add(builder, '2026-01-01T01:00Z', '2026-01-01T02:00Z', 2)
+        result = builder.finish()
+        rate = result['rates'][0]
+        self.assertNotIn('future_internal', rate['profile'])
+        self.assertNotIn('future_internal', rate['profile']['zones'][0])
+        self.assertNotIn('future_internal', rate['profile']['rules'][0]['intervals'][0])
+        self.assertNotIn('future_internal', rate['clock'])
+        self.assertNotIn('unrelated_private_state', result['period'])
+        self.assertEqual(original, b)
 
     def test_chunk_boundaries_do_not_round_costs_or_fees_early(self):
         b = book([version(rate=.005, monthly=62)])
