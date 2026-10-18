@@ -211,7 +211,13 @@ async def test_admin_energy_preview_does_not_send_or_change_schedules(
     await recorder_mock.async_block_till_done()
     _, storage = await _setup(hass)
     await storage.async_save_tariff(profile(), expected_revision=0)
-    await storage.async_save_tariff_book(migrate_tariff_v1(profile(), legacy_combined=False), expected_revision=1)
+    book = migrate_tariff_v1(profile(), legacy_combined=False)
+    # This configured synthetic bill declares every fee. Migration itself
+    # deliberately preserves unknown components and must remain partial.
+    book['tariffs'][0]['versions'][0].update(
+        fixed_monthly={'subscription': 7, 'capacity': 0, 'distribution': 0, 'other': 0},
+        legacy_combined_monthly=None)
+    await storage.async_save_tariff_book(book, expected_revision=1)
     schedules = await storage.async_list_schedules()
     history = await storage.async_get_attempt_history()
     client = await hass_ws_client(hass)
@@ -225,7 +231,9 @@ async def test_admin_energy_preview_does_not_send_or_change_schedules(
     result = response['result']
     assert result['status'] == 'ready'
     assert Decimal(result['total_kwh']) == Decimal('24')
-    assert result['total_cost'] == result['totals']['total_cost']
+    assert result['total_cost'] == result['totals']['total_cost'] == '29.03'
+    assert result['totals']['usage_cost'] == '28.80'
+    assert result['totals']['fixed_cost'] == '0.23'
     assert result['period']['cadence'] == 'daily'
     assert result['period']['hours'] == 24
     assert result['period']['semantics'] == 'rolling_completed_hours'
