@@ -3,6 +3,7 @@ from decimal import Decimal, localcontext
 from math import isfinite
 
 from .energy_group_stream import group_projection_evidence
+from .energy_group_cents import reconcile_mean7_costs
 from .energy_measurements import calendar_grid
 from .energy_comparison_core import UsageCostHour, new_usage_cost_state, finish_usage_cost
 from .energy_mean7_costs import _mean_states
@@ -71,6 +72,7 @@ def compare_daily_group_mean7(projections, periods, *, timezone_name, tariff=Non
               'reconciles_household_delta': False, 'reconciles_household_cost_delta': False,
               **{level: {} for level in LEVELS}}
     identities = set()
+    selected_states = {}
     with localcontext() as context:
         context.prec = 40
         for position, key in enumerate(keys):
@@ -114,6 +116,7 @@ def compare_daily_group_mean7(projections, periods, *, timezone_name, tariff=Non
                 for state,window,hour_prices,frames in zip(states,rows,prices,selected):
                     for frame in frames:
                         hour_prices[frame].add_group(state,window[frame][1][position])
+                selected_states[key] = states
                 row['costs'] = _costs(states,row)
                 identities.update((side['currency'],side['price_basis']) for side in
                     (row['costs']['current'],row['costs']['baseline']) if side['compatible'])
@@ -123,4 +126,7 @@ def compare_daily_group_mean7(projections, periods, *, timezone_name, tariff=Non
     if len(identities) == 1:
         result['currency'],result['price_basis'] = next(iter(identities))
     result['reconciles_household_delta'] = bool(common_proof or full_proof)
+    with localcontext() as context:
+        context.prec = 40
+        reconcile_mean7_costs(result, household, identity, keys, selected_states)
     return result

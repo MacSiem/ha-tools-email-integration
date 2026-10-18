@@ -87,8 +87,8 @@ class MeanGroupCentsTest(unittest.TestCase):
     def test_unknown_price_outside_selected_mask_does_not_block_structural_empty_group(self):
         # Every chosen mask excludes hour00, exactly the only unpriced hour.
         v=version()
-        v['profile']['dynamic']={'intervals':[{'from':f'2026-01-{day:02d}T01:00Z',
-            'to':f'2026-01-{day+1:02d}T00:00Z','energyRate':1,'variableRate':0} for day in range(1,9)]}
+        v['profile']['dynamic']={'intervals':[{'from':'2026-01-01T01:00Z',
+            'to':'2026-01-09T00:00Z','energyRate':1,'variableRate':0}]}
         data=self.fixture(holes={i:{0} for i in range(8)},rates=tariff([v]))
         result=self.compare(data);self.assert_cost_partitions(result,data[3])
         self.assertEqual('0.00',result['unassigned']['costs']['current']['usage_cost'])
