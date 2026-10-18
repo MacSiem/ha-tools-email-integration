@@ -26,7 +26,9 @@ class EnergySourceIntervalsTest(unittest.TestCase):
         prefs = {"energy_sources": [{"type": "grid", "stat_energy_from": sid}
                                     for sid in rows]}
         with patch.object(composer, "async_get_energy_usage", new=capture):
-            fixture.EnergyGridProviderTest().compose(prefs, rows, gap=gap, mutation=mutation)
+            summary, _ = fixture.EnergyGridProviderTest().compose(prefs, rows, gap=gap, mutation=mutation)
+        self.assertNotIn("source_buckets", summary,
+                         "Private raw intervals must not silently expand rendered mail summaries")
         self.assertIn("source_buckets", captured,
                       "Coverage/grouping needs actual normalized intervals for each source")
         return captured

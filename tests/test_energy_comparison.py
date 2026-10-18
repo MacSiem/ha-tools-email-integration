@@ -152,6 +152,34 @@ class RecorderProvenanceTest(unittest.TestCase):
 
 
 class RuntimeComparisonTest(unittest.IsolatedAsyncioTestCase):
+    async def test_partial_payload_queries_only_matching_previous_fragment(self):
+        start = datetime(2026, 10, 12, tzinfo=UTC)
+        end = datetime(2026, 10, 17, 12, tzinfo=UTC)
+        calls = []
+        energy = types.ModuleType('homeassistant.components.energy.data')
+
+        async def manager(hass):
+            return types.SimpleNamespace(data={'energy_sources': [
+                {'type': 'grid', 'stat_energy_from': 'sensor.grid'}]})
+
+        async def measured(hass, sensors, query_start, query_end, cadence):
+            calls.append((query_start, query_end))
+            return snapshot(12 if query_start == start else 10)
+
+        async def executor(fn, *args):
+            return fn(*args)
+
+        energy.async_get_manager = manager
+        hass = types.SimpleNamespace(data={}, states={}, async_add_executor_job=executor,
+            config=types.SimpleNamespace(currency='PLN', time_zone='UTC'))
+        with patch.dict(sys.modules, {energy.__name__: energy}), patch.object(c, 'async_get_energy_usage', measured):
+            payload = await c.async_build_energy_report_payload(hass, cadence='weekly', now=end,
+                window_start=start, window_end=end)
+        self.assertEqual(2, len(calls), 'The partial calendar period needs a measured baseline')
+        self.assertEqual((datetime(2026, 10, 5, tzinfo=UTC),
+                          datetime(2026, 10, 10, 12, tzinfo=UTC)), calls[1])
+        self.assertEqual(20, payload['summary']['comparison']['percent'])
+
     async def test_actual_payload_uses_same_selected_sources_and_renders_both_formats(self):
         now = datetime(2026, 10, 12, 12, tzinfo=UTC)
         start, end = scheduler.calendar_report_window({'cadence':'daily'}, now, local_timezone='UTC')
