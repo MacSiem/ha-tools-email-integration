@@ -21,6 +21,7 @@ except ImportError:  # Lightweight boundary fixtures; HA provides the real enum.
     CoreState = None
 from homeassistant.helpers.storage import Store
 
+from .feature_access import default_feature_access, validate_feature_access
 from .tariff import TariffValidationError, validate_tariff_profile
 from .tariff_history import prepare_tariff_book_edit, validate_tariff_book
 from .scheduler import normalize_schedule_calendar
@@ -172,7 +173,6 @@ class EmailStorage:
 
     @staticmethod
     def _feature_access_state(data):
-        from .feature_access import default_feature_access, validate_feature_access
         raw = data.get('feature_access')
         try:
             policy = default_feature_access() if raw is None else validate_feature_access(raw)
@@ -197,7 +197,6 @@ class EmailStorage:
         A missing stored policy retains legacy roles. Invalid persisted policy is
         never silently replaced; an administrator can explicitly repair it.
         """
-        from .feature_access import validate_feature_access
         if type(expected_revision) is not int or expected_revision < 0:
             raise ValueError('invalid_feature_access_revision')
         clean = validate_feature_access(policy)
