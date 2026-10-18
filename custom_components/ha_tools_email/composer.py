@@ -566,7 +566,8 @@ async def async_build_energy_report_payload(
     end = (_aware(window_end).astimezone(timezone.utc) if window_end is not None else
            _aware(now or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0))
     start = _aware(window_start).astimezone(timezone.utc) if window_start is not None else _period_start(cadence, end)
-    snapshot = await async_get_energy_usage(hass, await async_grid_sensors(hass), start, end, cadence)
+    sensors = await async_grid_sensors(hass)
+    snapshot = await async_get_energy_usage(hass, sensors, start, end, cadence)
     payload = build_energy_report_payload(
         snapshot["devices"], cadence=cadence, now=end,
         currency=getattr(getattr(hass, "config", None), "currency", "") or "",
