@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from tests import test_energy_grid_provider as fixture
 
-composer = fixture.composer
+from tests.helper_composer_schema2 import composer
 
 
 class EnergySourceIntervalsTest(unittest.TestCase):

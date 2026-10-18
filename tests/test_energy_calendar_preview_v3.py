@@ -47,7 +47,7 @@ class EnergyCalendarPreviewTests(unittest.IsolatedAsyncioTestCase):
         result=self.results[0][1]
         self.assertEqual('rolling_completed_hours', result['period']['semantics'])
         self.assertEqual('2026-10-12T12:00:00+00:00',result['period']['end'])
-        self.assertEqual('0', result['total_kwh'])
+        self.assertEqual(Decimal('0'), Decimal(result['total_kwh']))
         self.assertEqual(result['total_cost'], result['totals']['total_cost'])
         self.assertEqual([],self.errors); self.assertEqual(0,forbidden.call_count)
         self.assertEqual([], self.storage._store.saved)
