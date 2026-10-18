@@ -17,7 +17,8 @@ REMAINDER = '__unmeasured__'
 
 def _state():
     return {'kwh': Decimal(0), 'observations': 0, 'measured_kwh': Decimal(0), 'measured_observations': 0,
-            'amounts': dict.fromkeys(COSTS, Decimal(0)), 'priced': dict.fromkeys(COSTS, 0)}
+            'amounts': dict.fromkeys(COSTS, Decimal(0)), 'priced': dict.fromkeys(COSTS, 0),
+            'usage_parts': dict.fromkeys(COMPONENTS, Decimal(0))}
 
 
 def _text(value):
@@ -95,6 +96,10 @@ class ConsumerPeriod:
                     state['kwh'] += Decimal(value); state['observations'] += 1
                     if rate is not None and rate['available']:
                         amounts = calculate_energy_amounts(value, rate['energy_rate'], rate['variable_rate'], rate['rate_semantics'])
+                        if amounts['usage_cost'] is not None:
+                            for key in COMPONENTS:
+                                if amounts[key] is not None:
+                                    state['usage_parts'][key] += amounts[key]
                         for key, amount in amounts.items():
                             if amount is not None:
                                 state['amounts'][key] += amount; state['priced'][key] += 1
@@ -123,6 +128,11 @@ class ConsumerPeriod:
             for key in COSTS:
                 row[key] = _money(state['amounts'][key]) if compatible and state['priced'][key] == self._hours else None
                 row['known_costs'][key] = _money(state['amounts'][key]) if compatible and state['priced'][key] else None
+            if compatible and state['priced']['usage_cost']:
+                usage = _money(sum((Decimal(_money(value)) for value in state['usage_parts'].values()), Decimal(0)))
+                row['known_costs']['usage_cost'] = usage
+                if state['priced']['usage_cost'] == self._hours:
+                    row['usage_cost'] = usage
             output[sid] = row
         reconciled = False
         if compatible and self._partition and active['pricing_complete']:
