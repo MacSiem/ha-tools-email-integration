@@ -33,6 +33,19 @@ class BookWebsocketTest(unittest.IsolatedAsyncioTestCase):
                                             send_error=lambda *args: errors.append(args))
         return ws, hass, storage, lane, connection, results, errors
 
+    async def test_admin_preview_returns_changes_but_never_saves(self):
+        ws, hass, storage, lane, connection, results, errors = self.fixture()
+        await ws._ws_preview_tariff_book(hass, connection,
+            {'id': 1, 'book': book(), 'expected_revision': 0})
+        self.assertEqual([], errors)
+        self.assertEqual([], results[-1][1]['historical_changes'])
+        self.assertEqual([], storage._store.saved)
+        lane.hook = lambda: setattr(hass.auth.current, 'is_active', False)
+        await ws._ws_preview_tariff_book(hass, connection,
+            {'id': 2, 'book': book(), 'expected_revision': 0})
+        self.assertEqual('unauthorized', errors[-1][1])
+        self.assertEqual(1, len(results))
+
     async def test_admin_save_and_household_read_have_confirmed_revision(self):
         ws, hass, storage, lane, connection, results, errors = self.fixture()
         await ws._ws_set_tariff_book(hass, connection, {'id': 1, 'book': book(), 'expected_revision': 0})

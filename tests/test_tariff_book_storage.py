@@ -20,6 +20,18 @@ class BookStorageTest(unittest.IsolatedAsyncioTestCase):
             config=types.SimpleNamespace(path=lambda *args: self.fail('No SMTP migration for book IO')))
         return module, module.EmailStorage(hass)
 
+    async def test_preview_exposes_exact_past_range_without_saving(self):
+        _, s = self.storage()
+        initial = await s.async_save_tariff_book(book(), expected_revision=0, now=NOW)
+        changed = copy.deepcopy(initial['book'])
+        changed['tariffs'][0]['versions'].append(version('2026-10-01', 2, 'changed'))
+        preview = await s.async_preview_tariff_book(changed, expected_revision=1, now=NOW)
+        self.assertEqual([{'tariff_id': 'active', 'from': '2026-10-01T00:00:00+00:00',
+                           'to': '2026-10-18T12:00:00+00:00'}], preview['historical_changes'])
+        self.assertEqual(1, preview['revision'])
+        self.assertEqual(initial, await s.async_get_tariff_book())
+        self.assertEqual(1, len(s._store.saved))
+
     async def test_additive_save_restart_shared_revision_and_foreign_state(self):
         module, s = self.storage()
         foreign = {'smtp_config': {'password': '!secret synthetic'}, 'schedules': [{'id': 'keep'}],
