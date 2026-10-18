@@ -75,11 +75,23 @@ class ConsumerPeriod:
 
     def prepare_chunk(self, snapshot, household_rows, start, end):
         """Stage changes; caller commits only after the whole chunk is accepted."""
+        return self._prepare_chunk(snapshot, household_rows, start, end, include_hours=False)[0]
+
+    def prepare_chunk_with_projection(self, snapshot, household_rows, start, end):
+        """Return staged state plus detached chunk-only disjoint hourly values.
+
+        This internal projection is computed from validated evidence, never a
+        client claim of attribution. The caller owns its bounded lifetime.
+        """
+        return self._prepare_chunk(snapshot, household_rows, start, end, include_hours=True)
+
+    def _prepare_chunk(self, snapshot, household_rows, start, end, *, include_hours):
         evidence = measurement_evidence(snapshot, start, end) if self._ids else None
         if evidence is not None and (set(evidence['source_ids']) != set(self._ids)
                 or self._provenance is not None and evidence['measurement_provenance'] != self._provenance):
             raise ValueError('consumer_sources_changed')
         states, issues, partition = deepcopy(self._states), set(self._issues), self._partition
+        projected = [] if include_hours else None
         with localcontext() as context:
             context.prec = 40
             for hour in household_rows:
@@ -87,6 +99,13 @@ class ConsumerPeriod:
                 consumers = [{**row, 'domain': self._domain,
                               'kwh': evidence['per_source'][row['stat_consumption']].get(stamp)} for row in self._config]
                 breakdown = build_interval_breakdown(hour['kwh'], consumers, self._membership, domain=self._domain)
+                if include_hours:
+                    projected.append({'from': stamp, 'to': hour['to'], 'household_kwh': hour['kwh'],
+                        'partition_complete': self._domain == 'grid_import' and breakdown['status'] == 'ready',
+                        **{level: {key: cell['kwh_decimal'] for key, cell in breakdown[level].items()}
+                           for level in ('devices', 'areas', 'floors')},
+                        'unassigned': breakdown['unassigned']['kwh_decimal'],
+                        'unmeasured': breakdown['unmeasured']['kwh_decimal']})
                 partition = partition and breakdown['status'] == 'ready'
                 issues.update(issue['reason'] for issue in breakdown['issues'])
                 rate = self._rates.resolve_interval(stamp, hour['to']) if self._rates and self._domain == 'grid_import' else None
@@ -109,7 +128,13 @@ class ConsumerPeriod:
                                 state['amounts'][key] += amount; state['priced'][key] += 1
                     elif rate is not None:
                         issues.add(rate['reason'])
-        return states, issues, partition, deepcopy(evidence['measurement_provenance']) if evidence else None
+        provenance = deepcopy(evidence['measurement_provenance']) if evidence else None
+        staged = states, issues, partition, provenance
+        projection = ({'schema': 1, 'consumer_source_ids': sorted(self._ids),
+            'consumer_provenance': deepcopy(provenance) if provenance is not None else {},
+            'registry_revision': self._membership['revision'], 'membership_mode': 'current_snapshot',
+            'energy_domain': self._domain, 'hours': projected} if include_hours else None)
+        return staged, projection
 
     def commit_chunk(self, staged):
         self._states, self._issues, self._partition, self._provenance = staged

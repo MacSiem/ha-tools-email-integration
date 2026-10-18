@@ -146,9 +146,11 @@ class EnergyAnalysisAccumulator:
                            if consumers is not None else None)
         self._result = None
 
-    def add_chunk(self, snapshot, start, end, *, consumer_snapshot=None):
+    def add_chunk(self, snapshot, start, end, *, consumer_snapshot=None, include_group_hours=False):
         if self._result is not None:
             raise ValueError('analysis_already_finished')
+        if type(include_group_hours) is not bool or include_group_hours and self._consumers is None:
+            raise ValueError('consumer_projection_not_configured')
         start, end = _stamp(start), _stamp(end)
         if start != self._cursor or not start < end <= self._end:
             raise ValueError('analysis_chunk_gap_overlap_or_outside_period')
@@ -158,8 +160,16 @@ class EnergyAnalysisAccumulator:
         ids, provenance = sorted(evidence['source_ids']), evidence['measurement_provenance']
         if self._ids is not None and (ids != self._ids or provenance != self._provenance):
             raise ValueError('energy_sources_changed')
-        staged = (self._consumers.prepare_chunk(consumer_snapshot, evidence['hourly_buckets'], start, end)
-                  if self._consumers is not None else None)
+        projection = None
+        if include_group_hours:
+            staged, projection = self._consumers.prepare_chunk_with_projection(
+                consumer_snapshot, evidence['hourly_buckets'], start, end)
+            projection.update(grid_source_ids=list(ids), grid_provenance=deepcopy(provenance))
+            for hour in projection['hours']:
+                hour['grid_source_presence'] = [sid for sid in ids if hour['from'] in evidence['per_source'][sid]]
+        else:
+            staged = (self._consumers.prepare_chunk(consumer_snapshot, evidence['hourly_buckets'], start, end)
+                      if self._consumers is not None else None)
         # Commit only after every chunk check has succeeded. A rejected chunk
         # cannot advance the cursor, change coverage or poison an explicit retry.
         if self._ids is None:
@@ -175,6 +185,7 @@ class EnergyAnalysisAccumulator:
         if self._consumers is not None:
             self._consumers.commit_chunk(staged)
         self._cursor = end
+        return projection
 
     def finish(self):
         if self._result is not None:
