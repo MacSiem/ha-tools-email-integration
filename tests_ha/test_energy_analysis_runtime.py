@@ -15,9 +15,9 @@ pytestmark = pytest.mark.asyncio
 
 
 @pytest.mark.parametrize('missing_source', [False, True])
+@pytest.mark.freeze_time('2026-10-18T12:30:00+00:00')
 async def test_native_analysis_selected_comparison_chart_and_policy(hass, hass_storage,
         recorder_mock, freezer, hass_ws_client, hass_read_only_access_token, missing_source):
-    freezer.move_to('2026-10-18T12:30:00+00:00')
     await hass.config.async_set_time_zone('UTC')
     manager = await async_get_manager(hass)
     grid = [{'stat_energy_from': 'analysis:grid'}]
