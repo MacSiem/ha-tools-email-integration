@@ -205,7 +205,10 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle):
         else:
             text, numeric = display(value, key, path)
             unit = ''
-            if key.endswith('kwh'):
+            # Price coverage counters use component names, but measure time.
+            if key.endswith('_seconds') or 'priced_source_seconds' in path:
+                unit = 's'
+            elif key.endswith('kwh'):
                 unit = 'kWh'
             elif key.endswith('_cost') or key in ('energyRate', 'variableRate', 'effective_price', 'legacy_combined_monthly'):
                 unit = currency or unknown
