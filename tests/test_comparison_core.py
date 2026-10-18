@@ -297,5 +297,35 @@ class UsageCostCoreTest(unittest.TestCase):
         self.assertNotIn('mutated', again['issues'])
 
 
+    def test_one_validated_hour_resolves_once_for_many_projected_groups(self):
+        rates = history.HistoricalTariffRates(tariff())
+        when = stamp('2026-01-02T00:00Z')
+        with patch.object(rates, 'resolve_interval', wraps=rates.resolve_interval) as resolve:
+            hour = core.UsageCostHour(when, rates)
+            states = [core.new_usage_cost_state(rates) for _ in range(514)]
+            for state in states:
+                hour.add(state, [1])
+                self.assertEqual('0.70', core.finish_usage_cost(state, eligible=True)['usage_cost'])
+            self.assertEqual(1, resolve.call_count)
+        with self.assertRaises((FrozenInstanceError, AttributeError)):
+            hour.stamp = 0
+        with self.assertRaises(ValueError): core.UsageCostHour(when, {'validated': True})
+        for invalid in (True, float('inf'), when+1, '2026-01-02T00:00Z'):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                core.UsageCostHour(invalid, rates)
+
+    def test_hour_helper_and_scalar_use_identical_legacy_and_missing_price_arithmetic(self):
+        for book in (tariff(), tariff(version(variable=None)),
+                     tariff(version(energy=.005, variable=None, rate_semantics='legacy_combined'))):
+            rates = history.HistoricalTariffRates(book)
+            a, b = core.new_usage_cost_state(rates), core.new_usage_cost_state(rates)
+            for h in range(2):
+                when = stamp('2026-01-02T%02d:00Z'%h)
+                core.add_usage_cost(a, when, [.1,.2], rates)
+                core.UsageCostHour(when, rates).add(b, [.1,.2])
+            self.assertEqual(a, b)
+            self.assertEqual(core.finish_usage_cost(a, eligible=True), core.finish_usage_cost(b, eligible=True))
+
+
 if __name__ == '__main__':
     unittest.main()
