@@ -6,13 +6,27 @@ included in retained_cells: whole-process peak memory must be measured by IO.
 """
 from copy import deepcopy
 from datetime import timedelta
+from decimal import Decimal, localcontext
 from math import fsum, isfinite
 
 from .energy_measurements import calendar_grid, hour_grid, source_cells, validated_source_ids, valid_provenance, _instant
 
+from .tariff_history import (HistoricalTariffRates, calculate_energy_amounts,
+                             FEE_KEYS, ROUNDING, _fees, _money)
+
+
+_COMPONENTS = ('energy_cost', 'variable_cost', 'legacy_combined_cost')
+_COSTS = (*_COMPONENTS, 'usage_cost')
+
+
+def _cost_state():
+    return {'kwh': Decimal(0), 'amounts': dict.fromkeys(_COMPONENTS, Decimal(0)),
+            'priced': dict.fromkeys(_COSTS, 0), 'seconds': 0,
+            'identities': set(), 'semantics': set(), 'issues': set()}
+
 
 class PairedComparisonAccumulator:
-    def __init__(self, current_period, baseline_period, *, timezone_name, calendar_kind):
+    def __init__(self, current_period, baseline_period, *, timezone_name, calendar_kind, tariff=None):
         if calendar_kind not in ('daily', 'weekly', 'monthly', 'yearly'):
             raise ValueError('invalid_calendar_kind')
         self._periods = [deepcopy(current_period), deepcopy(baseline_period)]
@@ -34,6 +48,12 @@ class PairedComparisonAccumulator:
         self._common_totals = [[], []]
         self._common = 0
         self.peak_retained_cells = 0
+        # The resolver validates and detaches once; reuse its normalized versions
+        # for the authoritative calendar-fee helper, without a second proof.
+        self._rates = HistoricalTariffRates(tariff) if tariff is not None else None
+        self._versions = tuple(item[2] for item in self._rates._compiled) if self._rates else ()
+        self._own_costs = [_cost_state(), _cost_state()] if self._rates else None
+        self._common_costs = [_cost_state(), _cost_state()] if self._rates else None
         self._result = None
 
     @property
@@ -68,10 +88,20 @@ class PairedComparisonAccumulator:
         total = fsum(value for values in cells.values() for value in values.values())
         if not isfinite(total):
             raise ValueError('unrepresentable_measurement_sum')
+        own_cost = None
+        if self._rates:
+            own_cost = deepcopy(self._own_costs[index])
+            for stamp, frame in grid.items():
+                values = [values[frame] for values in cells.values() if frame in values]
+                self._add_cost(own_cost, stamp, values)
         # No state mutation before the complete incoming chunk is validated.
         if self._ids is None:
             self._ids, self._provenance = ids, deepcopy(provenance)
         self._slots[index] = {'frames': list(grid.values()), 'cells': cells, 'head': 0}
+        if self._rates:
+            self._own_costs[index] = own_cost
+            # Keep the actual UTC hour beside its calendar frame in this slot.
+            self._slots[index]['stamps'] = list(grid)
         self._measured[index] += count
         self._totals[index].append(total)
         self._cursors[index] = end
@@ -108,6 +138,9 @@ class PairedComparisonAccumulator:
                             values[0].append(x); values[1].append(y)
                     for i in (0, 1):
                         self._common_totals[i].append(fsum(values[i]))
+                        if self._rates:
+                            slot = self._slots[i]
+                            self._add_cost(self._common_costs[i], slot['stamps'][slot['head']], values[i])
                     self._advance(0); self._advance(1)
                 else:
                     self._advance(0 if self._ranks[a] < self._ranks[b] else 1)
@@ -152,5 +185,101 @@ class PairedComparisonAccumulator:
                     comparison_scope='calendar_totals' if complete else 'common_measurements',
                     current_kwh=actual, baseline_kwh=baseline, delta_kwh=delta,
                     percent=percent if percent is not None and isfinite(percent) else None)
+        if self._rates:
+            with localcontext() as context:
+                context.prec = 40
+                result['costs'] = self._finish_costs(result, complete)
         self._result = result
         return deepcopy(result)
+
+
+    def _add_cost(self, state, stamp, values):
+        if not values:
+            return
+        seconds = len(values) * 3600
+        state['seconds'] += seconds
+        quantity = fsum(values)
+        with localcontext() as context:
+            context.prec = 40
+            state['kwh'] += Decimal(str(quantity))
+        rate = self._rates.resolve_interval(stamp, stamp + 3600000)
+        if 'currency' in rate:
+            state['identities'].add((rate['currency'], rate['price_basis']))
+        if not rate['available']:
+            state['issues'].add(rate['reason'])
+            return
+        state['semantics'].add(rate['rate_semantics'])
+        try:
+            # Match household evidence: float fsum across the actual source
+            # values in this hour, then convert once inside the Decimal helper.
+            amounts = calculate_energy_amounts(quantity, rate['energy_rate'],
+                                               rate['variable_rate'], rate['rate_semantics'])
+        except ValueError:
+            state['issues'].add('unrepresentable_usage_amount')
+            return
+        with localcontext() as context:
+            context.prec = 40
+            for key, amount in amounts.items():
+                if amount is not None:
+                    state['priced'][key] += seconds
+                    if key in _COMPONENTS:
+                        state['amounts'][key] += amount
+                else:
+                    state['issues'].add('unknown_' + key)
+
+    def _cost_side(self, state, index, eligible, complete):
+        start, end = (int(_instant(self._periods[index][key]).timestamp() * 1000)
+                      for key in ('start', 'end'))
+        fee, _, _, fee_identities = _fees(self._versions, start, end)
+        identities = state['identities'] | fee_identities
+        compatible = len(identities) == 1
+        currency, basis = next(iter(identities)) if compatible else (None, None)
+        mask = state['seconds']
+        known = {key: _money(state['amounts'][key])
+                 if compatible and state['priced'][key] else None for key in _COMPONENTS}
+        amounts = {key: known[key] if eligible and mask and state['priced'][key] == mask else None
+                   for key in _COMPONENTS}
+        usage_ready = bool(eligible and compatible and mask and state['priced']['usage_cost'] == mask)
+        # The period usage is the sum of the separately rounded period parts.
+        # Legacy and named parts may coexist, while the named split is unknown.
+        usage = sum((Decimal(_money(value)) for value in state['amounts'].values()), Decimal(0))
+        amounts['usage_cost'] = _money(usage) if usage_ready else None
+        fixed = (sum((Decimal(fee['components'][key]) for key in FEE_KEYS), Decimal(0))
+                 if fee['complete'] and compatible else None)
+        total = (usage + fixed if complete and usage_ready and fixed is not None
+                 and all(amounts[key] is not None for key in _COMPONENTS) else None)
+        issues = set(state['issues'])
+        if not compatible:
+            issues.add('incomparable_currency_or_basis')
+        return {**amounts, 'known_costs': known,
+                'mask_source_seconds': mask, 'priced_source_seconds': dict(state['priced']),
+                'pricing_complete': usage_ready, 'compatible': compatible,
+                'currency': currency, 'price_basis': basis,
+                'rate_semantics': sorted(state['semantics']),
+                'fixed_scope': 'household_period', 'fixed_cost': _money(fixed),
+                'fees': fee if compatible else None, 'total_cost': _money(total),
+                'effective_price': _money(total / state['kwh'])
+                    if total is not None and state['kwh'] > 0 else None,
+                'issues': sorted(issues)}
+
+    def _finish_costs(self, energy, complete):
+        states = self._own_costs if complete else self._common_costs
+        sides = [self._cost_side(state, i, energy['status'] == 'ready', complete)
+                 for i, state in enumerate(states)]
+        a, b = sides
+        same_identity = (a['compatible'] and b['compatible']
+                         and (a['currency'], a['price_basis']) == (b['currency'], b['price_basis']))
+        comparable = same_identity and all(side['usage_cost'] is not None for side in sides)
+        delta, percent = None, None
+        if comparable:
+            baseline = Decimal(b['usage_cost'])
+            delta = Decimal(a['usage_cost']) - baseline
+            percent = str(delta / baseline * 100) if baseline else None
+        total_delta = (Decimal(a['total_cost']) - Decimal(b['total_cost'])
+                       if same_identity and all(side['total_cost'] is not None for side in sides) else None)
+        return {'comparison_scope': energy.get('comparison_scope'), 'metric': 'usage_cost',
+                'current': a, 'baseline': b, 'status': 'ready' if comparable else 'unknown',
+                'reason': None if comparable else (energy['reason'] or ('currency_or_basis_mismatch'
+                    if not same_identity else 'incomplete_cost')),
+                'delta_cost': _money(delta), 'percent': percent,
+                'delta_total_cost': _money(total_delta), 'rounding': deepcopy(ROUNDING)}
