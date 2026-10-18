@@ -3,7 +3,7 @@
 ## 2.4.0 (Unreleased)
 
 - Add shared light/dark mail surfaces and an explicit preview theme, readable severity badges and values beside chart bars. Keep the complete shared Log caveat once, preserving per-chart omissions and missing/zero explanations.
-- Format generated mail dates and period bounds in Home Assistant’s configured time zone and PL/EN language, with DST offsets and separate technical UTC time. Preserve calendar boundaries, source identities and pricing.
+- Format generated mail dates and period bounds in Home Assistant’s configured time zone and PL/EN language, with DST offsets and separate technical UTC time. Preserve calendar boundaries, source identities and pricing. Use readable dates in chart labels and comparisons while retaining calendar-day identities and both offsets of repeated hours.
 
 - Add one shared Energy snapshot and five stable entities: tariff classification, current usage price, cheap-zone binary state, next cheap start and cost today. Prices use tariff currency; missing data or variable fees stay unavailable and fixed monthly fees remain separate.
 - Price Energy Optimizer 4.0 card histories through the same EnergyTariff engine, including ephemeral card overrides. Bound batch size, CPU work and pending jobs; do not read Recorder or change settings for supplied-history pricing.

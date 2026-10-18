@@ -187,7 +187,7 @@ a version supporting this endpoint to show the server preview.
 
 ## Actual mail preview and manual periods (2.3+)
 
-With 2.4+, the server uses Home Assistant’s configured language (Polish or English) and time zone for human-readable mail dates. This presentation is separate from the schedule or requested calendar time zone: the same exact period bounds and measurements are retained. Repeated DST hours include their offset. Missing language/time-zone configuration falls back to English/UTC. Browser charts continue to follow the user’s display settings.
+With 2.4+, the server uses Home Assistant’s configured language (Polish or English) and time zone for human-readable mail dates. This presentation is separate from the schedule or requested calendar time zone: the same exact period bounds and measurements are retained. Repeated DST hours include their offset. Missing language/time-zone configuration falls back to English/UTC. Browser charts continue to follow the user’s display settings. Hourly mail chart labels and comparison bounds use the HA presentation time zone; calendar-day labels keep their measured report-calendar day and state that zone explicitly. Raw interval identities stay unchanged.
 
 HTML mail includes light/dark surfaces without external assets. The final Log explanation keeps the complete retained-aggregate caveat; chart-specific omission and missing-value notes stay with each chart. Email clients may apply their own color treatment.
 
