@@ -15,10 +15,12 @@ from tests_ha.test_energy_runtime import profile
 pytestmark = pytest.mark.asyncio
 
 
-@pytest.mark.parametrize(('missing_source', 'missing_consumer_hour'), [(False, False), (True, False), (False, True)])
+@pytest.mark.parametrize(('missing_source', 'missing_consumer_hour', 'comparison'), [
+    (False, False, 'previous'), (True, False, 'previous'), (False, True, 'previous'),
+    (False, False, 'mean7')])
 @pytest.mark.freeze_time('2026-10-18T12:30:00+00:00')
 async def test_native_analysis_selected_comparison_chart_and_policy(hass, hass_storage,
-        recorder_mock, freezer, hass_ws_client, hass_read_only_access_token, missing_source, missing_consumer_hour):
+        recorder_mock, freezer, hass_ws_client, hass_read_only_access_token, missing_source, missing_consumer_hour, comparison):
     await hass.config.async_set_time_zone('UTC')
     manager = await async_get_manager(hass)
     grid = [{'stat_energy_from': 'analysis:grid'}]
@@ -30,11 +32,12 @@ async def test_native_analysis_selected_comparison_chart_and_policy(hass, hass_s
                 'has_mean': False, 'has_sum': True, 'unit_of_measurement': 'kWh'}
     if hasattr(models, 'StatisticMeanType'):
         metadata.update(mean_type=models.StatisticMeanType.NONE, unit_class='energy')
-    start = datetime(2026, 10, 17, tzinfo=timezone.utc)
+    start = datetime(2026, 10, 11 if comparison == 'mean7' else 17, tzinfo=timezone.utc)
+    sample_count = 181 if comparison == 'mean7' else 37
     async_add_external_statistics(hass, metadata,
-        [{'start': start+timedelta(hours=i-1), 'sum': float(i)} for i in range(37)])
+        [{'start': start+timedelta(hours=i-1), 'sum': float(i)} for i in range(sample_count)])
     async_add_external_statistics(hass, {**metadata, 'statistic_id': 'analysis:device', 'name': 'Synthetic device'},
-        [{'start': start+timedelta(hours=i-1), 'sum': i*.25} for i in range(37)
+        [{'start': start+timedelta(hours=i-1), 'sum': i*.25} for i in range(sample_count)
          if not missing_consumer_hour or i != 4])
     await recorder_mock.async_block_till_done()
     entry, storage = await _setup(hass)
@@ -44,13 +47,13 @@ async def test_native_analysis_selected_comparison_chart_and_policy(hass, hass_s
     await storage.async_save_tariff_book(migrate_tariff_v1(profile(), legacy_combined=False), expected_revision=1)
     client = await hass_ws_client(hass, hass_read_only_access_token)
     msg = {'type': f'{DOMAIN}/energy_analysis', 'period': 'day',
-           'anchor': '2026-10-18', 'comparison': 'previous'}
+           'anchor': '2026-10-18', 'comparison': comparison}
     await client.send_json_auto_id(msg)
     response = await client.receive_json()
     assert response['success'], response
-    result = response['result']; compared = result['comparisons']['previous']
+    result = response['result']; compared = result['comparisons'][comparison]
     assert result['period']['hours'] == 12
-    assert result['context']['comparison_kind'] == 'previous'
+    assert result['context']['comparison_kind'] == comparison
     assert result['chart']['grain'] == 'hour'
     assert len(result['chart']['bins']) == 12
     if missing_source:
@@ -64,7 +67,13 @@ async def test_native_analysis_selected_comparison_chart_and_policy(hass, hass_s
         assert compared['delta_kwh'] == 0
         assert sum(Decimal(row['kwh']) for row in result['chart']['bins']) == 12
         assert sum(Decimal(row['usage_cost']) for row in result['chart']['bins']) == Decimal(result['totals']['usage_cost'])
-        group = compared['groups']['unassigned']
+        if comparison == 'mean7':
+            costs = compared['costs']
+            assert costs['status'] == 'ready' and costs['delta_cost'] == '0.00'
+            assert len(costs['baselines']) == 7
+            assert costs['current']['usage_cost'] == costs['baseline']['usage_cost'] == result['totals']['usage_cost']
+        else:
+            group = compared['groups']['unassigned']
         if missing_consumer_hour:
             # SQL has no hour03 statistic; hour04 carries the two-hour meter
             # increment. Match only actual present rows, without interpolation.
@@ -76,11 +85,12 @@ async def test_native_analysis_selected_comparison_chart_and_policy(hass, hass_s
             assert group['coverage']['common_group_seconds'] == 11*3600
             assert not compared['groups']['reconciles_household_delta']
             assert 'fixed_cost' not in group['costs']['current']
-        else:
+        elif comparison == 'previous':
             assert Decimal(compared['baseline_analysis']['groups']['unassigned']['kwh']) == 3
             assert Decimal(group['delta_kwh']) == 0
             assert compared['groups']['reconciles_household_delta']
-        assert group['delta_fixed_cost'] is None
+        if comparison == 'previous':
+            assert group['delta_fixed_cost'] is None
     # Same authenticated household session and cached request after admin change.
     await storage.async_save_feature_access({'schema': 1, 'features': {
         'energy_analysis': {'read': {'mode': 'admin'}}}}, expected_revision=0)
