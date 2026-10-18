@@ -81,6 +81,50 @@ class AnalysisGroupBaselineTest(unittest.IsolatedAsyncioTestCase):
             # still needs hourly group evidence and must not be called complete.
             self.assertEqual('group_common_measurements_required', groups['areas']['office']['reason'])
 
+    async def test_historical_comparison_cost_matches_both_actual_period_bills(self):
+        h = self.harness()
+        old = fixtures.version(rate=.4, version_id='old', monthly=31)
+        new = fixtures.version(start='2026-10-10', rate=.5, version_id='new', monthly=31)
+        old['profile']['zones'][0]['variableRate'] = .1
+        new['profile']['zones'][0]['variableRate'] = .2
+        h.book = fixtures.book([old, new])
+        with h.patches():
+            result = await h.subject.async_get_analysis('day', 'user', anchor='2026-10-10', comparison='previous')
+            compared = result['comparisons']['previous']; costs = compared['costs']
+            self.assertEqual('201.60', costs['current']['usage_cost'])
+            self.assertEqual('120.00', costs['baseline']['usage_cost'])
+            self.assertEqual('81.60', costs['delta_cost'])
+            self.assertEqual(result['totals']['usage_cost'], costs['current']['usage_cost'])
+            self.assertEqual(compared['baseline_analysis']['totals']['usage_cost'], costs['baseline']['usage_cost'])
+            self.assertEqual('1.00', costs['current']['fixed_cost'])
+            self.assertEqual('43.20', compared['groups']['areas']['office']['delta_usage_cost'])
+
+    async def test_partial_cost_uses_same_common_hours_and_keeps_period_fees_separate(self):
+        h = self.harness(); original = h.usage
+        old = fixtures.version(rate=.4, version_id='old', monthly=31)
+        new = fixtures.version(start='2026-10-10', rate=.5, version_id='new', monthly=31)
+        old['profile']['zones'][0]['variableRate'] = .1
+        new['profile']['zones'][0]['variableRate'] = .2
+        h.book = fixtures.book([old, new])
+        async def usage(*args, **kwargs):
+            snapshot = await original(*args, **kwargs)
+            if args[1][0]['entity_id'] == 'sensor.grid' and args[2].day == 10:
+                snapshot['source_buckets']['sensor.grid'][0]['kwh'] = None
+            return snapshot
+        h.usage = usage
+        with h.patches():
+            result = await h.subject.async_get_analysis('day', 'user', anchor='2026-10-10', comparison='previous')
+            compared = result['comparisons']['previous']; costs = compared['costs']
+            self.assertEqual((276, 230), (compared['current_kwh'], compared['baseline_kwh']))
+            self.assertEqual('193.20', costs['current']['usage_cost'])
+            self.assertEqual('115.00', costs['baseline']['usage_cost'])
+            self.assertEqual('78.20', costs['delta_cost'])
+            self.assertEqual('1.00', costs['current']['fixed_cost'])
+            self.assertIsNone(costs['current']['total_cost'])
+            self.assertIsNone(costs['current']['effective_price'])
+            self.assertIsNone(result['totals']['total_cost'])
+            self.assertEqual(23*3600, costs['baseline']['priced_source_seconds']['usage_cost'])
+
 
 class GroupComparisonRobustnessTest(unittest.TestCase):
     def groups(self, kwh, *, currency='PLN', basis='gross', domain='grid_import', revision=2):
