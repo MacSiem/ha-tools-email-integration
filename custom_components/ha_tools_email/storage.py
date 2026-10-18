@@ -47,6 +47,10 @@ class TariffRevisionConflict(ValueError):
     """The caller must reload settings before making a new explicit save."""
 
 
+class FeatureAccessRevisionConflict(ValueError):
+    """The administrator must reload the current policy before saving."""
+
+
 class StorageWriteError(RuntimeError):
     """A logical state save returned without a confirmed lower Store write."""
 
@@ -104,6 +108,9 @@ def _default_state() -> dict[str, Any]:
         "tariff_book": None,
         "tariff_revision": 0,
         "tariff_updated_at": None,
+        "feature_access": None,
+        "feature_access_revision": 0,
+        "feature_access_updated_at": None,
         "schedules": [],
         "digest_state": {},
         "scheduler_state": {},
@@ -154,6 +161,58 @@ class EmailStorage:
             return None
         revision = self._data.get('tariff_revision', 0)
         return revision if type(revision) is int and revision >= 0 else 0
+
+    @property
+    def current_feature_access_revision(self) -> int | None:
+        """Confirmed policy publication token; independent of tariff edits."""
+        if self._data is None:
+            return None
+        revision = self._data.get('feature_access_revision', 0)
+        return revision if type(revision) is int and revision >= 0 else 0
+
+    @staticmethod
+    def _feature_access_state(data):
+        from .feature_access import default_feature_access, validate_feature_access
+        raw = data.get('feature_access')
+        try:
+            policy = default_feature_access() if raw is None else validate_feature_access(raw)
+            status = 'ready'
+        except ValueError:
+            policy, status = {'schema': 0}, 'invalid_configuration'
+        revision = data.get('feature_access_revision', 0)
+        revision = revision if type(revision) is int and revision >= 0 else 0
+        stamp = data.get('feature_access_updated_at')
+        return {'policy': policy, 'revision': revision, 'status': status,
+                'updated_at': stamp if isinstance(stamp, str) and len(stamp) <= 64 else None}
+
+    async def async_get_feature_access(self):
+        """Read a detached policy without SMTP migration or an Energy dependency."""
+        async with self._lock:
+            return self._feature_access_state(await self._async_tariff_data_locked())
+
+    async def async_save_feature_access(self, policy, *, expected_revision, before_save=None):
+        """Optimistic confirmed save; API supplies a fresh admin/lifecycle guard.
+
+        The callback runs under the Store lock and must not read Store again.
+        A missing stored policy retains legacy roles. Invalid persisted policy is
+        never silently replaced; an administrator can explicitly repair it.
+        """
+        from .feature_access import validate_feature_access
+        if type(expected_revision) is not int or expected_revision < 0:
+            raise ValueError('invalid_feature_access_revision')
+        clean = validate_feature_access(policy)
+        async with self._lock:
+            data = await self._async_tariff_data_locked()
+            if self.current_feature_access_revision != expected_revision:
+                raise FeatureAccessRevisionConflict('feature_access_revision_conflict')
+            if before_save is not None and await before_save() is not True:
+                raise PermissionError('unauthorized')
+            candidate = deepcopy(data)
+            candidate.update(feature_access=clean, feature_access_revision=expected_revision + 1,
+                             feature_access_updated_at=_now_iso())
+            await self._store.async_save_confirmed(candidate)
+            self._data = candidate
+            return self._feature_access_state(candidate)
 
     async def async_get_tariff(self) -> dict[str, Any]:
         """Authenticated household settings read; never migrates or reads SMTP files."""
