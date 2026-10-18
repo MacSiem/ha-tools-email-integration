@@ -95,6 +95,26 @@ class AnalysisComparisonsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], errors)
         self.assertEqual([('day', 'synthetic', {'anchor': '2026-10-10', 'comparison': 'previous'})], received)
 
+    async def test_stable_unsupported_source_keeps_current_analysis_and_unknown_comparison(self):
+        h = self.harness(); original = h.usage
+        h.manager.data['energy_sources'].append({'type': 'grid', 'stat_energy_from': 'sensor.missing'})
+        h.metadata['sensor.missing'] = None
+        async def usage(*args, **kwargs):
+            snapshot = await original(*args, **kwargs)
+            if 'sensor.missing' in snapshot['source_ids']:
+                snapshot['measurement_provenance'].pop('sensor.missing')
+                for row in snapshot['source_buckets']['sensor.missing']: row['kwh'] = None
+            return snapshot
+        h.usage = usage
+        with h.patches():
+            plain = await h.subject.async_get_analysis('day', 'user', anchor='2026-10-10')
+            result = await h.subject.async_get_analysis('day', 'user', anchor='2026-10-10', comparison='previous')
+            self.assertEqual(plain['totals'], result['totals'])
+            self.assertEqual(.5, result['coverage']['ratio'])
+            self.assertEqual('unknown', result['comparisons']['previous']['status'])
+            self.assertIsNone(result['comparisons']['previous']['delta_kwh'])
+            self.assertTrue(await h.subject.async_validate_result(result, 'user'))
+
 
 class WeeklyYearAgoTest(unittest.TestCase):
     def test_same_iso_week_crosses_gregorian_year_and_preserves_partial_cutoff(self):

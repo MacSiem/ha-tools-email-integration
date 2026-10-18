@@ -53,7 +53,7 @@ class AnalysisChartBinsTest(unittest.TestCase):
         result = self.build('2026-01-01T00:00Z', '2026-01-03T00:00Z', 'month',
                             zone='UTC', missing=(4,), value=0)
         first, second = result['chart']['bins']
-        self.assertIsNone(first['kwh']); self.assertEqual('0', first['recorded_kwh'])
+        self.assertIsNone(first['kwh']); self.assertEqual(Decimal(0), Decimal(first['recorded_kwh']))
         self.assertEqual(23*3600, first['measured_seconds'])
         self.assertEqual(24*3600, first['expected_seconds'])
         self.assertFalse(first['complete']); self.assertTrue(second['complete'])

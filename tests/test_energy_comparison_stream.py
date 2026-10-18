@@ -94,7 +94,7 @@ class ComparisonStreamTest(unittest.TestCase):
         baseline = ('2025-12-31T00:00Z', '2025-12-31T01:00Z')
         model = self.model(current, baseline)
         snapshot = readings(*current, sources=('sensor.a',))
-        bad = copy.deepcopy(snapshot); bad['measurement_provenance']['sensor.a']['unit'] = 'Wh'
+        bad = copy.deepcopy(snapshot); bad['source_buckets']['sensor.a'] = 'invalid_intervals'
         with self.assertRaises(ValueError): model.push('current', bad, *current)
         self.assertEqual('current', model.needs_side())
         model.push('current', snapshot, *current)
@@ -128,3 +128,24 @@ class ComparisonStreamTest(unittest.TestCase):
         self.assertLessEqual(model.peak_retained_cells, 2*168*512)
         self.assertGreater(model.peak_retained_cells, 168*512)
         self.assertEqual(0, model.retained_cells)
+
+    def test_two_hour_rollback_uses_actual_twenty_six_hours_and_partial_common_frames(self):
+        current = ('2026-10-24T22:00Z', '2026-10-26T00:00Z')
+        baseline = ('2026-10-23T22:00Z', '2026-10-24T22:00Z')
+        for split in (1, 2, 3, 24, 168):
+            with self.subTest(split=split):
+                result, _, _ = self.run_pair(current, baseline, zone='Antarctica/Troll', split=split)
+                self.assertEqual((26, 24), (result['current_kwh'], result['baseline_kwh']))
+                self.assertEqual('calendar_totals', result['comparison_scope'])
+                result, _, _ = self.run_pair(current, baseline, zone='Antarctica/Troll', split=split,
+                                           missing={'current': [('sensor.a', 15)]})
+                # Common23/26 <90%, despite own25/26 and baseline24/24.
+                self.assertEqual('unknown', result['status'])
+                self.assertEqual(23/26, result['coverage']['common_current'])
+
+    def test_month_chunks_keep_whole_period_origin_for_partial_intersection(self):
+        result, _, _ = self.run_pair(('2026-01-01T00:00Z', '2026-02-01T00:00Z'),
+            ('2026-04-01T00:00Z', '2026-05-01T00:00Z'), kind='monthly', split=73,
+            missing={'current': [('sensor.a', 8*24)], 'baseline': [('sensor.a', 9*24)]})
+        self.assertEqual('ready', result['status'])
+        self.assertEqual((718, 718), (result['current_kwh'], result['baseline_kwh']))
