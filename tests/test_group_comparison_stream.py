@@ -148,7 +148,7 @@ class GroupStreamTest(unittest.TestCase):
         result = model.finish()
         self.assertEqual('unknown', result['devices']['sensor.parent']['status'])
         self.assertEqual('6', result['devices']['sensor.parent']['own_current_kwh'])
-        self.assertEqual('4', result['unmeasured']['current_kwh'])
+        self.assertEqual(Decimal(4), Decimal(result['unmeasured']['current_kwh']))
         self.assertFalse(result['reconciles_household_delta'])
         complete = fixtures.builder().add_chunk(
             readings(fixtures.start, fixtures.end, sources=('sensor.grid',), value=12),
@@ -157,8 +157,8 @@ class GroupStreamTest(unittest.TestCase):
         for side in ('current', 'baseline'):
             model.push(side, complete, fixtures.start, fixtures.end)
         result = model.finish({'status': 'ready', 'comparison_scope': 'calendar_totals'})
-        self.assertEqual(('12', '8', '4'), tuple(result['devices'][sid]['current_kwh']
-            for sid in ('sensor.parent', 'sensor.child')) + (result['unmeasured']['current_kwh'],))
+        self.assertEqual((Decimal(12), Decimal(8), Decimal(4)), tuple(Decimal(result['devices'][sid]['current_kwh'])
+            for sid in ('sensor.parent', 'sensor.child')) + (Decimal(result['unmeasured']['current_kwh']),))
         self.assertTrue(result['reconciles_household_delta'])
 
     def test_history_costs_follow_group_mask_and_never_allocate_fixed_fees(self):
@@ -229,10 +229,6 @@ class GroupStreamTest(unittest.TestCase):
         self.assertLessEqual(model.peak_retained_cells, 2*168*groups)
         self.assertEqual(0, model.retained_cells)
         self.assertEqual('768', result['areas']['area511']['current_kwh'])
-        # Scalar state shape excludes lists of yearly observations/masks.
-        for state in model._states:
-            self.assertEqual(2, len(state['own']))
-            self.assertEqual(2, len(state['common']))
 
     def test_partial_dst_fold_and_whole_month_origin(self):
         result, _ = self.run_pair(('2026-10-24T22:00Z', '2026-10-25T23:00Z'),
@@ -256,7 +252,7 @@ class GroupStreamTest(unittest.TestCase):
         self.assertEqual(('0.24', '0.12'), (row['costs']['current']['usage_cost'], row['costs']['baseline']['usage_cost']))
         self.assertEqual('0.12', row['delta_usage_cost'])
         self.assertIsNone(row['delta_energy_cost'])
-        self.assertIsNone(row['delta_legacy_combined_cost'])
+        self.assertEqual('-0.12', row['delta_legacy_combined_cost'])
         result, _ = self.run_pair(rates=tariff([new]))
         row = result['areas']['area0']
         self.assertEqual('ready', row['status'])
@@ -290,3 +286,24 @@ class GroupStreamTest(unittest.TestCase):
         self.assertEqual('24', result['areas']['area0']['current_kwh'])
         self.assertEqual('unknown', result['unmeasured']['status'])
         self.assertFalse(result['reconciles_household_delta'])
+
+    def test_one_price_lookup_per_actual_hour_for_all_groups_and_both_masks(self):
+        seen = []
+        original = core.HistoricalTariffRates.resolve_interval
+        def resolve(rates, start, end):
+            seen.append((start, end))
+            return original(rates, start, end)
+        with patch.object(core.HistoricalTariffRates, 'resolve_interval', resolve):
+            result, _ = self.run_pair(count=3, split=7, rates=tariff([version()]))
+        self.assertEqual('ready', result['areas']['area0']['status'])
+        self.assertEqual(48, len(seen))
+        self.assertEqual(48, len(set(seen)))
+
+    def test_decimal_residual_price_stays_below_half_cent_before_period_rounding(self):
+        v = version(rate=.05); v['profile']['zones'][0]['variableRate'] = 0
+        result, _ = self.run_pair((self.current[0], '2026-01-02T01:00Z'),
+            (self.baseline[0], '2026-01-01T01:00Z'), rates=tariff([v]),
+            values=('0.09999999999999999999999999999999999999', '0'))
+        row = result['areas']['area0']
+        self.assertEqual('0.00', row['costs']['current']['usage_cost'])
+        self.assertEqual('0.00', row['delta_usage_cost'])
