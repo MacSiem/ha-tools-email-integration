@@ -192,7 +192,7 @@ class EnergySnapshotCoordinator:
             metadata = await async_get_energy_metadata(self.hass, [row['entity_id'] for row in sensors])
             self._check_running()
             key = (start, end, tz, _source_signature(sensors, metadata))
-            # Price edits do not query Recorder. Retry incomplete data every five minutes.
+            # Price edits reuse measurement history; normalization metadata is checked independently.
             expired = self._measurement_at is None or (now - self._measurement_at).total_seconds() >= 300
             if key != self._measurement_key or expired:
                 if not aligned:
@@ -246,9 +246,16 @@ class EnergySnapshotCoordinator:
         await self.async_refresh(now=now)
         # Capture the shared measurement/window before awaiting pure CPU work.
         instant = datetime.fromisoformat(self.data['generated_at'])
+        tz, key = self.data['measurement_timezone'], self._measurement_key
         result = await self._async_build_snapshot({'profile': clean, 'revision': None}, self._measurement,
-            now=instant, measurement_timezone=self.data['measurement_timezone'], profile_source='override')
+            now=instant, measurement_timezone=tz, profile_source='override')
         self._check_running()
+        latest = await async_grid_sensors(self.hass)
+        latest_meta = await async_get_energy_metadata(self.hass, [row['entity_id'] for row in latest])
+        self._check_running()
+        if (tz != self.hass.config.time_zone or _source_signature(latest, latest_meta) != key[3]
+                or (now is None and measurement_window(datetime.now(timezone.utc), tz)[:2] != key[:2])):
+            raise RuntimeError('energy_snapshot_changed')
         return result
 
     async def _async_build_snapshot(self, state, measurement, **kwargs):

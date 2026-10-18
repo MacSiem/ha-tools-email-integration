@@ -210,6 +210,28 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(['kWh', 'Wh'], calls)
             self.assertAlmostEqual(a['today']['usage_cost'] / 1000, b['today']['usage_cost'])
 
+    async def test_override_rejects_source_change_during_cpu_work(self):
+        source = ['sensor.a']
+        class Storage:
+            async def async_get_tariff(self):
+                return {'profile': classified(), 'revision': 1}
+        async def provider(hass, start, end):
+            return usage()
+        async def executor(build):
+            result = build()
+            if result['profile_source'] == 'override':
+                source[0] = 'sensor.b'
+            return result
+        hass = types.SimpleNamespace(config=types.SimpleNamespace(time_zone='UTC'),
+                                     async_add_executor_job=executor)
+        c = energy.EnergySnapshotCoordinator(hass, Storage(), provider=provider)
+        async def sensors(hass):
+            return [{'entity_id': source[0]}]
+        with patch.object(energy, 'async_grid_sensors', sensors):
+            with self.assertRaisesRegex(RuntimeError, 'snapshot_changed'):
+                await c.async_snapshot(profile=classified(), now=at('2026-10-18T12:34Z'))
+        self.assertEqual('shared', c.data['profile_source'])
+
     async def test_cpu_snapshot_runs_in_executor_and_unload_rejects_late_answer(self):
         import threading
         entered, release = asyncio.Event(), threading.Event()
