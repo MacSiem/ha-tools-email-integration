@@ -72,7 +72,8 @@ class GroupProjectionTest(unittest.TestCase):
         first, second = projection['hours']
         self.assertIsNone(first['devices']['sensor.parent'])
         self.assertIsNone(first['devices']['sensor.child'])
-        self.assertIsNone(first['unmeasured'])
+        self.assertEqual(Decimal(2), Decimal(first['unmeasured']))
+        self.assertFalse(first['partition_complete'])
         self.assertEqual(Decimal(6), Decimal(second['devices']['sensor.parent']))
 
     def test_site_domain_preserves_room_energy_without_grid_remainder(self):
