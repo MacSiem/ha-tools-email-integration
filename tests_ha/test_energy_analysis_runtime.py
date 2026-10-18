@@ -5,6 +5,9 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
+from aiohttp import WSMsgType
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 from homeassistant.components.energy.data import async_get_manager
 from homeassistant.components.recorder import models
 from homeassistant.components.recorder.statistics import async_add_external_statistics
@@ -200,9 +203,20 @@ async def test_native_dedicated_updates_recheck_initial_active_user(
         hass, hass_storage, recorder_mock, hass_ws_client, hass_read_only_access_token, hass_read_only_user):
     entry, _ = await _setup(hass)
     client = await hass_ws_client(hass, hass_read_only_access_token)
-    await hass.auth.async_update_user(hass_read_only_user, is_active=False)
-    await client.send_json_auto_id({'type': f'{DOMAIN}/subscribe_analysis_updates'})
-    denied = await client.receive_json()
-    assert not denied['success'] and denied['error']['code'] == 'unauthorized'
-    assert not hass.data[DOMAIN]['energy_analysis']._update_subscriptions
-    assert await hass.config_entries.async_unload(entry.entry_id)
+    try:
+        # Keep the connection's earlier active identity while the fresh lookup
+        # returns an inactive user. Core's separate deactivation event is below.
+        inactive = SimpleNamespace(id=hass_read_only_user.id, is_active=False)
+        with patch.object(hass.auth, 'async_get_user', AsyncMock(return_value=inactive)) as lookup:
+            await client.send_json_auto_id({'type': f'{DOMAIN}/subscribe_analysis_updates'})
+            denied = await client.receive_json()
+            assert not denied['success'] and denied['error']['code'] == 'unauthorized'
+            lookup.assert_awaited_once_with(hass_read_only_user.id)
+        assert not hass.data[DOMAIN]['energy_analysis']._update_subscriptions
+        await hass.auth.async_update_user(hass_read_only_user, is_active=False)
+        assert (await client.receive()).type == WSMsgType.CLOSE
+        assert not hass.data[DOMAIN]['energy_analysis']._update_subscriptions
+    finally:
+        await client.close()
+        await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()

@@ -281,6 +281,7 @@ def load_websocket(testcase):
     package.__path__ = [str(ROOT)]
     core = types.ModuleType('homeassistant.core')
     core.HomeAssistant = object
+    core.callback = lambda function: function
     ws = types.ModuleType('homeassistant.components.websocket_api')
     ws.ActiveConnection = object
     ws.websocket_command = lambda schema: lambda fn: fn
