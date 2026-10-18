@@ -115,6 +115,16 @@ class AnalysisComparisonsTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(result['comparisons']['previous']['delta_kwh'])
             self.assertTrue(await h.subject.async_validate_result(result, 'user'))
 
+    async def test_mean_seven_accepts_twenty_six_hour_civil_day(self):
+        h = self.harness(); h.hass.config.time_zone = 'Antarctica/Troll'
+        h.now = datetime(2026, 11, 1, 12, tzinfo=timezone.utc)
+        with h.patches():
+            result = await h.subject.async_get_analysis('day', 'user', anchor='2026-10-25', comparison='mean7')
+            self.assertEqual(26, result['period']['hours'])
+            self.assertEqual('ready', result['comparisons']['mean7']['status'])
+            self.assertEqual((260, 240), tuple(result['comparisons']['mean7'][key]
+                for key in ('current_kwh', 'baseline_kwh')))
+
 
 class WeeklyYearAgoTest(unittest.TestCase):
     def test_same_iso_week_crosses_gregorian_year_and_preserves_partial_cutoff(self):
