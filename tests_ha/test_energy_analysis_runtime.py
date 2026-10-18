@@ -15,12 +15,13 @@ from tests_ha.test_energy_runtime import profile
 pytestmark = pytest.mark.asyncio
 
 
-@pytest.mark.parametrize(('missing_source', 'missing_consumer_hour', 'comparison'), [
-    (False, False, 'previous'), (True, False, 'previous'), (False, True, 'previous'),
-    (False, False, 'mean7')])
+@pytest.mark.parametrize(('missing_source', 'missing_consumer_hour', 'comparison', 'shared_gap'), [
+    (False, False, 'previous', False), (True, False, 'previous', False),
+    (False, True, 'previous', False), (False, False, 'mean7', False),
+    (False, True, 'previous', True)])
 @pytest.mark.freeze_time('2026-10-18T12:30:00+00:00')
 async def test_native_analysis_selected_comparison_chart_and_policy(hass, hass_storage,
-        recorder_mock, freezer, hass_ws_client, hass_read_only_access_token, missing_source, missing_consumer_hour, comparison):
+        recorder_mock, freezer, hass_ws_client, hass_read_only_access_token, missing_source, missing_consumer_hour, comparison, shared_gap):
     await hass.config.async_set_time_zone('UTC')
     manager = await async_get_manager(hass)
     grid = [{'stat_energy_from': 'analysis:grid'}]
@@ -35,7 +36,8 @@ async def test_native_analysis_selected_comparison_chart_and_policy(hass, hass_s
     start = datetime(2026, 10, 11 if comparison == 'mean7' else 17, tzinfo=timezone.utc)
     sample_count = 181 if comparison == 'mean7' else 37
     async_add_external_statistics(hass, metadata,
-        [{'start': start+timedelta(hours=i-1), 'sum': float(i)} for i in range(sample_count)])
+        [{'start': start+timedelta(hours=i-1), 'sum': float(i)} for i in range(sample_count)
+         if not shared_gap or i != 4])
     async_add_external_statistics(hass, {**metadata, 'statistic_id': 'analysis:device', 'name': 'Synthetic device'},
         [{'start': start+timedelta(hours=i-1), 'sum': i*.25} for i in range(sample_count)
          if not missing_consumer_hour or i != 4])
@@ -63,8 +65,11 @@ async def test_native_analysis_selected_comparison_chart_and_policy(hass, hass_s
     else:
         assert Decimal(result['totals']['kwh']) == 12
         assert compared['status'] == 'ready'
-        assert compared['current_kwh'] == compared['baseline_kwh'] == 12
-        assert compared['delta_kwh'] == 0
+        if shared_gap:
+            assert (compared['current_kwh'], compared['baseline_kwh'], compared['delta_kwh']) == (11, 12, -1)
+        else:
+            assert compared['current_kwh'] == compared['baseline_kwh'] == 12
+            assert compared['delta_kwh'] == 0
         assert sum(Decimal(row['kwh']) for row in result['chart']['bins']) == 12
         assert sum(Decimal(row['usage_cost']) for row in result['chart']['bins']) == Decimal(result['totals']['usage_cost'])
         if comparison == 'mean7':
@@ -83,7 +88,10 @@ async def test_native_analysis_selected_comparison_chart_and_policy(hass, hass_s
             assert Decimal(group['baseline_kwh']) == Decimal('3.00')
             assert Decimal(group['delta_kwh']) == Decimal('-.25')
             assert group['coverage']['common_group_seconds'] == 11*3600
-            assert not compared['groups']['reconciles_household_delta']
+            assert compared['groups']['reconciles_household_delta'] is shared_gap
+            assert compared['groups']['reconciles_household_cost_delta'] is shared_gap
+            if shared_gap:
+                assert Decimal(group['delta_usage_cost']) + Decimal(compared['groups']['unmeasured']['delta_usage_cost']) == Decimal(compared['costs']['delta_cost'])
             assert 'fixed_cost' not in group['costs']['current']
         elif comparison == 'previous':
             assert Decimal(compared['baseline_analysis']['groups']['unassigned']['kwh']) == 3
