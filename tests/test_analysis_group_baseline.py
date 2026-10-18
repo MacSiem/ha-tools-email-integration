@@ -173,6 +173,25 @@ class AnalysisGroupBaselineTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(room['delta_usage_cost'])
             self.assertFalse(compared['groups']['reconciles_household_delta'])
 
+    async def test_service_proves_energy_partition_only_for_actual_shared_missing_hours(self):
+        h = self.harness(); original = h.usage
+        async def usage(*args, **kwargs):
+            snapshot = await original(*args, **kwargs)
+            for rows in snapshot['source_buckets'].values(): rows[0]['kwh'] = None
+            return snapshot
+        h.usage = usage
+        with h.patches():
+            result = await h.subject.async_get_analysis('day', 'user', anchor='2026-10-10', comparison='previous')
+            compared = result['comparisons']['previous']; groups = compared['groups']
+            self.assertEqual('common_measurements', compared['comparison_scope'])
+            self.assertTrue(groups['reconciles_household_delta'])
+            self.assertEqual(Decimal(46), Decimal(groups['areas']['office']['delta_kwh']))
+            self.assertEqual(Decimal(compared['delta_kwh']),
+                Decimal(groups['areas']['office']['delta_kwh']) + Decimal(groups['unassigned']['delta_kwh'])
+                + Decimal(groups['unmeasured']['delta_kwh']))
+            self.assertEqual(4, len(h.queries)); self.assertEqual(1, len(h.registry_ids))
+            self.assertTrue(await h.subject.async_validate_result(result, 'user'))
+
 
 class GroupComparisonRobustnessTest(unittest.TestCase):
     def groups(self, kwh, *, currency='PLN', basis='gross', domain='grid_import', revision=2):
