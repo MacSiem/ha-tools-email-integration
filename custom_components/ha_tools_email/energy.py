@@ -255,6 +255,7 @@ class EnergySnapshotCoordinator:
         self._check_running()
         if (tz != self.hass.config.time_zone or _source_signature(latest, latest_meta) != key[3]
                 or (now is None and measurement_window(datetime.now(timezone.utc), tz)[:2] != key[:2])):
+            self._invalidate()
             raise RuntimeError('energy_snapshot_changed')
         return result
 

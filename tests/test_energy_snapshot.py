@@ -230,7 +230,7 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(energy, 'async_grid_sensors', sensors):
             with self.assertRaisesRegex(RuntimeError, 'snapshot_changed'):
                 await c.async_snapshot(profile=classified(), now=at('2026-10-18T12:34Z'))
-        self.assertEqual('shared', c.data['profile_source'])
+        self.assertIsNone(c.data)
 
     async def test_cpu_snapshot_runs_in_executor_and_unload_rejects_late_answer(self):
         import threading
