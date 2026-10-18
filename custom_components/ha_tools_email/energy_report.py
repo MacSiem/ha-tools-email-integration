@@ -6,7 +6,7 @@ meaning of partial/common-measurement values and metadata in exported reports.
 """
 from collections.abc import Mapping
 import csv
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from html import escape
 from io import StringIO
@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 # These are semantic numeric fields, not arbitrary strings that happen to be numbers.
-_NUMBERS = frozenset(('energyRate', 'variableRate', 'effective_price', 'percent',
+_NUMBERS = frozenset(('kwh', 'energyRate', 'variableRate', 'effective_price', 'percent',
     'ratio', 'day_fraction', 'subscription', 'capacity', 'distribution', 'other',
     'legacy_combined', 'legacy_combined_monthly', 'quantum', 'current', 'baseline',
     'common_current', 'common_baseline', 'hours', 'calendar_hours', 'observed_hours',
@@ -125,6 +125,13 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle):
         # or fold as a substitute for converting the actual aware instant.
         return f'{date} {clock} {stamp.strftime("%z")} [{timezone_name}]'
 
+    def calendar_date(value):
+        day = date.fromisoformat(value)
+        months = (('sty','lut','mar','kwi','maj','cze','lip','sie','wrz','paź','lis','gru')
+                  if pl else ('Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'))
+        return (f'{day.day} {months[day.month-1]} {day.year}' if pl
+                else f'{months[day.month-1]} {day.day}, {day.year}')
+
     def display(value, key, path):
         if value is None:
             return unknown, False
@@ -134,6 +141,9 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle):
                 or key in ('from', 'to') and any(part in path for part in ('bins', 'buckets', 'dynamic'))
                 and (isinstance(value, (int, float, Decimal)) or isinstance(value, str) and 'T' in value)):
             return instant(value), False
+        if (isinstance(value, str) and len(value) == 10
+                and (key in ('valid_from', 'valid_to', 'validFrom', 'validTo', 'day') or 'dates' in path)):
+            return calendar_date(value), False
         numeric = (isinstance(value, (int, float, Decimal)) or key in _NUMBERS
                    or key.endswith(('_cost', '_kwh', '_seconds')))
         if numeric:
@@ -197,10 +207,12 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle):
             unit = ''
             if key.endswith('kwh'):
                 unit = 'kWh'
-            elif key.endswith('_cost') or key in ('energyRate', 'variableRate', 'effective_price'):
+            elif key.endswith('_cost') or key in ('energyRate', 'variableRate', 'effective_price', 'legacy_combined_monthly'):
                 unit = currency or unknown
                 if key in ('energyRate', 'variableRate', 'effective_price'):
                     unit += '/kWh'
+                elif key == 'legacy_combined_monthly':
+                    unit += '/miesiąc' if pl else '/month'
             elif any(part in path for part in ('fixed_monthly', 'components', 'known_components')) and key in _NUMBERS:
                 unit = currency or unknown
                 if 'fixed_monthly' in path:
@@ -243,8 +255,8 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle):
                           + ('Jednostka' if pl else 'Unit') + '</th></tr>')
         text_parts.append('\n' + title)
         for path, caption, value, unit, numeric in rows:
-            text_parts.append(f'{caption} [{path}]: {value}' + (f' {unit}' if unit else ''))
-            html_parts.append('<tr><td>' + escape(caption + ' [' + path + ']') + '</td><td>'
+            text_parts.append(f'{caption}: {value}' + (f' {unit}' if unit else ''))
+            html_parts.append('<tr><td>' + escape(caption) + '</td><td>'
                               + escape(value) + '</td><td>' + escape(unit) + '</td></tr>')
             writer.writerow((csv_text(snapshot_id), csv_text(title), csv_text(path), csv_text(caption),
                              value if numeric else csv_text(value), csv_text(unit)))
