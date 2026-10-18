@@ -68,12 +68,21 @@ def _public_period(period):
     return result
 
 
+def _public_clock(clock):
+    return {'mode': 'fixed', 'offsetMinutes': clock['offsetMinutes']} if clock['mode'] == 'fixed' else {'mode': 'civil'}
+
+
 def _public_rate_profile(profile):
     result = _pick(profile, ('schema', 'currency', 'timezone', 'priceBasis', 'energyUnit',
-                             'allowNegativeEnergy', 'defaultZone', 'validFrom', 'validTo'))
-    result['clock'] = _pick(profile['clock'], ('mode', 'offsetMinutes'))
-    result['zones'] = [_pick(zone, ('id', 'label', 'energyRate', 'variableRate', 'classification'))
-                       for zone in profile['zones']]
+                             'defaultZone', 'validFrom', 'validTo'))
+    if 'allowNegativeEnergy' in profile:
+        result['allowNegativeEnergy'] = profile['allowNegativeEnergy'] is True
+    result['clock'] = _public_clock(profile['clock'])
+    result['zones'] = []
+    for zone in profile['zones']:
+        clean = _pick(zone, ('id', 'energyRate', 'variableRate', 'classification'))
+        clean['label'] = zone['label'] if isinstance(zone.get('label'), str) else zone['id']
+        result['zones'].append(clean)
     for kind in ('rules', 'exceptions'):
         if kind not in profile:
             continue
@@ -104,7 +113,7 @@ def _public_rates(rates):
         clean = _pick(rate, ('version_id', 'valid_from', 'valid_to', 'validity_clock',
                              'rate_semantics', 'currency', 'price_basis', 'fixed_monthly',
                              'legacy_combined_monthly'))
-        clean['clock'] = _pick(rate['clock'], ('mode', 'offsetMinutes'))
+        clean['clock'] = _public_clock(rate['clock'])
         clean['profile'] = _public_rate_profile(rate['profile'])
         provenance = rate.get('provenance')
         clean['provenance'] = provenance if isinstance(provenance, str) and len(provenance) <= 256 else None
