@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from math import isfinite
 from functools import partial
@@ -219,6 +220,8 @@ class EnergySnapshotCoordinator:
         self._cpu_lane = bucket.setdefault('energy_cpu_lane', {'lock': asyncio.Lock(), 'pending': 0})
         self._cpu_lock = self._cpu_lane['lock']
         self._pricing_pending = 0
+        self._snapshot_pending = 0
+        self._tick_running = False
         self._measurement = None
         self._measurement_key = None
         self._measurement_at = None
@@ -237,7 +240,17 @@ class EnergySnapshotCoordinator:
         if self._stopped:
             return False
         if result.get('profile_source') == 'shared':
-            return self.storage.current_tariff_revision == result.get('tariff_revision')
+            if self.storage.current_tariff_revision != result.get('tariff_revision'):
+                return False
+        # Historical price queries have no household measurement calendar.
+        if 'today' in result:
+            tz = self.hass.config.time_zone
+            if tz != result.get('measurement_timezone'):
+                return False
+            start, end, _ = measurement_window(datetime.now(timezone.utc), tz)
+            if (result['today'].get('from') != start.isoformat()
+                    or result['today'].get('to') != end.isoformat()):
+                return False
         return True
 
     async def async_price_queries(self, queries, *, profile=_OVERRIDE_UNSET):
@@ -280,11 +293,16 @@ class EnergySnapshotCoordinator:
         self._schedule_boundary(datetime.now(timezone.utc))
 
     async def _async_tick(self, now):
+        if self._tick_running or self._stopped:
+            return
+        self._tick_running = True
         try:
             await self.async_refresh()
         except Exception:
             # The background reader cannot leave old monetary values available.
             self._invalidate()
+        finally:
+            self._tick_running = False
 
     def _invalidate(self):
         self.data = None
@@ -316,7 +334,22 @@ class EnergySnapshotCoordinator:
         self.data = None
         self._measurement = None
 
+    @contextmanager
+    def _snapshot_admission(self):
+        self._check_running()
+        if self._snapshot_pending >= MAX_PENDING_CPU_JOBS:
+            raise RuntimeError('energy_pricing_busy')
+        self._snapshot_pending += 1
+        try:
+            yield
+        finally:
+            self._snapshot_pending -= 1
+
     async def async_refresh(self, *, now=None):
+        with self._snapshot_admission():
+            return await self._async_refresh(now=now)
+
+    async def _async_refresh(self, *, now=None):
         async with self._lock:
             self._check_running()
             real_time = now is None
@@ -376,10 +409,14 @@ class EnergySnapshotCoordinator:
             return deepcopy(self.data)
 
     async def async_snapshot(self, *, profile=_OVERRIDE_UNSET, now=None):
+        with self._snapshot_admission():
+            return await self._async_snapshot(profile=profile, now=now)
+
+    async def _async_snapshot(self, *, profile=_OVERRIDE_UNSET, now=None):
         if profile is _OVERRIDE_UNSET:
-            return await self.async_refresh(now=now)
+            return await self._async_refresh(now=now)
         clean = validate_tariff_profile(profile)
-        await self.async_refresh(now=now)
+        await self._async_refresh(now=now)
         # Capture the shared measurement/window before awaiting pure CPU work.
         instant = datetime.fromisoformat(self.data['generated_at'])
         tz, key = self.data['measurement_timezone'], self._measurement_key

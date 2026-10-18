@@ -228,6 +228,13 @@ class EnergyTariff:
                         self._fail(f'{path}.intervals.{j}', 'invalid_interval')
                     else:
                         intervals.append((start, end))
+            # Compile membership away from checkpoint scans without changing
+            # the JSON profile. Invalid fields must retain validation errors,
+            # never raise TypeError while trying to hash malformed input.
+            if isinstance(dates, list) and all(isinstance(day, str) for day in dates):
+                dates = frozenset(dates)
+            if isinstance(weekdays, list) and all(_integer(day) for day in weekdays):
+                weekdays = frozenset(weekdays)
             result.append(dict(zone=zone, priority=priority, weekdays=weekdays, dates=dates, season=season, intervals=intervals))
         return result
 
