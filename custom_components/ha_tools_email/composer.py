@@ -973,12 +973,7 @@ def _compare_energy_snapshots(current, previous, comparison):
     prior_provenance = previous.get("measurement_provenance")
     if (not isinstance(provenance, dict) or not isinstance(prior_provenance, dict)
             or set(provenance) != ids or set(prior_provenance) != ids
-            or any(not isinstance(provenance[sid], dict)
-                   or provenance[sid].get("method") != "recorder_hourly_change_v1"
-                   or provenance[sid].get("unit") != "kWh"
-                   or provenance[sid].get("source_unit") not in {"Wh", "kWh", "MWh"}
-                   or provenance[sid].get("has_sum") is not True
-                   or provenance[sid].get("unit_class") not in {None, "energy"} for sid in ids)
+            or any(not valid_provenance(provenance[sid]) for sid in ids)
             or provenance != prior_provenance):
         return {**result, "reason": "measurement_provenance_unavailable_or_changed"}
     delta = current_kwh - previous_kwh
