@@ -5,7 +5,7 @@ sums/counts; callers own measurement masks and must supply validated rates.
 """
 from dataclasses import dataclass
 from decimal import Decimal, localcontext
-from math import fsum
+from math import fsum, isfinite
 from types import MappingProxyType
 
 from .energy_measurements import calendar_grid, _instant
@@ -88,13 +88,43 @@ def add_usage_cost(state, stamp, values, rates, *, _calculate=calculate_energy_a
         raise ValueError('validated_historical_rates_required')
     if not values:
         return
+    rate = rates.resolve_interval(stamp, stamp + 3600000)
+    _add_usage_cost_rate(state, values, rate, _calculate)
+
+
+@dataclass(frozen=True, slots=True, init=False, eq=False)
+class UsageCostHour:
+    """One validated actual UTC hour, reusable across all projected groups.
+
+    Keep only scalar pricing fields. This is a constructor proof from a real
+    validated resolver, never a caller-supplied flag or rate dictionary.
+    """
+    stamp: int
+    _rate: object
+
+    def __init__(self, stamp, rates):
+        if type(rates) is not HistoricalTariffRates:
+            raise ValueError('validated_historical_rates_required')
+        if type(stamp) not in (int, float) or not isfinite(stamp) or stamp % 3600000:
+            raise ValueError('invalid_usage_hour')
+        rate = rates.resolve_interval(stamp, stamp + 3600000)
+        keys = ('available', 'reason', 'currency', 'price_basis', 'rate_semantics',
+                'energy_rate', 'variable_rate')
+        object.__setattr__(self, 'stamp', int(stamp))
+        object.__setattr__(self, '_rate', MappingProxyType({key: rate[key] for key in keys if key in rate}))
+
+    def add(self, state, values):
+        if values:
+            _add_usage_cost_rate(state, values, self._rate, calculate_energy_amounts)
+
+
+def _add_usage_cost_rate(state, values, rate, calculate):
     seconds = len(values) * 3600
     state['seconds'] += seconds
     quantity = fsum(values)
     with localcontext() as context:
         context.prec = 40
         state['kwh'] += Decimal(str(quantity))
-    rate = rates.resolve_interval(stamp, stamp + 3600000)
     if 'currency' in rate:
         state['identities'].add((rate['currency'], rate['price_basis']))
     if not rate['available']:
@@ -102,7 +132,7 @@ def add_usage_cost(state, stamp, values, rates, *, _calculate=calculate_energy_a
         return
     state['semantics'].add(rate['rate_semantics'])
     try:
-        amounts = _calculate(quantity, rate['energy_rate'], rate['variable_rate'], rate['rate_semantics'])
+        amounts = calculate(quantity, rate['energy_rate'], rate['variable_rate'], rate['rate_semantics'])
     except ValueError:
         state['issues'].add('unrepresentable_usage_amount')
         return
