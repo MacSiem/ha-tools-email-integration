@@ -45,6 +45,8 @@ class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
                 self.stopped = True
         async def ensure(hass):
             pass
+        async def reload_schedules(hass):
+            events.append(('scheduler_reloaded', {}))
         storage = object()
         async def get_storage(hass):
             return storage
@@ -59,7 +61,8 @@ class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
                                                  async_unload_platforms=unload_platforms))
         namespace = {'__package__': 'lifecycle_fixture', 'HomeAssistant': object, 'ConfigEntry': object,
                      'DOMAIN': 'ha_tools_email', '_async_ensure_setup': ensure,
-                     '_async_get_storage': get_storage, 'async_stop_scheduler': lambda hass: None}
+                     '_async_get_storage': get_storage, 'async_stop_scheduler': lambda hass: None,
+                     'async_reload_schedules': reload_schedules}
         tree = ast.parse((ROOT / '__init__.py').read_text())
         functions = [node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)
                      and node.name in ('async_setup_entry', 'async_unload_entry')]
@@ -79,6 +82,8 @@ class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
             service = bucket['energy_analysis']; registry = bucket['energy_membership']
             self.assertIs(service.registry, registry)
             self.assertTrue(registry.active)
+            self.assertEqual([('scheduler_reloaded', {})], events)
+            events.clear()
             registry.on_change(7)
             self.assertEqual([('ha_tools_email_energy_analysis_updated', {'registry_revision': 7})], events)
             self.assertTrue(await ns['async_unload_entry'](hass, entry))

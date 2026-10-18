@@ -11,12 +11,12 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 from email import policy
 from email.parser import BytesParser
-import test_send_semantics as transport
+from tests import test_send_semantics as transport
 
 try:
-    from tests.test_schedule_timezone_v3 import load_websocket, store
+    from tests.test_schedule_timezone_v3 import load_websocket, store, authorized_report_harness
 except ImportError:
-    from test_schedule_timezone_v3 import load_websocket, store
+    from test_schedule_timezone_v3 import load_websocket, store, authorized_report_harness
 
 UTC = timezone.utc
 NOW = datetime(2026, 10, 15, 12, 37, 14, tzinfo=UTC)
@@ -56,23 +56,26 @@ class MailPreviewManualTests(unittest.IsolatedAsyncioTestCase):
         async def executor(fn, *args):
             return fn(*args)
 
-        hass = SimpleNamespace(config=SimpleNamespace(time_zone='Europe/Warsaw', currency='PLN',
-            external_url=None, internal_url=None), states=SimpleNamespace(get=lambda key: None),
-            async_add_executor_job=executor, data={'ha_tools_email': {
-                'storage': storage, 'send_email': forbidden, 'load_config': forbidden},
-                'system_log': SimpleNamespace(records=[row('inside', NOW - timedelta(hours=1))])})
-        self.results, self.errors = [], []
-        conn = SimpleNamespace(user=SimpleNamespace(is_admin=True),
+        self.report_harness = h = authorized_report_harness(self, ws, now=NOW, storage=storage)
+        hass = h.hass
+        hass.config.time_zone = 'Europe/Warsaw'
+        hass.data['ha_tools_email'].update(send_email=forbidden, load_config=forbidden)
+        hass.data['system_log'] = SimpleNamespace(records=[row('inside', NOW - timedelta(hours=1))])
+        self.results, self.errors, self.prepared = [], [], []
+        conn = SimpleNamespace(user=h.user,
             send_result=lambda *a: self.results.append(a), send_error=lambda *a: self.errors.append(a))
-        # Stub only the Recorder boundary; composition, charts and dispatch stay real.
-        async def usage(hass, sensors, start, end, cadence):
-            hourly = [{'from': int(start.timestamp() * 1000), 'to': int(end.timestamp() * 1000), 'kwh': 2.5}]
-            return {'status': 'ready', 'source_ids': ['sensor.fixture_grid'],
-                    'devices': [{'name': 'Grid <fixture>', 'entity_id': 'sensor.fixture_grid', 'kwh': 2.5}],
-                    'hourly_buckets': hourly, 'measurement_provenance': {}}
+        original_prepare = h.subject.async_prepare_report
+        async def prepare(*args, **kwargs):
+            value = await original_prepare(*args, **kwargs)
+            self.prepared.append(copy.deepcopy(value))
+            return value
+        # No old composer.usage stub: actual service/provider/renderer consume
+        # source-bucket Recorder fixtures and reauthorize the actual harness user.
         for context in (patch.object(ws, '_utcnow', lambda: NOW),
                         patch.object(scheduler, 'datetime', FrozenDateTime),
-                        patch.object(composer, 'async_get_energy_usage', usage)):
+                        patch.object(h.subject, 'async_prepare_report', prepare),
+                        patch.object(composer, 'async_get_energy_usage',
+                            side_effect=AssertionError('legacy energy engine must not run'))):
             context.start()
             self.addCleanup(context.stop)
         return ws, composer, scheduler, hass, conn, storage, forbidden, persisted
@@ -93,11 +96,35 @@ class MailPreviewManualTests(unittest.IsolatedAsyncioTestCase):
             raw = smtp.sendmail.call_args.args[2].encode('ascii')
             message = BytesParser(policy=policy.default).parsebytes(raw)
             self.assertEqual('multipart/alternative', message.get_content_type())
+            self.assertEqual('fixture@example.invalid', str(message['To']))
             self.assertEqual([], message.defects)
             self.sent.append(dict(subject=str(message['Subject']),
                 body=message.get_body(preferencelist=('plain',)).get_content(),
                 html=message.get_body(preferencelist=('html',)).get_content()))
         hass.data['ha_tools_email'].update(load_config=config, send_email=send)
+
+    def assert_delivery_parity(self, mail, kind):
+        if kind == 'log_digest':
+            self.assertEqual({key: mail[key] for key in ('subject', 'body', 'html')}, self.sent[-1])
+            return
+        read, execute = self.prepared[-2:]
+        self.assertEqual('report_read', read['context']['access_purpose'])
+        self.assertEqual('report_execute', execute['context']['access_purpose'])
+        self.assertNotEqual(read['snapshot_id'], execute['snapshot_id'])
+        # Purpose-bound identity differs; business facts and bounds do not.
+        self.assertEqual(read['period'], execute['period'])
+        self.assertEqual({k:v for k,v in read['summary'].items() if k != 'snapshot_id'},
+                         {k:v for k,v in execute['summary'].items() if k != 'snapshot_id'})
+        for artifact in (read, execute):
+            identity = artifact['snapshot_id']
+            self.assertEqual(identity, artifact['summary']['snapshot_id'])
+            for field in ('html', 'body', 'csv'):
+                self.assertIn(identity, artifact[field])
+        self.assertEqual({key: read[key] for key in ('snapshot_id', 'subject', 'body', 'html', 'csv')},
+                         {key: mail[key] for key in ('snapshot_id', 'subject', 'body', 'html', 'csv')})
+        self.assertEqual({key: execute[key] for key in ('subject', 'body', 'html')}, self.sent[-1])
+        self.assertIn(execute['snapshot_id'], self.sent[-1]['body'])
+        self.assertIn(execute['snapshot_id'], self.sent[-1]['html'])
 
     async def test_frozen_preview_equals_actual_dispatch_for_two_kinds_three_cadences_and_modes(self):
         ws, composer, scheduler, hass, conn, storage, forbidden, state = self.fixture()
@@ -119,18 +146,25 @@ class MailPreviewManualTests(unittest.IsolatedAsyncioTestCase):
                             self.assertEqual(NOW.isoformat(), mail['generated_at'])
                             self.assertEqual(cadence, mail['cadence'])
                             self.assertIn('<!doctype html>', mail['html'])
-                            self.assertIn('Okres raportu:' if language.startswith('pl') else 'Report period:', mail['html'])
-                            self.assertIn('Wygenerowano przez HA Tools Email' if language.startswith('pl') else 'Generated by HA Tools Email',mail['html'])
+                            if kind == 'energy_report':
+                                self.assertIn('data-section="period"', mail['html'])
+                                self.assertIn('O raporcie' if language.startswith('pl') else 'About this report', mail['html'])
+                                self.assertIn('Okres raportu:' if language.startswith('pl') else 'Report period:', mail['body'])
+                            else:
+                                self.assertIn('Okres raportu:' if language.startswith('pl') else 'Report period:', mail['html'])
+                                self.assertIn('Wygenerowano przez HA Tools Email' if language.startswith('pl') else 'Generated by HA Tools Email',mail['html'])
                             if kind == 'log_digest':
                                 self.assertFalse(mail['source']['complete'])
                                 self.assertEqual('retained_aggregates', mail['source']['count_semantics'])
                                 self.assertIn('not exact events or complete history', mail['html'])
                             self.enable_send(hass)
+                            sent_before = len(self.sent)
                             # Exercise the existing WS -> send_now -> send_report ->
                             # real async_dispatch_attempt -> executor seam.
                             await ws._ws_send_now(hass, conn, dict(id=2, kind=kind, cadence=cadence, period_mode=mode))
                             self.assertEqual([], self.errors)
-                            self.assertEqual({key: mail[key] for key in ('subject', 'body', 'html')}, self.sent[-1])
+                            self.assertEqual(sent_before + 1, len(self.sent))
+                            self.assert_delivery_parity(mail, kind)
                             self.assertEqual('accepted_by_smtp', self.results[-1][1]['status'])
                             if kind == 'log_digest':
                                 self.assertEqual(state['digest_state'], storage._data['digest_state'])

@@ -13,107 +13,110 @@ UTC = timezone.utc
 
 
 class FriendlyEnergyMailDatesTest(unittest.TestCase):
-    def compose(self, start, end, *, language='pl', display='America/Los_Angeles',
-                report='Europe/Warsaw', cadence='weekly', gap=False):
-        inputs = []
-        async def measured(hass, sensors, a, b, cadence):
-            hours = int((b-a).total_seconds()/3600)
-            buckets = [{**r, 'kwh': 0 if i < 24 else 1}
-                       for i, r in enumerate(series(a, hours))]
-            if gap and a == start:
-                buckets[24]['kwh'] = None
-            total = sum(r['kwh'] for r in buckets if r['kwh'] is not None)
-            result = {'status': 'partial' if gap and a == start else 'ready',
-                      'source_ids': ['sensor.grid'], 'hourly_buckets': buckets,
-                      'devices': [{'entity_id': 'sensor.grid', 'name': '2026-10-05', 'kwh': total}],
-                      'measurement_provenance': {'sensor.grid': {
-                          'method': 'recorder_hourly_change_v1', 'unit': 'kWh',
-                          'source_unit': 'kWh', 'unit_class': 'energy', 'has_sum': True}}}
-            inputs.append((result, copy.deepcopy(result)))
-            return result
-        async def sensors(hass):
-            return [{'entity_id': 'sensor.grid', 'name': '2026-10-05'}]
-        hass = SimpleNamespace(data={}, config=SimpleNamespace(
-            language=language, time_zone=display, currency='PLN'))
-        with patch.object(c, 'async_get_energy_usage', measured), patch.object(c, 'async_grid_sensors', sensors):
-            payload = asyncio.run(c.async_build_energy_report_payload(
-                hass, cadence=cadence, now=end, window_start=start, window_end=end,
-                report_timezone=report))
-        self.assertTrue(all(actual == before for actual, before in inputs))
-        expected_model = m.build_energy_chart_model(payload['summary'], inputs[0][1]['hourly_buckets'],
-                                                   timezone_name=report, source_kind='grid')
-        self.assertEqual(expected_model, payload['summary']['visualization'])
+    def compose(self,start,end,*,language='pl',display='America/Los_Angeles',
+                report='Europe/Warsaw',cadence='weekly',gap=False):
+        from tests.helper_composer_schema2 import ComposerFixture,service
+        import importlib
+        scheduler=importlib.import_module(service.__package__+'.scheduler')
+        prior_start,_=scheduler.calendar_report_window({'cadence':cadence,'timezone':report},start)
+        partial=(end-start).total_seconds()<24*3600
+        def points(a,b,ids):
+            rows=[]
+            for i in range(int((b-a).total_seconds()/3600)):
+                at=a+timedelta(hours=i)
+                origin=start if start<=at<end else prior_start
+                if gap and at==start+timedelta(hours=24):continue
+                rows.append({'start':at.timestamp(),'change':0 if at<origin+timedelta(hours=24) else 1})
+            return {'sensor.grid':rows,
+                'sensor.category':[{'start':(a+timedelta(hours=i)).timestamp(),'change':0}
+                    for i in range(int((b-a).total_seconds()/3600))]}
+        fx=ComposerFixture(end,measurement_zone=report if partial else display,
+            language=language,display_zone=display,points=points,
+            rows={'sensor.grid':{},'sensor.category':{}},preferences={
+                'energy_sources':[{'type':'grid','stat_energy_from':'sensor.grid'}],
+                'device_consumption':[{'stat_consumption':'sensor.category','name':'2026-10-05'}]})
+        with fx.patches():
+            payload=asyncio.run(fx.analysis('day')) if partial else asyncio.run(
+                fx.compose(cadence,start=start,end=end,report_zone=report))
+        self.last_fixture=fx
+        self.assertEqual(fx.snapshot['snapshot_id'],payload['snapshot_id'])
         return payload
 
     def test_actual_weekly_mail_keeps_calendar_day_identity_in_report_zone(self):
-        start = datetime(2026, 10, 18, 22, tzinfo=UTC)
-        end = datetime(2026, 10, 25, 23, tzinfo=UTC)
-        summaries = []
-        for language, month in [('pl', 'paź'), ('en', 'Oct')]:
+        from decimal import Decimal
+        from tests.helper_composer_schema2 import csv_facts
+        start=datetime(2026,10,18,22,tzinfo=UTC);end=datetime(2026,10,25,23,tzinfo=UTC)
+        summaries=[]
+        for language in ('pl','en'):
             with self.subTest(language=language):
-                payload = self.compose(start, end, language=language)
-                summaries.append(payload['summary'])
-                rows = chart(payload['summary']['visualization'], 'energy-usage')['rows']
-                self.assertEqual('2026-10-19 (24h; +02:00)', rows[0]['label'])
-                self.assertEqual('2026-10-25 (25h; +02:00 → +01:00)', rows[-1]['label'])
-                self.assertEqual((1792360800000, 1792447200000), (rows[0]['from'], rows[0]['to']))
-                self.assertEqual(25, rows[-1]['hours'])
-                self.assertEqual('2026-10-18T22:00:00+00:00', payload['summary']['period']['start'])
-                self.assertEqual({
-                    'current_start': '2026-10-18T22:00:00+00:00',
-                    'current_end': '2026-10-25T23:00:00+00:00',
-                    'previous_start': '2026-10-11T22:00:00+00:00',
-                    'previous_end': '2026-10-18T22:00:00+00:00',
-                    'current_local_start': '2026-10-19T00:00:00+02:00',
-                    'current_local_end': '2026-10-26T00:00:00+01:00'},
-                    {key: payload['summary']['comparison'][key] for key in (
-                        'current_start', 'current_end', 'previous_start', 'previous_end',
-                        'current_local_start', 'current_local_end')})
-                for field in ('body', 'html'):
-                    body = unescape(payload[field])
-                    # Calendar row keeps the measured Warsaw day, not the preceding LA day.
-                    self.assertIn(f'19 {month} 2026, 00:00 CEST (+0200) → 20 {month} 2026, 00:00 CEST (+0200)', body)
-                    self.assertIn(f'25 {month} 2026, 00:00 CEST (+0200) → 26 {month} 2026, 00:00 CET (+0100)', body)
-                    self.assertIn('(25h; Europe/Warsaw)', body)
-                    # Absolute comparison bounds use HA presentation zone.
-                    self.assertIn(f'Current: [18 {month} 2026, 15:00 PDT (-0700) → 25 {month} 2026, 16:00 PDT (-0700)', body)
-                    self.assertIn(f'Previous: [11 {month} 2026, 15:00 PDT (-0700)', body)
-                    self.assertIn('America/Los_Angeles', body)
-                    self.assertNotIn('2026-10-19 (24h;', body)
-                    self.assertNotIn('Current: [2026-', body)
-                    self.assertIn('unequal month or DST lengths are not normalized', body)
-                    self.assertIn('historical configuration is not reconstructed', body)
-        self.assertEqual(summaries[0], summaries[1])
+                payload=self.compose(start,end,language=language)
+                snapshot=self.last_fixture.snapshot;summaries.append(snapshot)
+                rows=snapshot['chart']['bins']
+                self.assertEqual('Europe/Warsaw',snapshot['chart']['timezone'])
+                self.assertEqual('2026-10-19T00:00:00+02:00',rows[0]['local_start'])
+                self.assertEqual('2026-10-25T00:00:00+02:00',rows[-1]['local_start'])
+                self.assertEqual('2026-10-26T00:00:00+01:00',rows[-1]['local_end'])
+                self.assertEqual((1792360800000,1792447200000),(rows[0]['from'],rows[0]['to']))
+                self.assertEqual(25*3600,rows[-1]['expected_seconds'])
+                self.assertEqual('2026-10-18T22:00:00+00:00',snapshot['period']['start'])
+                authoritative=snapshot['comparisons']['previous']
+                self.assertEqual(169,snapshot['period']['hours'])
+                self.assertEqual(168,authoritative['baseline_periods'][0]['hours'])
+                self.assertEqual((145,144,1),(authoritative['current_kwh'],authoritative['baseline_kwh'],authoritative['delta_kwh']))
+                comparison=payload['summary']['comparison'] # report70 structural aliases.
+                self.assertEqual('2026-10-11T22:00:00+00:00',comparison['previous_start'])
+                self.assertEqual('2026-10-18T22:00:00+00:00',comparison['previous_end'])
+                facts=csv_facts(payload)
+                self.assertEqual(Decimal('25'),Decimal(str(rows[-1]['kwh'])))
+                expected=('18 paź 2026 15:00:00 -0700' if language=='pl' else 'Oct 18, 2026 15:00:00 -0700')
+                for field in ('body','html'):
+                    body=unescape(payload[field])
+                    self.assertIn(expected,body)
+                    self.assertIn('America/Los_Angeles',body)
+                    self.assertNotIn('2026-10-19 (24h;',body)
+                self.assertEqual(expected+' [America/Los_Angeles]',facts['period.start'])
+        for key in ('period','coverage','totals','chart'):
+            self.assertEqual(summaries[0][key],summaries[1][key])
+        for key in ('status','current_kwh','baseline_kwh','delta_kwh','percent','comparison_scope','baseline_periods'):
+            self.assertEqual(summaries[0]['comparisons']['previous'][key],
+                             summaries[1]['comparisons']['previous'][key])
 
     def test_actual_hourly_mail_retains_both_dst_fold_offsets_and_epochs(self):
-        start = datetime(2026, 10, 25, tzinfo=UTC)
-        end = start + timedelta(hours=3)
-        for language, month in [('pl', 'paź'), ('en', 'Oct')]:
+        from tests.helper_composer_schema2 import csv_facts
+        start=datetime(2026,10,25,tzinfo=UTC);end=start+timedelta(hours=3)
+        for language in ('pl','en'):
             with self.subTest(language=language):
-                payload = self.compose(start, end, language=language, display='Europe/Warsaw', report='UTC', cadence='daily')
-                rows = chart(payload['summary']['visualization'], 'energy-usage')['rows']
-                self.assertEqual([1792886400000, 1792890000000, 1792893600000], [r['from'] for r in rows])
-                self.assertEqual('2026-10-25 · 00:00 → 01:00 (+00:00)', rows[0]['label'])
-                for field in ('body', 'html'):
-                    body = unescape(payload[field])
-                    self.assertIn(f'25 {month} 2026, 02:00 CEST (+0200) → 25 {month} 2026, 02:00 CET (+0100)', body)
-                    self.assertIn(f'25 {month} 2026, 02:00 CET (+0100) → 25 {month} 2026, 03:00 CET (+0100)', body)
-                    self.assertNotIn('2026-10-25 · 00:00', body)
+                payload=self.compose(start,end,language=language,display='Europe/Warsaw',report='UTC',cadence='daily')
+                snapshot=self.last_fixture.snapshot;rows=snapshot['chart']['bins']
+                self.assertTrue(snapshot['period']['partial'])
+                self.assertEqual([1792886400000,1792890000000,1792893600000],[row['from'] for row in rows])
+                values=csv_facts(payload)
+                first=values['chart.bins.0.start'];second=values['chart.bins.1.start']
+                prefix='25 paź 2026' if language=='pl' else 'Oct 25, 2026'
+                self.assertEqual(prefix+' 02:00:00 +0200 [Europe/Warsaw]',first)
+                self.assertEqual(prefix+' 02:00:00 +0100 [Europe/Warsaw]',second)
+                for field in ('body','html'):
+                    self.assertIn(first,unescape(payload[field]))
+                    self.assertIn(second,unescape(payload[field]))
 
     def test_zero_missing_days_and_date_shaped_categories_keep_their_values(self):
-        start = datetime(2026, 10, 18, 22, tzinfo=UTC)
-        payload = self.compose(start, datetime(2026, 10, 25, 23, tzinfo=UTC), gap=True)
-        rows = chart(payload['summary']['visualization'], 'energy-usage')['rows']
-        self.assertEqual([0, None], [r['value'] for r in rows[:2]])
-        self.assertEqual([True, False], [r['complete'] for r in rows[:2]])
-        for field in ('body', 'html'):
-            body = unescape(payload[field])
-            self.assertIn('20 paź 2026, 00:00 CEST (+0200)', body)
-            self.assertIn('Unknown', body)
-            self.assertIn('2026-10-05', body)  # Category name is not a date bucket.
-        self.assertIn('0 · measured zero', payload['html'])
-        self.assertIn('Unknown / gap', payload['html'])
-        self.assertEqual('unknown', payload['summary']['comparison']['status'])
+        from decimal import Decimal
+        start=datetime(2026,10,18,22,tzinfo=UTC)
+        payload=self.compose(start,datetime(2026,10,25,23,tzinfo=UTC),gap=True)
+        snapshot=self.last_fixture.snapshot;rows=snapshot['chart']['bins']
+        self.assertEqual(Decimal('0'),Decimal(rows[0]['kwh']));self.assertIsNone(rows[1]['kwh'])
+        self.assertEqual([True,False],[row['complete'] for row in rows[:2]])
+        self.assertIsNone(snapshot['totals']['kwh'])
+        self.assertEqual('2026-10-20T00:00:00+02:00',rows[1]['local_start'])
+        self.assertEqual('2026-10-05',snapshot['groups']['devices']['sensor.category']['name'])
+        for field in ('body','html'):
+            body=unescape(payload[field]);self.assertIn('Brak danych',body)
+            self.assertIn('2026-10-05',body) # Category is text, not a date bucket.
+        # Existing authoritative >=90% comparison uses real common hours; missing
+        # root totals remain withheld rather than forcing legacy blanket unknown.
+        comparison=snapshot['comparisons']['previous']
+        self.assertEqual('common_measurements',comparison['comparison_scope'])
+        self.assertEqual('ready',comparison['status'])
 
     def test_source_and_logger_categories_and_unique_caveats_stay_verbatim(self):
         name = '2026-10-05 (24h; +02:00)'

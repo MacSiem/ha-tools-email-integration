@@ -6,7 +6,8 @@ import types
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
-from tests.test_composer import composer
+from tests.helper_composer_schema2 import ComposerFixture
+from decimal import Decimal
 
 
 class EnergyGridProviderTest(unittest.TestCase):
@@ -22,57 +23,33 @@ class EnergyGridProviderTest(unittest.TestCase):
         }
         if mutation:
             mutation(points)
-        calls = {}
-        stats = types.ModuleType("homeassistant.components.recorder.statistics")
-
-        def metadata(hass, *, statistic_ids):
-            calls["metadata_ids"] = set(statistic_ids)
-            return {sid: (1, {"has_sum": row.get("has_sum", True),
-                             "name": row.get("name"),
-                             "unit_of_measurement": row.get("unit", "kWh"),
-                             "unit_class": row.get("unit_class", "energy")})
-                    for sid, row in rows.items()}
-
-        def statistics(hass, actual_start, actual_end, ids, *args):
-            calls.update(statistics_ids=set(ids), start=actual_start, end=actual_end)
-            # Include unrelated output as defense against summing arbitrary rows.
-            return points
-
-        stats.get_metadata = metadata
-        stats.statistics_during_period = statistics
-
-        class Recorder:
-            async def async_add_executor_job(self, fn, *args, **kwargs):
-                return fn(*args, **kwargs)
-
-        util = types.ModuleType("homeassistant.components.recorder.util")
-        util.get_instance = lambda hass: Recorder()
-        energy = types.ModuleType("homeassistant.components.energy.data")
-
-        async def manager(hass):
-            return types.SimpleNamespace(data=copy.deepcopy(prefs))
-
-        energy.async_get_manager = manager
-        states = {sid: types.SimpleNamespace(attributes={"friendly_name": sid}) for sid in rows}
-        hass = types.SimpleNamespace(states=states,
-                                     config=types.SimpleNamespace(currency="EUR", time_zone="UTC"))
-        with patch.dict(sys.modules, {stats.__name__: stats, util.__name__: util,
-                                      energy.__name__: energy}):
-            result = asyncio.run(composer.async_build_energy_report_payload(
-                hass, cadence=cadence, now=end))
-        return result["summary"], calls
+        def supplied(a,b,ids):
+            return {sid:[row for row in values if a.timestamp()<=row['start']<b.timestamp()]
+                    for sid,values in points.items()}
+        fx=ComposerFixture(end,preferences=prefs,rows=rows,points=supplied)
+        with fx.patches():
+            result=asyncio.run(fx.compose(cadence,rolling=True))
+        calls={'metadata_ids':fx.metadata_reads[-1],
+               'statistics_ids':fx.statistics_calls[-1][2],
+               'start':fx.statistics_calls[0][0],'end':fx.statistics_calls[-1][1],
+               'snapshot':fx.adapter_reads[0]['result'],'producer':fx.snapshot}
+        return result['summary'],calls
 
     def assert_ready(self, summary, calls, ids, total, cadence="daily"):
-        self.assertEqual("ready", summary["status"])
-        self.assertAlmostEqual(total, summary["total_kwh"])
-        self.assertEqual(set(ids), {r["entity_id"] for r in summary["devices"]})
-        self.assertEqual(len(ids), len(summary["devices"]))
-        self.assertEqual(set(ids), calls["metadata_ids"])
-        self.assertEqual(set(ids), calls["statistics_ids"])
-        self.assertEqual(168 if cadence == "weekly" else 24,
-                         int((calls["end"] - calls["start"]).total_seconds() / 3600))
-        self.assertEqual(cadence, summary["period"]["cadence"])
-        self.assertIsNone(summary["total_cost"])
+        measurement=calls['snapshot']
+        self.assertEqual('ready',measurement['status'])
+        self.assertTrue(summary['coverage']['complete'])
+        self.assertIsInstance(summary['total_kwh'],str)
+        self.assertEqual(Decimal(str(total)),Decimal(summary['total_kwh']))
+        self.assertEqual(set(ids), {r['entity_id'] for r in measurement['devices']})
+        self.assertEqual(len(ids),len(measurement['devices']))
+        self.assertEqual(set(ids),calls['metadata_ids'])
+        self.assertEqual(set(ids),calls['statistics_ids'])
+        self.assertEqual(168 if cadence=='weekly' else 24,
+                         int((calls['end']-calls['start']).total_seconds()/3600))
+        self.assertEqual(cadence,summary['period']['cadence'])
+        self.assertIsNone(summary['totals']['usage_cost'])
+        self.assertIsNone(summary['total_cost'])
 
     def test_nested_grid_unique_multiimport_excludes_export_solar_and_unrelated(self):
         prefs = {"energy_sources": [
@@ -89,7 +66,7 @@ class EnergyGridProviderTest(unittest.TestCase):
             with self.subTest(cadence=cadence):
                 summary, calls = self.compose(prefs, rows, cadence=cadence)
                 self.assert_ready(summary, calls, ["sensor.a", "sensor.b"], expected, cadence)
-                self.assertEqual(["sensor.a", "sensor.b"], summary["source_ids"])
+                self.assertEqual(["sensor.a", "sensor.b"], calls["snapshot"]["source_ids"])
 
     def test_truthy_flat_wins_over_nested_and_empty_flat_falls_back(self):
         prefs = {"energy_sources": [
@@ -131,7 +108,7 @@ class EnergyGridProviderTest(unittest.TestCase):
             with self.subTest(cadence=cadence):
                 summary, calls = self.compose(prefs, rows, cadence=cadence)
                 self.assert_ready(summary, calls, list(rows), hours * 6, cadence)
-                values = {r["entity_id"]: r["kwh"] for r in summary["devices"]}
+                values = {r["entity_id"]: r["kwh"] for r in calls["snapshot"]["devices"]}
                 self.assertAlmostEqual(hours, values["sensor.wh"])
                 self.assertAlmostEqual(hours * 3, values["sensor.kwh"])
                 self.assertAlmostEqual(hours * 2, values["sensor.mwh"])
@@ -147,9 +124,9 @@ class EnergyGridProviderTest(unittest.TestCase):
                 self.assertEqual("partial", summary["status"])
                 self.assertIsNone(summary["total_kwh"])
                 self.assertIsNone(summary["total_cost"])
-                self.assertEqual(2, len(summary["devices"]))
+                self.assertEqual(2, len(calls["snapshot"]["devices"]))
                 self.assertEqual((24 if cadence == 'daily' else 168) * 2 - 1,
-                                 summary['coverage']['measured_source_hours'])
+                                 calls['snapshot']['coverage']['measured_source_hours'])
                 self.assertEqual(set(rows), calls["statistics_ids"])
 
     def test_complete_zero_is_measured_zero_for_nested_mwh(self):
@@ -166,10 +143,11 @@ class EnergyGridProviderTest(unittest.TestCase):
         for invalid in [{"unit": "kW", "unit_class": "power"}, {"unit": "MWh", "has_sum": False},
                         {"unit": "MWh", "unit_class": "power"}]:
             with self.subTest(metadata=invalid):
-                summary, _ = self.compose(prefs, {"sensor.grid": invalid})
-                self.assertEqual("unsupported", summary["status"])
+                summary, calls = self.compose(prefs, {"sensor.grid": invalid})
+                self.assertEqual("unsupported", calls["snapshot"]["status"])
+                self.assertFalse(summary["coverage"]["complete"])
                 self.assertIsNone(summary["total_kwh"])
-                self.assertEqual([], summary["devices"])
+                self.assertEqual([], calls["snapshot"]["devices"])
 
     def test_duplicate_negative_or_nonfinite_bucket_is_truthful_partial(self):
         prefs = {"energy_sources": [{"type": "grid", "stat_energy_from": "sensor.grid"}]}
@@ -180,20 +158,30 @@ class EnergyGridProviderTest(unittest.TestCase):
                         points["sensor.grid"].append(dict(points["sensor.grid"][0]))
                     else:
                         points["sensor.grid"][0]["change"] = -1 if kind == "negative" else float("nan")
-                summary, _ = self.compose(prefs, {"sensor.grid": {"unit": "MWh"}}, mutation=change)
+                summary, calls = self.compose(prefs, {"sensor.grid": {"unit": "MWh"}}, mutation=change)
                 self.assertEqual("partial", summary["status"])
                 self.assertIsNone(summary["total_kwh"])
-                self.assertEqual(23000, summary["devices"][0]['kwh'])
-                self.assertEqual(23, summary["devices"][0]['measured_hours'])
+                self.assertEqual(23000, calls["snapshot"]["devices"][0]['kwh'])
+                self.assertEqual(23, calls["snapshot"]["devices"][0]['measured_hours'])
 
     def test_no_grid_import_remains_no_data_not_measured_zero(self):
-        summary, calls = self.compose({"energy_sources": [{"type": "solar",
-                    "stat_energy_from": "sensor.solar"}]}, {"sensor.solar": {}})
-        self.assertEqual("no_data", summary["status"])
-        self.assertIsNone(summary["total_kwh"])
-        self.assertEqual([], summary["devices"])
-        self.assertEqual([], summary["source_ids"])
-        self.assertEqual({}, calls)
+        fx=ComposerFixture(datetime(2026,9,30,12,tzinfo=timezone.utc),preferences={
+            'energy_sources':[{'type':'solar','stat_energy_from':'sensor.solar'}]},
+            rows={'sensor.solar':{}})
+        with fx.patches():
+            with self.assertRaisesRegex(ValueError,'energy_analysis_unavailable'):
+                asyncio.run(fx.compose())
+            from tests.helper_composer_schema2 import composer as actual_composer
+            end=fx.h.now;start=end-timedelta(hours=24)
+            raw=asyncio.run(actual_composer.async_get_energy_usage(fx.h.hass,[],start,end,'hour'))
+            self.assertEqual('no_data',raw['status'])
+            self.assertEqual([],raw['devices']);self.assertEqual([],raw['source_ids'])
+            self.assertIsNone(raw.get('total_kwh'))
+        self.assertIsNone(fx.snapshot)
+        self.assertEqual([],fx.statistics_calls)
+        self.assertEqual([],fx.metadata_reads)
+        self.assertEqual([],fx.h.registry_ids)
+        # No grid remains unavailable, never a fabricated zero-valued report.
 
     def test_finite_mwh_buckets_overflow_normalization_with_valid_second_provider(self):
         prefs = {"energy_sources": [{"type": "grid", "stat_energy_from": sid}
@@ -204,11 +192,12 @@ class EnergyGridProviderTest(unittest.TestCase):
             with self.subTest(cadence=cadence):
                 summary, calls = self.compose(prefs, rows, cadence=cadence)
                 self.assertEqual("partial", summary["status"])
-                self.assertEqual(['sensor.valid'], [r['entity_id'] for r in summary['devices']])
-                self.assertEqual(24 if cadence == 'daily' else 168, summary['recorded_kwh'])
+                self.assertEqual(['sensor.valid'], [r['entity_id'] for r in calls['snapshot']['devices']])
+                self.assertEqual(24 if cadence == 'daily' else 168, calls['snapshot']['devices'][0]['kwh'])
+                self.assertIsNone(summary['totals']['recorded_household_kwh'])
                 self.assertIsNone(summary["total_kwh"])
                 self.assertIsNone(summary["total_cost"])
-                self.assertEqual(list(rows), summary["source_ids"])
+                self.assertEqual(list(rows), calls["snapshot"]["source_ids"])
                 self.assertEqual(set(rows), calls["statistics_ids"])
 
     def test_finite_provider_totals_overflow_aggregate_withholds_entire_period(self):
@@ -222,8 +211,24 @@ class EnergyGridProviderTest(unittest.TestCase):
                         "sensor.b": {"unit": "kWh", "change": change}}
                 summary, calls = self.compose(prefs, rows, cadence=cadence)
                 self.assertEqual("partial", summary["status"])
-                self.assertEqual([], summary["devices"])
+                self.assertEqual([], calls["snapshot"]["devices"])
                 self.assertIsNone(summary["total_kwh"])
                 self.assertIsNone(summary["total_cost"])
-                self.assertEqual(list(rows), summary["source_ids"])
+                self.assertEqual(list(rows), calls["snapshot"]["source_ids"])
                 self.assertEqual(set(rows), calls["statistics_ids"])
+
+    def test_actual_report_rejects_missing_service_or_authenticated_actor_before_io(self):
+        from tests.helper_composer_schema2 import composer as actual_composer
+        for mode in ('service','actor','inactive'):
+            fx=ComposerFixture(datetime(2026,9,30,12,tzinfo=timezone.utc))
+            if mode=='service':fx.h.hass.data['ha_tools_email']['energy_analysis']=None
+            if mode=='inactive':fx.h.user.is_active=False
+            actor='forged-unbound-user' if mode=='actor' else fx.h.user.id
+            with self.subTest(mode=mode),fx.patches(),self.assertRaises(
+                    RuntimeError if mode=='service' else PermissionError):
+                asyncio.run(actual_composer.async_build_energy_report_payload(fx.h.hass,cadence='daily',
+                    now=fx.h.now,actor=actor,report_preferences=fx.prefs))
+            self.assertEqual([],fx.statistics_calls)
+            self.assertEqual([],fx.metadata_reads)
+            self.assertEqual([],fx.h.registry_ids)
+            self.assertIsNone(fx.snapshot)

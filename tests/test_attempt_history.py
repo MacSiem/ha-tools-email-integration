@@ -172,21 +172,24 @@ class DispatchTests(unittest.IsolatedAsyncioTestCase):
         exec(compile(ast.Module(body=nodes, type_ignores=[]), 'handlers', 'exec'), ns)
         await ns['handle_send'](types.SimpleNamespace(data={}))
         await ns['handle_test'](types.SimpleNamespace(data={}))
-        package = types.ModuleType('attempt_scheduler_test')
-        package.__path__ = [str(ROOT)]
-        composer = types.ModuleType(package.__name__ + '.composer')
-        composer.async_build_report_payload = compose
-        with patch.dict(sys.modules, {package.__name__: package, composer.__name__: composer,
-                                      package.__name__ + '.history': history}):
-            spec = importlib.util.spec_from_file_location(package.__name__ + '.scheduler', ROOT / 'scheduler.py')
-            scheduler = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(scheduler)
-            manual = await scheduler.async_send_now(hass, kind='energy_report', cadence='daily')
+        from tests.test_schedule_timezone_v3 import load_websocket, authorized_report_harness
+        ws = load_websocket(self)
+        h = authorized_report_harness(self, ws, now=datetime.now(timezone.utc), storage=s)
+        h.hass.data['ha_tools_email'].update(load_config=config, send_email=send)
+        scheduler = sys.modules[ws.__package__ + '.scheduler']
+        class FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return h.now.astimezone(tz) if tz else h.now.replace(tzinfo=None)
+        with patch.object(scheduler, 'datetime', FrozenDateTime):
+            manual = await scheduler.async_send_now(h.hass, kind='energy_report', cadence='daily', actor=h.user.id)
             await s.async_upsert_schedule({'id': 'private schedule name', 'kind': 'energy_report', 'cadence': 'daily'})
-            scheduled = await scheduler.async_send_schedule(hass, await s.async_get_schedule('private schedule name'), now=datetime.now(timezone.utc))
+            scheduled = await scheduler.async_send_schedule(h.hass, await s.async_get_schedule('private schedule name'), now=h.now)
         attempts = (await s.async_get_attempt_history())['attempts']
         self.assertEqual(4, len(attempts))
         self.assertEqual(4, len(calls))
+        self.assertEqual(2, sum('<!doctype html>' in str(call[-1]) for call in calls))
+        self.assertGreater(len(h.queries), 0)
         self.assertEqual({'manual', 'schedule'}, {a['source'] for a in attempts})
         self.assertEqual('accepted_by_smtp', manual['status'])
         self.assertEqual('recorded', scheduled['history_status'])

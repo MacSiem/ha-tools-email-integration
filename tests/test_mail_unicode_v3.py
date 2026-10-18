@@ -6,9 +6,9 @@ import json
 import unittest
 from unittest.mock import patch
 
-import test_mail_charts_v3 as charts
-import test_mail_mime_v3 as mime
-import test_mail_preview_manual_v3 as preview
+from tests import test_mail_charts_v3 as charts
+from tests import test_mail_mime_v3 as mime
+from tests import test_mail_preview_manual_v3 as preview
 
 
 class MailUnicodeTests(unittest.TestCase):
@@ -94,37 +94,31 @@ class MailUnicodePreviewTests(unittest.IsolatedAsyncioTestCase):
         ws, composer, scheduler, hass, conn, storage, forbidden, state = preview.MailPreviewManualTests.fixture(self)
         raw = 'Grid Żółć 😀 \ud800 \udfff \ud83d\ude00 <tag>&'
         expected = 'Grid Żółć 😀 \ufffd \ufffd 😀 <tag>&'
-        devices = [{'name': raw, 'entity_id': 'sensor.fixture_grid', 'kwh': 2.5}]
+        devices = self.report_harness.manager.data['device_consumption']
+        devices[0]['name'] = raw
         original = copy.deepcopy(devices)
-
-        async def usage(hass, sensors, start, end, cadence):
-            return {'status': 'ready', 'source_ids': ['sensor.fixture_grid'],
-                'devices': devices, 'measurement_provenance': {},
-                'hourly_buckets': [{'from': int(start.timestamp()*1000),
-                    'to': int(end.timestamp()*1000), 'kwh': 2.5}]}
-
-        with patch.object(composer, 'async_get_energy_usage', usage):
-            for mode in ('rolling', 'calendar'):
-                for cadence in ('daily', 'weekly', 'monthly'):
-                    with self.subTest(mode=mode, cadence=cadence):
-                        hass.data['ha_tools_email'].update(load_config=forbidden, send_email=forbidden)
-                        before = copy.deepcopy(storage._store.saved)
-                        mail = await preview.MailPreviewManualTests.preview(self, ws, hass, conn,
-                            'energy_report', cadence, period_mode=mode)
-                        self.assertEqual([], self.errors)
-                        json.dumps(mail, ensure_ascii=False, allow_nan=False).encode('utf-8', errors='strict')
-                        self.assertIn(expected, mail['body'])
-                        self.assertIn(escape(expected), mail['html'])
-                        self.assertEqual(before, storage._store.saved)
-                        self.assertEqual(0, forbidden.call_count)
-                        self.assertEqual(original, devices)
-                        preview.MailPreviewManualTests.enable_send(self, hass)
-                        await ws._ws_send_now(hass, conn, dict(id=2, kind='energy_report',
-                            cadence=cadence, period_mode=mode))
-                        self.assertEqual([], self.errors)
-                        self.assertEqual('accepted_by_smtp', self.results[-1][1]['status'])
-                        self.assertEqual({key: mail[key] for key in ('subject', 'body', 'html')}, self.sent[-1])
-                        self.assertEqual(original, devices)
+        # Raw Energy configuration is unchanged; presentation sanitizes Unicode.
+        for mode in ('rolling', 'calendar'):
+            for cadence in ('daily', 'weekly', 'monthly'):
+                with self.subTest(mode=mode, cadence=cadence):
+                    hass.data['ha_tools_email'].update(load_config=forbidden, send_email=forbidden)
+                    before = copy.deepcopy(storage._store.saved)
+                    mail = await preview.MailPreviewManualTests.preview(self, ws, hass, conn,
+                        'energy_report', cadence, period_mode=mode)
+                    self.assertEqual([], self.errors)
+                    json.dumps(mail, ensure_ascii=False, allow_nan=False).encode('utf-8', errors='strict')
+                    self.assertIn(expected, mail['body'])
+                    self.assertIn(escape(expected), mail['html'])
+                    self.assertEqual(before, storage._store.saved)
+                    self.assertEqual(0, forbidden.call_count)
+                    self.assertEqual(original, devices)
+                    preview.MailPreviewManualTests.enable_send(self, hass)
+                    await ws._ws_send_now(hass, conn, dict(id=2, kind='energy_report',
+                        cadence=cadence, period_mode=mode))
+                    self.assertEqual([], self.errors)
+                    self.assertEqual('accepted_by_smtp', self.results[-1][1]['status'])
+                    preview.MailPreviewManualTests.assert_delivery_parity(self, mail, 'energy_report')
+                    self.assertEqual(original, devices)
 
     async def test_mail_preview_is_utf8_json_read_only_and_equals_actual_send(self):
         ws, composer, scheduler, hass, conn, storage, forbidden, state = preview.MailPreviewManualTests.fixture(self)

@@ -5,6 +5,8 @@ import types
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
+from decimal import Decimal
+from tests.helper_composer_schema2 import ComposerFixture,csv_facts
 
 from tests.test_composer import composer as c
 from tests.test_scheduler import scheduler
@@ -142,160 +144,134 @@ class RecorderProvenanceTest(unittest.TestCase):
         fixture = grid_fixture.EnergyGridProviderTest()
         for unit, change in [('Wh',1000), ('kWh',1), ('MWh',0.001)]:
             with self.subTest(unit=unit):
-                summary, _ = fixture.compose(
+                summary, calls = fixture.compose(
                     {'energy_sources':[{'type':'grid', 'stat_energy_from':'sensor.grid'}]},
                     {'sensor.grid':{'unit':unit, 'change':change}})
-                self.assertAlmostEqual(24, summary['total_kwh'])
+                self.assertEqual(Decimal('24'),Decimal(summary['total_kwh']))
                 self.assertEqual({'sensor.grid':{'method':'recorder_hourly_change_v1',
                     'unit':'kWh','source_unit':unit,'unit_class':'energy','has_sum':True}},
-                    summary['measurement_provenance'])
+                    calls['snapshot']['measurement_provenance'])
 
 
 class RuntimeComparisonTest(unittest.IsolatedAsyncioTestCase):
     async def test_partial_payload_queries_only_matching_previous_fragment(self):
-        start = datetime(2026, 10, 12, tzinfo=UTC)
-        end = datetime(2026, 10, 17, 12, tzinfo=UTC)
-        calls = []
-        energy = types.ModuleType('homeassistant.components.energy.data')
-
-        async def manager(hass):
-            return types.SimpleNamespace(data={'energy_sources': [
-                {'type': 'grid', 'stat_energy_from': 'sensor.grid'}]})
-
-        async def measured(hass, sensors, query_start, query_end, cadence):
-            calls.append((query_start, query_end))
-            return snapshot(12 if query_start == start else 10)
-
-        async def executor(fn, *args):
-            return fn(*args)
-
-        energy.async_get_manager = manager
-        hass = types.SimpleNamespace(data={}, states={}, async_add_executor_job=executor,
-            config=types.SimpleNamespace(currency='PLN', time_zone='UTC'))
-        with patch.dict(sys.modules, {energy.__name__: energy}), patch.object(c, 'async_get_energy_usage', measured):
-            payload = await c.async_build_energy_report_payload(hass, cadence='weekly', now=end,
-                window_start=start, window_end=end)
-        self.assertEqual(2, len(calls), 'The partial calendar period needs a measured baseline')
-        self.assertEqual((datetime(2026, 10, 5, tzinfo=UTC),
-                          datetime(2026, 10, 10, 12, tzinfo=UTC)), calls[1])
-        self.assertEqual(20, payload['summary']['comparison']['percent'])
+        start=datetime(2026,10,12,tzinfo=UTC);end=datetime(2026,10,17,12,tzinfo=UTC)
+        baseline_start=datetime(2026,10,5,tzinfo=UTC)
+        baseline_end=datetime(2026,10,10,12,tzinfo=UTC)
+        # Keep literal 12 vs10 with one measured hour each, all other hours zero.
+        # Never spread aggregate snapshot totals across points.
+        def points(a,b,ids):
+            rows=[]
+            for i in range(int((b-a).total_seconds()/3600)):
+                at=a+timedelta(hours=i)
+                rows.append({'start':at.timestamp(),'change':12 if at==start else 10 if at==baseline_start else 0})
+            return {'sensor.grid':rows}
+        fx=ComposerFixture(end,points=points)
+        with fx.patches():
+            # Existing partial analysis path owns these internal fragments.
+            payload=await fx.analysis('week',anchor='2026-10-12',comparison='previous')
+        self.assertEqual(2,len(fx.statistics_calls),'The partial calendar period needs a measured baseline')
+        self.assertEqual((baseline_start,baseline_end),fx.statistics_calls[1][:2])
+        previous=fx.snapshot['comparisons']['previous']
+        self.assertEqual(Decimal('12'),Decimal(str(previous['current_kwh'])))
+        self.assertEqual(Decimal('10'),Decimal(str(previous['baseline_kwh'])))
+        self.assertEqual(20,previous['percent'])
+        self.assertTrue(fx.snapshot['period']['partial'])
+        self.assertIn('Selected comparisons',payload['body'])
+        # Public full-window report requests must continue rejecting this shape.
+        other=ComposerFixture(end,points=points)
+        with other.patches(),self.assertRaisesRegex(ValueError,'invalid_report_calendar_boundaries'):
+            await other.compose('weekly',start=start,end=end)
+        self.assertEqual([],other.statistics_calls)
 
     async def test_actual_payload_uses_same_selected_sources_and_renders_both_formats(self):
-        now = datetime(2026, 10, 12, 12, tzinfo=UTC)
-        start, end = scheduler.calendar_report_window({'cadence':'daily'}, now, local_timezone='UTC')
-        calls, preference_reads = [], []
-        energy = types.ModuleType('homeassistant.components.energy.data')
-        async def manager(hass):
-            preference_reads.append(True)
-            return types.SimpleNamespace(data={'energy_sources': [
-                {'type':'grid', 'stat_energy_from':'sensor.grid'},
-                {'type':'solar', 'stat_energy_from':'sensor.solar'}]})
-        energy.async_get_manager = manager
-        async def measured(hass, sensors, query_start, query_end, cadence):
-            calls.append((copy.deepcopy(sensors), query_start, query_end, cadence))
-            return snapshot(30 if query_start == start else 24)
-        async def executor(fn, *args):
-            return fn(*args)
-        hass = types.SimpleNamespace(data={}, states={}, async_add_executor_job=executor,
-            config=types.SimpleNamespace(currency='PLN', time_zone='UTC'))
-        with patch.dict(sys.modules, {energy.__name__:energy}), patch.object(c, 'async_get_energy_usage', measured):
-            payload = await c.async_build_energy_report_payload(hass, cadence='daily', now=now,
-                window_start=start, window_end=end)
-        self.assertEqual(1, len(preference_reads))
-        self.assertEqual(2, len(calls))
-        self.assertEqual(calls[0][0], calls[1][0])
-        self.assertEqual(['sensor.grid'], [r['entity_id'] for r in calls[1][0]])
-        self.assertEqual((start-timedelta(days=1), start), calls[1][1:3])
-        self.assertEqual(30, payload['summary']['total_kwh'])
+        now=datetime(2026,10,12,12,tzinfo=UTC)
+        start,end=scheduler.calendar_report_window({'cadence':'daily'},now,local_timezone='UTC')
+        def points(a,b,ids):
+            return {'sensor.grid':[{'start':(a+timedelta(hours=i)).timestamp(),
+                'change':1.25 if start<=a+timedelta(hours=i)<end else 1}
+                for i in range(int((b-a).total_seconds()/3600))],
+                'sensor.solar':[{'start':a.timestamp(),'change':9999}]}
+        fx=ComposerFixture(now,preferences={'energy_sources':[
+            {'type':'grid','stat_energy_from':'sensor.grid'},
+            {'type':'solar','stat_energy_from':'sensor.solar'}]},
+            rows={'sensor.grid':{'name':'Grid <meter>'}},points=points)
+        with fx.patches():payload=await fx.compose(start=start,end=end)
+        self.assertEqual(1,len(fx.manager_reads));self.assertEqual(2,len(fx.statistics_calls))
+        self.assertEqual(fx.adapter_reads[0]['sensors'],fx.adapter_reads[1]['sensors'])
+        self.assertEqual(['sensor.grid'],[r['entity_id'] for r in fx.adapter_reads[1]['sensors']])
+        self.assertEqual((start-timedelta(days=1),start),fx.statistics_calls[1][:2])
+        self.assertEqual(Decimal('30'),Decimal(payload['summary']['total_kwh']))
         self.assertIsNone(payload['summary']['total_cost'])
-        self.assertEqual(25, payload['summary']['comparison']['percent'])
-        for body in (payload['body'], payload['html']):
-            self.assertIn('Previous measured grid import: 24.00 kWh.', body)
-            self.assertIn('+6.00 kWh; +25.0%', body)
-            self.assertIn('24 elapsed hours.', body)
-            self.assertIn('Timezone: UTC.', body)
-            self.assertIn('historical configuration is not reconstructed', body)
-            self.assertNotIn('Top consumers', body)
-        self.assertIn('Grid import source', payload['html'])
-        self.assertIn('Grid &lt;meter&gt;', payload['html'])
-        self.assertNotIn('Grid <meter>', payload['html'])
-        self.assertNotIn('cost comparison', payload['body'])
+        compared=payload['summary']['comparisons']['previous'] # report70 dependency, no fake adapter.
+        self.assertEqual(25,compared['percent']);self.assertEqual(24,compared['baseline_kwh'])
+        self.assertEqual(6,compared['delta_kwh'])
+        self.assertNotIn('costs',compared) # No configured tariff must not fabricate a monetary comparison.
+        self.assertEqual(24,payload['summary']['comparison']['previous_kwh'])
+        facts=csv_facts(payload)
+        for path,want in [('comparisons.previous.current_kwh','30'),
+                          ('comparisons.previous.baseline_kwh','24'),
+                          ('comparisons.previous.delta_kwh','6'),('comparisons.previous.percent','25')]:
+            self.assertEqual(Decimal(want),Decimal(facts[path]))
+        for body in (payload['body'],payload['html']):
+            self.assertIn('Selected comparisons',body);self.assertIn('UTC',body)
+            self.assertNotIn('9999',body)
+        # Preserve the grid-name escaping scenario on the existing pure formatter.
+        pure=c.build_energy_report_payload(fx.adapter_reads[0]['result']['devices'],cadence='daily',source_kind='grid')
+        self.assertIn('Grid import source',pure['html']);self.assertIn('Grid &lt;meter&gt;',pure['html'])
+        self.assertNotIn('Grid <meter>',pure['html'])
 
     async def test_rolling_payload_fetches_only_current_and_keeps_generic_consumers(self):
-        calls=[]
-        async def measured(*args):
-            calls.append(args)
-            return snapshot()
-        hass=types.SimpleNamespace(data={}, config=types.SimpleNamespace(currency='PLN', time_zone='UTC'))
-        with patch.object(c, 'async_get_energy_usage', measured):
-            payload=await c.async_build_energy_report_payload(hass, cadence='daily',
-                now=datetime(2026,10,12,12,tzinfo=UTC))
-        self.assertEqual(1, len(calls))
-        self.assertEqual('rolling_or_custom_window', payload['summary']['comparison']['reason'])
-        self.assertIn('Change in grid import: Unknown', payload['body'])
-        generic=c.build_energy_report_payload([{'name':'Appliance', 'kwh':1}], cadence='daily')
-        self.assertIn('Top consumers:', generic['body'])
-        self.assertIn('>Consumer</th>', generic['html'])
-        self.assertNotIn('comparison', generic['summary'])
+        fx=ComposerFixture(datetime(2026,10,12,12,tzinfo=UTC))
+        with fx.patches():payload=await fx.compose()
+        self.assertEqual(1,len(fx.statistics_calls))
+        self.assertEqual('rolling_or_custom_window',payload['summary']['comparison']['reason'])
+        self.assertEqual('unknown',payload['summary']['comparison']['status'])
+        self.assertEqual({},payload['summary']['comparisons'])
+        self.assertEqual(Decimal('24'),Decimal(payload['summary']['total_kwh']))
+        generic=c.build_energy_report_payload([{'name':'Appliance','kwh':1}],cadence='daily')
+        self.assertIn('Top consumers:',generic['body']);self.assertIn('>Consumer</th>',generic['html'])
+        self.assertNotIn('comparison',generic['summary'])
 
 
 class ActualRecorderComparisonTest(unittest.IsolatedAsyncioTestCase):
     async def test_calendar_mail_composes_both_periods_through_actual_recorder_adapter(self):
-        for cadence, now, previous_rate in [
-            ('daily', datetime(2026,3,30,12,tzinfo=UTC), 0.5),
-            ('weekly', datetime(2026,3,30,12,tzinfo=UTC), 0.5),
-            ('monthly', datetime(2026,4,1,12,tzinfo=UTC), 0.5),
-            ('daily', datetime(2026,10,12,12,tzinfo=UTC), 0),
+        for cadence,now,previous_rate in [
+            ('daily',datetime(2026,3,30,12,tzinfo=UTC),0.5),
+            ('weekly',datetime(2026,3,30,12,tzinfo=UTC),0.5),
+            ('monthly',datetime(2026,4,1,12,tzinfo=UTC),0.5),
+            ('daily',datetime(2026,10,12,12,tzinfo=UTC),0),
         ]:
-            with self.subTest(cadence=cadence, now=now, previous_rate=previous_rate):
-                zone = 'Europe/Warsaw'
-                start, end = scheduler.calendar_report_window({'cadence':cadence}, now, local_timezone=zone)
-                previous_start, previous_end = scheduler.calendar_report_window({'cadence':cadence}, start, local_timezone=zone)
-                stats = types.ModuleType('homeassistant.components.recorder.statistics')
-                util = types.ModuleType('homeassistant.components.recorder.util')
-                energy = types.ModuleType('homeassistant.components.energy.data')
-                queries, preference_reads = [], []
-                def metadata(hass, *, statistic_ids):
-                    self.assertEqual({'sensor.grid'}, statistic_ids)
-                    return {'sensor.grid': (1, {'has_sum':True,'unit_of_measurement':'kWh','unit_class':'energy'})}
-                def statistics(hass, query_start, query_end, ids, *args):
-                    self.assertEqual({'sensor.grid'}, ids)
-                    queries.append((query_start,query_end))
-                    rate = 1 if query_start == start else previous_rate
-                    hours = int((query_end-query_start).total_seconds()/3600)
-                    return {'sensor.grid':[{'start':(query_start+timedelta(hours=i)).timestamp(),'change':rate} for i in range(hours)],
-                            'sensor.unrelated':[{'start':query_start.timestamp(),'change':9999}]}
-                class Recorder:
-                    async def async_add_executor_job(self, fn, *args, **kwargs):
-                        return fn(*args, **kwargs)
-                async def manager(hass):
-                    preference_reads.append(True)
-                    return types.SimpleNamespace(data={'energy_sources':[
-                        {'type':'grid','flow_from':[{'stat_energy_from':'sensor.grid'}]},
-                        {'type':'solar','stat_energy_from':'sensor.unrelated'}]})
-                async def executor(fn,*args):return fn(*args)
-                stats.get_metadata=metadata;stats.statistics_during_period=statistics
-                util.get_instance=lambda hass:Recorder();energy.async_get_manager=manager
-                hass=types.SimpleNamespace(data={},states={},async_add_executor_job=executor,
-                    config=types.SimpleNamespace(currency='EUR',time_zone=zone))
-                with patch.dict(sys.modules,{stats.__name__:stats,util.__name__:util,energy.__name__:energy}):
-                    payload=await c.async_build_energy_report_payload(hass,cadence=cadence,now=now,
-                        window_start=start,window_end=end,report_timezone=zone)
-                self.assertEqual([(start,end),(previous_start,previous_end)],queries)
-                self.assertEqual(1,len(preference_reads))
+            with self.subTest(cadence=cadence,now=now,previous_rate=previous_rate):
+                zone='Europe/Warsaw'
+                start,end=scheduler.calendar_report_window({'cadence':cadence},now,local_timezone=zone)
+                previous_start,previous_end=scheduler.calendar_report_window({'cadence':cadence},start,local_timezone=zone)
+                def points(a,b,ids):
+                    return {'sensor.grid':[{'start':(a+timedelta(hours=i)).timestamp(),
+                        'change':1 if start<=a+timedelta(hours=i)<end else previous_rate}
+                        for i in range(int((b-a).total_seconds()/3600))],
+                        'sensor.unrelated':[{'start':a.timestamp(),'change':9999}]}
+                fx=ComposerFixture(now,measurement_zone=zone,preferences={'energy_sources':[
+                    {'type':'grid','flow_from':[{'stat_energy_from':'sensor.grid'}]},
+                    {'type':'solar','stat_energy_from':'sensor.unrelated'}]},points=points)
+                with fx.patches():payload=await fx.compose(cadence,start=start,end=end,report_zone=zone)
+                fx.assert_queries_cover(self,start,end);fx.assert_queries_cover(self,previous_start,previous_end)
+                self.assertTrue(all(ids=={'sensor.grid'} for a,b,ids in fx.statistics_calls))
+                self.assertEqual(1,len(fx.manager_reads))
                 current=(end-start).total_seconds()/3600
                 previous=(previous_end-previous_start).total_seconds()/3600*previous_rate
-                comparison=payload['summary']['comparison']
+                comparison=payload['summary']['comparisons']['previous']
                 self.assertEqual('ready',comparison['status'])
-                self.assertEqual(current,payload['summary']['total_kwh'])
-                self.assertEqual(previous,comparison['previous_kwh'])
+                self.assertEqual(Decimal(str(current)),Decimal(payload['summary']['total_kwh']))
+                self.assertEqual(previous,comparison['baseline_kwh'])
                 self.assertEqual(current-previous,comparison['delta_kwh'])
-                if previous:
-                    self.assertAlmostEqual((current-previous)/previous*100,comparison['percent'])
+                if previous:self.assertAlmostEqual((current-previous)/previous*100,comparison['percent'])
                 else:self.assertIsNone(comparison['percent'])
                 self.assertIsNone(payload['summary']['total_cost'])
+                if cadence=='daily' and now.month==3:
+                    self.assertEqual((23,12,11),(current,previous,comparison['delta_kwh']))
+                if cadence=='weekly':self.assertEqual((167,84,83),(current,previous,comparison['delta_kwh']))
+                if cadence=='monthly':self.assertEqual((743,336,407),(current,previous,comparison['delta_kwh']))
                 for body in (payload['body'],payload['html']):
-                    self.assertIn(f'Previous measured grid import: {previous:.2f} kWh.',body)
-                    self.assertIn('Europe/Warsaw',body)
-                    self.assertIn('unequal month or DST lengths are not normalized',body)
+                    self.assertIn('Selected comparisons',body);self.assertIn('Europe/Warsaw',body)
                     self.assertNotIn('9999',body)

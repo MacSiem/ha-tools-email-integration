@@ -183,20 +183,88 @@ async def test_websocket_reads_require_admin(hass, hass_storage, hass_ws_client,
     assert "password" not in response["result"]
 
 
-async def test_admin_energy_preview_does_not_send_or_change_schedules(hass, hass_storage, hass_ws_client):
+@pytest.mark.freeze_time('2026-10-18T12:30:00+00:00')
+async def test_admin_energy_preview_does_not_send_or_change_schedules(
+        hass, hass_storage, hass_ws_client, recorder_mock):
+    """Actual configured Energy manager and Recorder, real WS/auth/report path."""
+    from datetime import datetime, timedelta, timezone
+    from decimal import Decimal
+    from homeassistant.components.energy.data import async_get_manager
+    from homeassistant.components.recorder import models
+    from homeassistant.components.recorder.statistics import async_add_external_statistics
+    from custom_components.ha_tools_email.tariff_history import migrate_tariff_v1
+    from tests_ha.test_energy_runtime import profile
+
+    await hass.config.async_set_time_zone('UTC')
+    manager = await async_get_manager(hass)
+    manager.data = {'energy_sources': [{'type': 'grid',
+        'flow_from': [{'stat_energy_from': 'preview72:grid'}], 'flow_to': []}],
+        'device_consumption': []}
+    metadata = {'source': 'preview72', 'statistic_id': 'preview72:grid',
+        'name': 'Preview72 configured grid', 'has_mean': False, 'has_sum': True,
+        'unit_of_measurement': 'kWh'}
+    if hasattr(models, 'StatisticMeanType'):
+        metadata.update(mean_type=models.StatisticMeanType.NONE, unit_class='energy')
+    start = datetime(2026, 10, 17, 11, tzinfo=timezone.utc)
+    async_add_external_statistics(hass, metadata,
+        [{'start': start + timedelta(hours=i), 'sum': float(i)} for i in range(26)])
+    await recorder_mock.async_block_till_done()
+    _, storage = await _setup(hass)
+    await storage.async_save_tariff(profile(), expected_revision=0)
+    await storage.async_save_tariff_book(migrate_tariff_v1(profile(), legacy_combined=False), expected_revision=1)
+    schedules = await storage.async_list_schedules()
+    history = await storage.async_get_attempt_history()
+    client = await hass_ws_client(hass)
+    service = hass.data[DOMAIN]['energy_analysis']
+    with patch('custom_components.ha_tools_email.scheduler.async_send_report') as send, \
+         patch.object(storage, 'async_get_smtp_config', side_effect=AssertionError('preview SMTP config')) as smtp, \
+         patch.object(service, 'async_prepare_report', wraps=service.async_prepare_report) as prepared:
+        await client.send_json_auto_id({'type': f'{DOMAIN}/preview_energy_report', 'cadence': 'daily'})
+        response = await client.receive_json()
+    assert response['success'] is True
+    result = response['result']
+    assert result['status'] == 'ready'
+    assert Decimal(result['total_kwh']) == Decimal('24')
+    assert result['total_cost'] == result['totals']['total_cost']
+    assert result['period']['cadence'] == 'daily'
+    assert result['period']['hours'] == 24
+    assert result['period']['semantics'] == 'rolling_completed_hours'
+    assert result['snapshot_id']
+    assert prepared.await_count == 1
+    assert prepared.await_args.kwargs['purpose'] == 'report_read'
+    assert await storage.async_list_schedules() == schedules
+    assert await storage.async_get_attempt_history() == history
+    send.assert_not_called()
+    smtp.assert_not_called()
+
+
+async def test_admin_unconfigured_preview_has_safe_error_without_private_io(
+        hass, hass_storage, hass_ws_client):
+    """No grid must fail closed before Recorder/SMTP, with a readable WS error.
+
+    This also exposes the current missing safe-error mapping in legacy preview;
+    keep it red until the production owner repairs the handler separately.
+    """
+    from homeassistant.components.energy.data import async_get_manager
+    manager = await async_get_manager(hass)
+    manager.data = {'energy_sources': [], 'device_consumption': []}
     _, storage = await _setup(hass)
     schedules = await storage.async_list_schedules()
     client = await hass_ws_client(hass)
-    with patch("custom_components.ha_tools_email.scheduler.async_send_report") as send:
-        await client.send_json_auto_id({"type": f"{DOMAIN}/preview_energy_report", "cadence": "daily"})
+    with patch('custom_components.ha_tools_email.analysis_service.async_get_energy_metadata',
+               side_effect=AssertionError('unconfigured private metadata')) as metadata, \
+         patch('custom_components.ha_tools_email.analysis_provider.async_get_energy_usage',
+               side_effect=AssertionError('unconfigured Recorder')) as recorder, \
+         patch.object(storage, 'async_get_smtp_config', side_effect=AssertionError('unconfigured SMTP')) as smtp, \
+         patch('custom_components.ha_tools_email.scheduler.async_send_report') as send:
+        await client.send_json_auto_id({'type': f'{DOMAIN}/preview_energy_report', 'cadence': 'daily'})
         response = await client.receive_json()
-    assert response["success"] is True
-    assert response["result"]["status"] == "no_data"
-    assert response["result"]["total_kwh"] is None
-    assert response["result"]["total_cost"] is None
-    assert response["result"]["period"]["cadence"] == "daily"
+    assert response['success'] is False
+    assert response['error']['code'] == 'energy_report_unavailable'
+    assert 'energy_analysis_unavailable' not in response['error']['message']
     assert await storage.async_list_schedules() == schedules
-    send.assert_not_called()
+    for boundary in (metadata, recorder, smtp, send):
+        boundary.assert_not_called()
 
 
 async def test_diagnostics_are_redacted(hass, hass_storage):

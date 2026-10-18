@@ -41,6 +41,18 @@ class MailLayoutTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1,sum(n.text==footer for n in text))
         self.assertFalse(any(n.tag in {'script','img','iframe'} for n in doc.nodes))
 
+    def assert_schema2_coherent(self,payload,*,polish=False):
+        doc=Document(payload['html']);body=next(n for n in doc.nodes if n.tag=='body')
+        column=next(n for n in doc.nodes if n.tag=='table' and n.parent is body)
+        text=[n for n in doc.nodes if n.tag=='#text' and n.inside(body)]
+        self.assertTrue(all(n.inside(column) for n in text))
+        ending=('Alternatywy: te same pomiary; raport nie aktywuje taryfy.' if polish else
+                'Alternatives use the same measurements; this report does not activate a tariff.')
+        self.assertEqual(ending,text[-1].text)
+        self.assertEqual(1,sum(n.text==ending for n in text))
+        self.assertEqual(1,sum(n.text==payload['snapshot_id'] for n in text))
+        self.assertFalse(any(n.tag in {'script','img','iframe'} for n in doc.nodes))
+
     async def test_energy_builder_keeps_its_charts_before_footer_in_same_column(self):
         p=c.build_energy_report_payload([{'name':'Meter <safe>', 'kwh':2}],cadence='daily',currency='EUR')
         self.assert_coherent(p)
@@ -51,17 +63,23 @@ class MailLayoutTest(unittest.IsolatedAsyncioTestCase):
         self.assert_coherent(p)
 
     async def test_calendar_runtime_keeps_context_comparison_and_charts_together(self):
+        from decimal import Decimal
+        from datetime import timedelta
+        from tests.helper_composer_schema2 import ComposerFixture,csv_facts
         start=datetime(2026,3,30,tzinfo=timezone.utc);end=datetime(2026,3,31,tzinfo=timezone.utc)
-        async def executor(fn,*args):return fn(*args)
-        async def prefs(hass):return types.SimpleNamespace(data={'energy_sources':[{'type':'grid','stat_energy_from':'sensor.grid'}]})
-        energy=types.ModuleType('homeassistant.components.energy.data');energy.async_get_manager=prefs
-        hass=types.SimpleNamespace(data={},states={},async_add_executor_job=executor,config=types.SimpleNamespace(currency='EUR',time_zone='UTC'))
-        async def usage(hass,sensors,begin,finish,cadence):return snapshot(24 if begin==start else 12)
-        with patch.dict('sys.modules',{energy.__name__:energy}),patch.object(c,'async_get_energy_usage',side_effect=usage):
-            p=await c.async_build_energy_report_payload(hass,cadence='daily',now=end,window_start=start,window_end=end,report_timezone='UTC')
-        self.assert_coherent(p)
-        self.assertIn('Previous period comparison',p['html'])
-        self.assertIn('Grid import from Energy Dashboard',p['html'])
+        def points(a,b,ids):
+            return {'sensor.grid':[{'start':(a+timedelta(hours=i)).timestamp(),
+                'change':1 if start<=a+timedelta(hours=i)<end else .5}
+                for i in range(int((b-a).total_seconds()/3600))]}
+        fx=ComposerFixture(end,points=points)
+        with fx.patches():p=await fx.compose(start=start,end=end)
+        self.assert_schema2_coherent(p)
+        self.assertIn('Selected comparisons',p['html'])
+        self.assertIn('data-section="measurement-values"',p['html'])
+        self.assertIn('data-section="source-times"',p['html'])
+        self.assertEqual(Decimal('24'),Decimal(p['summary']['total_kwh']))
+        self.assertEqual(Decimal('12'),Decimal(csv_facts(p)['comparisons.previous.baseline_kwh']))
+        self.assertLess(p['html'].index('Selected comparisons'),p['html'].index(p['snapshot_id']))
 
     async def test_log_runtime_retention_context_stays_in_complete_column(self):
         class Store:
@@ -99,7 +117,7 @@ class MailLayoutTest(unittest.IsolatedAsyncioTestCase):
         class Store:
             async def async_get_digest_state(self,*args):return {}
         with patch.object(c,'async_get_energy_usage',side_effect=usage):
-            for kind in ('log_digest','energy_report'):
+            for kind in ('log_digest',):
                 payload=await c.async_build_report_payload(hass,Store(),kind=kind,cadence='daily',now=now,
                     window_start=start,window_end=end,report_timezone='America/New_York',
                     period_semantics='previous_completed_calendar_period')
@@ -112,10 +130,27 @@ class MailLayoutTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(end.isoformat(),payload['summary']['period']['to'])
                 self.assertIn('Czas techniczny UTC',payload['body'])
                 self.assertTrue(payload['body'].endswith('Wygenerowano przez HA Tools Email'))
-                if kind=='energy_report':
-                    self.assertEqual('America/New_York',payload['summary']['visualization']['timezone'])
-                else:
-                    self.assertTrue(payload['subject'].startswith('HA Log Digest – dzienny'))
+                self.assertTrue(payload['subject'].startswith('HA Log Digest – dzienny'))
+        from tests.helper_composer_schema2 import ComposerFixture,csv_facts,service
+        import importlib
+        scheduler=importlib.import_module(service.__package__+'.scheduler')
+        invalid=ComposerFixture(now,measurement_zone='Europe/Warsaw',language='pl')
+        with invalid.patches(),self.assertRaisesRegex(ValueError,'invalid_report_calendar_boundaries'):
+            await invalid.compose(start=start,end=end,report_zone='America/New_York')
+        self.assertEqual([],invalid.statistics_calls)
+        # This old NY calendar claim had Warsaw-midnight bounds. Keep it rejected
+        # and resolve the actual selected-zone calendar for the positive case.
+        a,b=scheduler.calendar_report_window({'cadence':'daily','timezone':'America/New_York'},now)
+        fx=ComposerFixture(now,measurement_zone='Europe/Warsaw',display_zone='Europe/Warsaw',language='pl')
+        with fx.patches():payload=await fx.compose(start=a,end=b,report_zone='America/New_York')
+        self.assert_schema2_coherent(payload,polish=True)
+        self.assertEqual('America/New_York',fx.snapshot['chart']['timezone'])
+        self.assertEqual(a.isoformat(),payload['summary']['period']['from'])
+        self.assertEqual(b.isoformat(),payload['summary']['period']['to'])
+        stamp='18 paź 2026 01:03:00 +0200 [Europe/Warsaw]'
+        self.assertEqual(stamp,csv_facts(payload)['generated_at'])
+        self.assertIn(stamp,payload['body']);self.assertIn(stamp,payload['html'])
+        self.assertIn('Okres raportu',payload['body'])
 
     async def test_polish_dst_fold_keeps_same_wall_clock_with_distinct_offsets(self):
         presentation=c._presentation('pl','Europe/Warsaw')

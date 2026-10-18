@@ -226,68 +226,73 @@ class MailChartSpecification(unittest.TestCase):
           {k:v for k,v in payload['summary'].items() if k != 'visualization'})
 
     def test_async_tariff_fields_and_zone_breakdown_unchanged_fixture(self):
-        start = NOW - timedelta(hours=2)
-        buckets = series(start, 2)
-        cost_rows = [{**r,'energyCost':r['kwh']*.5,'variableCost':r['kwh']*.2,
-                      'energyRate':.5,'variableRate':.2,'zone':'flat','zones':['flat'],
-                      'zoneAttribution':'single'} for r in buckets]
-        costs = {'complete':True,'issues':[],'rows':cost_rows,'currency':'PLN','priceBasis':'gross',
-                 'energyCost':1.5,'variableCost':.6000000000000001,'usageCost':2.1,'fixedMonthly':99}
-        class Storage:
-            async def async_get_tariff(self): return {'profile':{'schema':1}}
-        async def snapshot(*args):
-            return {'status':'ready','source_ids':['sensor.grid'], 'hourly_buckets':buckets,
-                    'devices':[{'name':'Meter','entity_id':'sensor.grid','kwh':3}]}
-        package_module = ModuleType('chart_fixture_pkg')
-        package_module.__path__ = []
-        tariff_module = ModuleType('chart_fixture_pkg.tariff')
-        tariff_module.price_measurements = lambda *args, **kwargs: copy.deepcopy(costs)
-        hass = SimpleNamespace(data={'ha_tools_email':{'storage':Storage()}},
-                               config=SimpleNamespace(currency='PLN',time_zone='Europe/Warsaw',
-                                                      external_url='https://ha.example.test'))
-        with patch.object(c, '__package__', 'chart_fixture_pkg'), patch.object(c, 'async_get_energy_usage', snapshot), \
-             patch.dict(sys.modules, {'chart_fixture_pkg':package_module, 'chart_fixture_pkg.tariff':tariff_module}):
-            payload = asyncio.run(c.async_build_energy_report_payload(hass,cadence='daily',
-                                     window_start=start,window_end=NOW))
-        s = payload['summary']
-        for key in ['energyCost','variableCost','usageCost','fixedMonthly','priceBasis']:
-            self.assertEqual(costs[key], s[key])
-        self.assertEqual(2.1, s['total_cost'])
-        self.assertEqual([{'zone':'flat','zones':['flat'],'zoneAttribution':'single','kwh':3,
-                          'energyRate':.5,'variableRate':.2,'energyCost':1.5,
-                          'variableCost':.6000000000000001,'usageCost':2.1}], s['zoneBreakdown'])
-        self.assertEqual([1,2],[r['value'] for r in chart(s['visualization'],'energy-usage')['rows']])
-        self.assertIn('Fixed monthly fee: 99.00 PLN', payload['body'])
-        self.assertIn('https://ha.example.test/energy',payload['body'])
-        self.assertEqual(1,payload['body'].count('Static chart data'))
+        from decimal import Decimal
+        from tests.helper_composer_schema2 import ComposerFixture,schema2_book,csv_facts
+        from tests import test_tariff_profile as tariff_fixture
+        start=NOW-timedelta(hours=24)
+        def points(a,b,ids):
+            return {'sensor.grid':[{'start':(a+timedelta(hours=i)).timestamp(),
+                'change':1 if a+timedelta(hours=i)==NOW-timedelta(hours=2) else
+                         2 if a+timedelta(hours=i)==NOW-timedelta(hours=1) else 0}
+                for i in range(int((b-a).total_seconds()/3600))]}
+        profile=tariff_fixture.profile(currency='PLN',timezone='Europe/Warsaw',fixedMonthly=99,
+            zones=[{'id':'flat','energyRate':.5,'variableRate':.2}],defaultZone='flat')
+        fx=ComposerFixture(NOW,points=points,book=schema2_book(profile),measurement_zone='Europe/Warsaw')
+        with fx.patches():payload=asyncio.run(fx.compose())
+        s=payload['summary'];snapshot=fx.snapshot
+        self.assertEqual('1.50',s['totals']['energy_cost'])
+        self.assertEqual('0.60',s['totals']['variable_cost'])
+        self.assertEqual('2.10',s['totals']['usage_cost'])
+        self.assertEqual(99,snapshot['rates'][0]['fixed_monthly']['subscription'])
+        self.assertEqual('gross',s['totals']['price_basis'])
+        self.assertEqual('3.19',s['totals']['fixed_cost'])
+        self.assertEqual('5.29',s['total_cost'])
+        bins=s['chart']['bins'];self.assertEqual(24,len(bins))
+        self.assertEqual([Decimal('1'),Decimal('2')],[Decimal(row['kwh']) for row in bins[-2:]])
+        self.assertTrue(all(Decimal(row['kwh'])==0 for row in bins[:-2]))
+        zones=[row['zone_breakdown']['zones'][0] for row in bins[-2:]]
+        self.assertEqual(['flat','flat'],[row['zone_id'] for row in zones])
+        self.assertEqual(Decimal('3'),sum((Decimal(row['kwh']) for row in zones),Decimal(0)))
+        self.assertEqual(Decimal('1.50'),sum((Decimal(row['energy_cost']) for row in zones),Decimal(0)))
+        self.assertEqual(Decimal('0.60'),sum((Decimal(row['variable_cost']) for row in zones),Decimal(0)))
+        self.assertEqual('2.10',csv_facts(payload)['totals.usage_cost'])
+        self.assertIn('99',payload['body']);self.assertIn('PLN',payload['body'])
+        self.assertIn('data-section="measurement-values"',payload['html'])
+        self.assertNotIn('<script',payload['html'])
+        # Preserve optional URL/static-chart-footer behavior on the remaining
+        # pure formatter; it is not the current schema2 async report engine.
+        pure=c.build_energy_report_payload(fx.adapter_reads[0]['result']['devices'],
+            cadence='daily',interactive_url=m.safe_energy_url('https://ha.example.test'),source_kind='grid')
+        self.assertIn('https://ha.example.test/energy',pure['body'])
+        self.assertEqual(1,pure['body'].count('Static chart data'))
 
     def test_calendar_chart_uses_report_timezone_without_changing_measured_totals(self):
-        start = datetime(2026, 10, 5, 4, tzinfo=timezone.utc)
-        end = datetime(2026, 10, 12, 4, tzinfo=timezone.utc)
-        buckets = [{**r, 'kwh': 1} for r in series(start, 168)]
-        async def snapshot(*args):
-            return {'status': 'ready', 'source_ids': ['sensor.grid'],
-                    'hourly_buckets': buckets, 'devices': [{'name': 'Grid', 'kwh': 168}]}
-        hass = SimpleNamespace(data={}, config=SimpleNamespace(currency='PLN', time_zone='Asia/Tokyo'))
-        with patch.object(c, 'async_get_energy_usage', snapshot):
-            payload = asyncio.run(c.async_build_energy_report_payload(hass, cadence='weekly',
-                window_start=start, window_end=end, report_timezone='America/New_York'))
-            old = asyncio.run(c.async_build_energy_report_payload(hass, cadence='weekly',
-                window_start=start, window_end=end))
-        model = payload['summary']['visualization']
-        self.assertEqual('America/New_York', model['timezone'])
-        rows = chart(model, 'energy-usage')['rows']
-        self.assertEqual(7, len(rows))
-        self.assertEqual([24] * 7, [r['hours'] for r in rows])
-        self.assertEqual([24] * 7, [r['value'] for r in rows])
-        self.assertTrue(all(r['complete'] for r in rows))
-        self.assertIn('2026-10-05', rows[0]['label'])
-        self.assertIn('America/New_York', payload['body'])
-        self.assertEqual('Asia/Tokyo', hass.config.time_zone)
-        self.assertEqual({k:v for k,v in old['summary'].items() if k not in {'visualization', 'comparison'}},
-                         {k:v for k,v in payload['summary'].items() if k not in {'visualization', 'comparison'}})
-        self.assertEqual('rolling_or_custom_window', old['summary']['comparison']['reason'])
-        self.assertEqual('incomplete_statistics', payload['summary']['comparison']['reason'])
+        from decimal import Decimal
+        from tests.helper_composer_schema2 import ComposerFixture
+        start=datetime(2026,10,5,4,tzinfo=timezone.utc)
+        end=datetime(2026,10,12,4,tzinfo=timezone.utc)
+        def points(a,b,ids):
+            return {'sensor.grid':[{'start':(a+timedelta(hours=i)).timestamp(),'change':1}
+                for i in range(int((b-a).total_seconds()/3600))
+                if start<=a+timedelta(hours=i)<end]}
+        fx=ComposerFixture(end,measurement_zone='Asia/Tokyo',points=points)
+        with fx.patches():
+            payload=asyncio.run(fx.compose('weekly',start=start,end=end,report_zone='America/New_York'))
+            prior=asyncio.run(fx.compose('weekly',rolling=True))
+        model=payload['summary']['chart'];rows=model['bins']
+        self.assertEqual('America/New_York',model['timezone'])
+        self.assertEqual(7,len(rows))
+        self.assertEqual([86400]*7,[row['expected_seconds'] for row in rows])
+        self.assertEqual([Decimal('24')]*7,[Decimal(row['kwh']) for row in rows])
+        self.assertTrue(all(row['complete'] for row in rows))
+        self.assertEqual('2026-10-05T00:00:00-04:00',rows[0]['local_start'])
+        self.assertEqual('Asia/Tokyo',fx.h.hass.config.time_zone)
+        self.assertEqual(payload['summary']['totals'],prior['summary']['totals'])
+        self.assertEqual(payload['summary']['coverage'],prior['summary']['coverage'])
+        self.assertEqual(Decimal('168'),Decimal(payload['summary']['total_kwh']))
+        self.assertEqual('rolling_or_custom_window',prior['summary']['comparison']['reason'])
+        self.assertEqual('incomplete_statistics',payload['summary']['comparisons']['previous']['reason'])
+        self.assertEqual('unknown',payload['summary']['comparisons']['previous']['status'])
 
 if __name__ == '__main__':
     unittest.main()

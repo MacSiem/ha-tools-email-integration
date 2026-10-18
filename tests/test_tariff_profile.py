@@ -224,56 +224,44 @@ def load_composer():
 class TariffComposerTest(unittest.IsolatedAsyncioTestCase):
     async def compose(self, p, *, gap=False, bad=False):
         from datetime import datetime, timedelta, timezone
-        composer, package = load_composer()
-        end = datetime(2026, 1, 2, tzinfo=timezone.utc)
-        start = end - timedelta(days=1)
-        # 20 kWh in one cheap hour; 1 kWh in each other hour. An average
-        # tariff times period usage gives a different result from measured cost.
-        points = [{'start': (start + timedelta(hours=i)).timestamp(),
-                   'change': (True if bad and i == 4 else 20 if i == 3 else 1)}
-                  for i in range(24) if not (gap and i == 8)]
-        stats = types.ModuleType('homeassistant.components.recorder.statistics')
-        stats.get_metadata = lambda *a, **kw: {'sensor.grid': (1, {'has_sum': True, 'unit_of_measurement': 'kWh', 'unit_class': 'energy'})}
-        stats.statistics_during_period = lambda *a, **kw: {'sensor.grid': points}
-        class Recorder:
-            async def async_add_executor_job(self, fn, *a, **kw):
-                return fn(*a, **kw)
-        util = types.ModuleType('homeassistant.components.recorder.util')
-        util.get_instance = lambda hass: Recorder()
-        energy = types.ModuleType('homeassistant.components.energy.data')
-        async def manager(hass):
-            return types.SimpleNamespace(data={'energy_sources': [{'type': 'grid', 'stat_energy_from': 'sensor.grid'}]})
-        energy.async_get_manager = manager
-        class Storage:
-            async def async_get_tariff(self):
-                return {'profile': p, 'revision': 1, 'updated_at': None}
-        hass = types.SimpleNamespace(data={'ha_tools_email': {'storage': Storage()}},
-                                     states={}, config=types.SimpleNamespace(currency='PLN'))
-        with patch.dict(sys.modules, {package.__name__: package, package.__name__ + '.tariff': tariff,
-                                      stats.__name__: stats, util.__name__: util, energy.__name__: energy}):
-            return await composer.async_build_energy_report_payload(hass, cadence='daily', now=end)
+        from tests.helper_composer_schema2 import ComposerFixture,schema2_book
+        end=datetime(2026,1,2,tzinfo=timezone.utc);start=end-timedelta(days=1)
+        points=[{'start':(start+timedelta(hours=i)).timestamp(),
+            'change':True if bad and i==4 else 20 if i==3 else 1}
+            for i in range(24) if not (gap and i==8)]
+        fx=ComposerFixture(end,points=lambda a,b,ids:{'sensor.grid':points},book=schema2_book(p))
+        self.last_fixture=fx
+        with fx.patches():return await fx.compose()
 
     async def test_actual_hourly_cost_and_separate_fixed_fee(self):
-        payload = await self.compose(profile(rules=[OVERNIGHT]))
-        s = payload['summary']
-        self.assertEqual(43, s['total_kwh'])
-        self.assertAlmostEqual(26.8, s['energyCost'])
-        self.assertAlmostEqual(26.8, s['usageCost'])
-        self.assertEqual(7, s['fixedMonthly'])
-        self.assertEqual('EUR', s['currency'])
-        self.assertEqual({'night', 'day'}, {z['zone'] for z in s['zoneBreakdown']})
-        self.assertIn('26.80 EUR', payload['body'])
-        self.assertNotIn('hourly_buckets', s)
+        from decimal import Decimal
+        payload=await self.compose(profile(rules=[OVERNIGHT]));s=payload['summary'];facts=self.last_fixture.snapshot
+        self.assertEqual(Decimal('43'),Decimal(s['total_kwh']))
+        self.assertEqual(Decimal('26.80'),Decimal(s['totals']['energy_cost']))
+        self.assertEqual(Decimal('26.80'),Decimal(s['totals']['usage_cost']))
+        self.assertEqual(7,facts['rates'][0]['fixed_monthly']['subscription'])
+        self.assertEqual('0.23',s['totals']['fixed_cost'])
+        self.assertEqual('27.03',s['totals']['total_cost'])
+        self.assertEqual('EUR',s['currency'])
+        self.assertEqual({'night','day'},{zone['zone_id'] for row in facts['chart']['bins']
+            for zone in row['zone_breakdown']['zones']})
+        self.assertIn('26.80',payload['body']);self.assertIn('EUR',payload['body'])
+        self.assertNotIn('hourly_buckets',s)
+        self.assertEqual(1,len(self.last_fixture.statistics_calls))
 
     async def test_missing_invalid_profile_and_incomplete_measurements(self):
-        s = (await self.compose(None))['summary']
-        self.assertNotIn('energyCost', s)
-        self.assertIsNone(s['total_cost'])
-        for p, kwargs in (({'schema': 0}, {}), (profile(), {'gap': True}), (profile(), {'bad': True})):
-            s = (await self.compose(p, **kwargs))['summary']
-            self.assertFalse(s['tariff_complete'])
-            self.assertIsNone(s['energyCost'])
-            self.assertIsNone(s['usageCost'])
+        missing=await self.compose(None);s=missing['summary']
+        self.assertEqual('not_configured',self.last_fixture.snapshot['pricing_status'])
+        self.assertIsNone(s['totals']['energy_cost']);self.assertIsNone(s['total_cost'])
+        with self.assertRaises(ValueError):await self.compose({'schema':0})
+        self.assertEqual([],self.last_fixture.statistics_calls)
+        for kwargs in ({'gap':True},{'bad':True}):
+            with self.subTest(kwargs=kwargs):
+                s=(await self.compose(profile(),**kwargs))['summary']
+                self.assertFalse(s['totals']['pricing_complete'])
+                self.assertIsNone(s['totals']['energy_cost'])
+                self.assertIsNone(s['totals']['usage_cost'])
+                self.assertEqual(23,self.last_fixture.adapter_reads[0]['result']['coverage']['measured_source_hours'])
 
 
 def load_websocket():

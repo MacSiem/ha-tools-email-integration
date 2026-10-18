@@ -24,13 +24,23 @@ class SharedTariffCases(unittest.TestCase):
 
 class SharedZoneReportTest(unittest.IsolatedAsyncioTestCase):
     async def test_report_keeps_multiple_zones_without_apportioning_reading(self):
-        import test_tariff_profile as fixtures
-        case = next(c for c in CASES if c['name'].startswith('same price'))
-        payload = await fixtures.TariffComposerTest.compose(self, case['profile'])
-        summary = payload['summary']
-        self.assertTrue(summary['tariff_complete'])
-        self.assertEqual(summary['energyCost'], 43)
-        mixed = next(z for z in summary['zoneBreakdown'] if z['zone'] is None)
-        self.assertEqual(mixed['zones'], ['day', 'night'])
-        self.assertEqual(mixed['zoneAttribution'], 'multiple')
-        self.assertEqual(mixed['kwh'], 1)
+        from decimal import Decimal
+        from tests import test_tariff_profile as fixtures
+        case=next(c for c in CASES if c['name'].startswith('same price'))
+        payload=await fixtures.TariffComposerTest.compose(self,case['profile'])
+        snapshot=self.last_fixture.snapshot
+        self.assertTrue(snapshot['totals']['pricing_complete'])
+        self.assertEqual(Decimal('43'),Decimal(snapshot['totals']['energy_cost']))
+        mixed=next(row for row in snapshot['chart']['bins'] if
+            'multiple_zones_in_measurement' in row['zone_breakdown']['unattributed']['reasons'])
+        self.assertEqual(Decimal('1'),Decimal(mixed['zone_breakdown']['unattributed']['recorded_kwh']))
+        self.assertEqual([],mixed['zone_breakdown']['zones'])
+        self.assertEqual('1.00',mixed['usage_cost'])
+        self.assertTrue(mixed['zone_breakdown']['reconciles_known_costs'])
+        # Original selector proof retains the exact multiple-zone identities;
+        # the authoritative period refuses to allocate the hour to either zone.
+        original=tariff.EnergyTariff(case['profile']).price_buckets(case['rows'])
+        self.assertIsNone(original['rows'][0]['zone'])
+        self.assertEqual(['day','night'],original['rows'][0]['zones'])
+        self.assertEqual('multiple',original['rows'][0]['zoneAttribution'])
+        self.assertEqual(payload['snapshot_id'],snapshot['snapshot_id'])

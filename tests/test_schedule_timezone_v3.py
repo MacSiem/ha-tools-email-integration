@@ -5,6 +5,7 @@ Only HA boundaries are stubbed. Run through the owner's FIFO after integration.
 import asyncio
 import copy
 from datetime import datetime, timedelta, timezone
+import importlib
 import importlib.util
 from pathlib import Path
 import sys
@@ -300,7 +301,11 @@ def load_websocket(testcase):
     vol = types.ModuleType('voluptuous')
     vol.Required = vol.Optional = lambda key, **kw: key
     vol.Any = vol.All = vol.In = vol.Range = lambda *a, **kw: object()
+    # Share the exact ReportWindow class used by the actual analysis service.
+    service_module = importlib.import_module('tests.test_energy_analysis_service').service
+    report_window = importlib.import_module(service_module.__package__ + '.report_window')
     modules = {package.__name__: package, package.__name__ + '.storage': mod,
+                                  package.__name__ + '.report_window': report_window,
                                   package.__name__ + '.tariff': mod._tariff_test_module,
                                   core.__name__: core, components.__name__: components,
                                   ws.__name__: ws, vol.__name__: vol}
@@ -313,24 +318,87 @@ def load_websocket(testcase):
     return module
 
 
+def authorized_report_harness(testcase, ws, *, now=NOW, storage=None, usage_value=None):
+    """Real configured service/provider/model/renderer, trusted user, fake IO only.
+
+    Keep one ReportWindow class across package-based fixture loaders; do not
+    rewrite IDs or replace authorization, composition or monetary calculations.
+    """
+    support = importlib.import_module('tests.test_energy_analysis_service')
+    h = support.Harness()
+    h.now = now
+    h.user.id = 'fixture-admin'
+    h.user.is_admin = True
+    async def authenticated_user(user_id):
+        if h.on_auth:
+            h.on_auth()
+        return h.user if user_id == h.user.id else None
+    h.hass.auth.async_get_user = authenticated_user
+    if storage is not None:
+        old = h.storage
+        # Actual durable storage still owns schedules/history/revision counters.
+        # The tariff book and policy are external inputs to this bounded harness.
+        async def tariff_book():
+            value = await old.async_get_tariff_book()
+            return {**value, 'revision': storage.current_tariff_revision}
+        async def policy():
+            value = await old.async_get_feature_access()
+            return {**value, 'revision': storage.current_feature_access_revision}
+        for name, method in [('async_get_tariff_book', tariff_book),
+                             ('async_get_feature_access', policy)]:
+            boundary = patch.object(storage, name, method)
+            boundary.start(); testcase.addCleanup(boundary.stop)
+        h.storage = storage
+        h.coordinator.storage = storage
+        h.subject.storage = storage
+        h.hass.data['ha_tools_email']['storage'] = storage
+    h.hass.config.currency = 'PLN'
+    h.hass.config.language = 'en'
+    h.hass.config.external_url = None
+    h.hass.config.internal_url = None
+    h.hass.states = types.SimpleNamespace(get=lambda key: None)
+    h.hass.commands = []
+    async def executor(fn, *args):
+        return fn(*args)
+    h.hass.async_add_executor_job = executor
+    # Service does not use composer for prices, but its module graph must retain
+    # package-safe imports when a renderer/composer asks for adjacent helpers.
+    if usage_value is not None:
+        readings = importlib.import_module('tests.test_energy_weighted_comparison').readings
+        async def usage(hass, sensors, start, end, cadence, *, metadata):
+            ids = tuple(row['entity_id'] for row in sensors)
+            h.queries.append((ids, start, end))
+            return readings(start.isoformat(), end.isoformat(), sources=ids, value=usage_value)
+        h.usage = usage
+    stack = h.patches()
+    stack.enter_context(patch.object(support.composer, '__package__', support.service.__package__))
+    testcase.addCleanup(stack.close)
+    return h
+
+
 class ReadonlyAPITests(unittest.IsolatedAsyncioTestCase):
     async def test_unconfirmed_schedule_write_is_safe_error_without_reload_or_ack(self):
         from unittest.mock import AsyncMock
         ws = load_websocket(self)
         _, s = store()
         s._store.swallowed_failure = True
-        hass = types.SimpleNamespace(data={'ha_tools_email': {'storage': s}},
-                                     bus=types.SimpleNamespace(async_fire=Mock()))
+        h = authorized_report_harness(self, ws, storage=s)
+        hass = h.hass
+        hass.bus = types.SimpleNamespace(async_fire=Mock())
         results, errors = [], []
-        conn = types.SimpleNamespace(user=types.SimpleNamespace(is_admin=True),
+        conn = types.SimpleNamespace(user=h.user,
                                     send_result=lambda *a: results.append(a),
                                     send_error=lambda *a: errors.append(a))
-        with patch.object(ws, 'async_reload_schedules', new=AsyncMock()) as reload:
+        with patch.object(ws, 'async_reload_schedules', new=AsyncMock()) as reload, \
+             patch.object(s, 'async_upsert_schedule', wraps=s.async_upsert_schedule) as write:
             await ws._ws_set_schedule(hass, conn, {'id': 1, 'schedule': schedule()})
         self.assertEqual([], results)
         self.assertEqual('storage_write_failed', errors[0][1])
         self.assertNotIn('synthetic lower', str(errors))
         reload.assert_not_awaited()
+        write.assert_awaited_once()
+        self.assertEqual(h.user.id, write.await_args.kwargs['author_user_id'])
+        hass.bus.async_fire.assert_not_called()
 
     async def test_actual_list_metadata_and_preview_zero_writes_sends(self):
         ws = load_websocket(self)
