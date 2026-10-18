@@ -83,3 +83,19 @@ class FeatureTariffWebsocketTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], storage._store.saved)
         self.assertEqual([], results)
         self.assertEqual('unauthorized', errors[-1][1])
+
+    async def test_policy_store_io_failure_is_a_safe_denial_before_tariff_access(self):
+        ws, hass, storage, lane, conn, results, errors = self.fixture()
+        async def fail():
+            raise OSError('PRIVATE policy storage path')
+        storage.async_get_feature_access = fail
+        for handler, msg in ((ws._ws_get_tariff, {'id': 1}),
+                              (ws._ws_set_tariff, {'id': 2, 'profile': profile(), 'expected_revision': 0}),
+                              (ws._ws_get_tariff_book, {'id': 3}),
+                              (ws._ws_energy_price_queries, {'id': 4, 'queries': []})):
+            await handler(hass, conn, msg)
+        self.assertEqual([], results)
+        self.assertEqual(4, len(errors))
+        self.assertTrue(all(error[1] == 'unauthorized' for error in errors))
+        self.assertNotIn('PRIVATE', repr(errors))
+        self.assertEqual([], storage._store.saved)
