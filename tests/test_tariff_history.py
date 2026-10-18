@@ -60,6 +60,36 @@ def price(b=None, start='2026-01-01T00:00Z', end='2026-01-01T01:00Z', kwh=1, cov
 
 
 class TariffHistoryTest(unittest.TestCase):
+    def test_mixed_legacy_components_round_known_parts_once_then_sum(self):
+        a = version(rate=.005, rate_semantics='legacy_combined')
+        b = version('2026-01-02', .005, 'b')
+        b['profile']['zones'][0]['variableRate'] = .005
+        result = price(book([a, b]), start='2026-01-01T23:00Z', end='2026-01-02T01:00Z')
+        self.assertEqual({'energy_cost': '0.01', 'variable_cost': '0.01',
+                          'legacy_combined_cost': '0.01'}, result['known_costs'])
+        self.assertEqual('0.03', result['usage_cost'])
+        self.assertIsNone(result['energy_cost'])
+        self.assertIsNone(result['total_cost'])
+
+    def test_conflicting_embedded_validity_is_rejected_before_pricing(self):
+        v = version()
+        v['profile']['validTo'] = '2026-01-01'
+        with self.assertRaises(history.TariffValidationError):
+            history.validate_tariff_book(book([v]))
+
+    def test_migrated_fixed_clock_keeps_schema1_validity_instants(self):
+        p = profile(timezone='Europe/Warsaw', clock={'mode': 'fixed', 'offsetMinutes': 0},
+                    validFrom='2026-01-01', validTo='2026-01-01')
+        migrated = history.migrate_tariff_v1(p, legacy_combined=False)
+        for start, end, available in [('2025-12-31T23:00Z', '2026-01-01T00:00Z', False),
+                                      ('2026-01-01T23:00Z', '2026-01-02T00:00Z', True)]:
+            with self.subTest(start=start):
+                result = price(migrated, start=start, end=end)
+                self.assertEqual(available, result['rows'][0]['available'])
+                original = engine.EnergyTariff(p).price_bucket({'from': start, 'to': end, 'kwh': 1})
+                self.assertEqual(original['available'], result['rows'][0]['available'])
+        self.assertEqual(p, migrated['source_schema1'])
+
     def test_rate_details_are_frozen_with_the_priced_result(self):
         b = book([version(monthly=31)])
         p = b['tariffs'][0]['versions'][0]['profile']
