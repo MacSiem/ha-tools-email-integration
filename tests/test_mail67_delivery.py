@@ -293,7 +293,7 @@ class ActualDeliveryTest(unittest.IsolatedAsyncioTestCase):
                 recipients=[],now=h.now,actor='real-admin',schedule_id='s',expected_schedule=expected)
         self.assertEqual(['smtp_load','schedule_reread','native_validation'],events)
         self.assertEqual('accepted_by_smtp',result['status'])
-        self.assertEqual({'smtp_config':1,'schedule_read':1,'private_queries':2,'sent':1},
+        self.assertEqual({'smtp_config':1,'schedule_read':1,'private_queries':4,'sent':1},
             {'smtp_config':h.hass.data[service.DOMAIN]['load_config'].await_count,
              'schedule_read':h.storage.async_get_schedule.await_count,'private_queries':len(h.queries),'sent':len(sent)})
 

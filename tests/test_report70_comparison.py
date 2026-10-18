@@ -82,7 +82,11 @@ class Report70ComparisonTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(('24.00','25.00','-1.00'),
             (costs['current']['total_cost'],costs['baseline']['total_cost'],costs['delta_total_cost']))
         self.assertIsNone(comparison['groups']['devices']['sensor.device']['delta_fixed_cost'])
-        self.assertTrue(comparison['chart']['reconciles_comparison_energy'])
+        chart = comparison['chart']
+        self.assertFalse(chart['reconciles_comparison_energy'])
+        self.assertEqual('partial', chart['status'])
+        self.assertEqual('incomplete_marker_mapping', chart['reason'])
+        self.assertTrue(any(row['status'] == 'unknown' for row in chart['markers']))
         self.assertEqual('Europe/Warsaw', report['context']['comparison_timezone'])
         self.assertEqual('UTC', report['context']['measurement_timezone'])
         self.assertEqual('daily', report['context']['comparison_calendar_kind'])
@@ -116,31 +120,37 @@ class Report70ComparisonTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(all(0 < (b-a).total_seconds() <= 168*3600 for _,a,b in h.queries))
 
     async def test_partial_common_mask_is_not_replaced_by_full_current_kpi(self):
-        h, _ = self.fixture('2026-01-03T12:00:00+00:00')
-        request = self.request(h)
-        original = h.usage
-        async def measured(*args, **kwargs):
-            snapshot = await original(*args, **kwargs)
-            if tuple(row['entity_id'] for row in args[1]) == ('sensor.grid',):
-                for row in snapshot['source_buckets']['sensor.grid']:
-                    if row['from'] == 1767308400000:  # Jan 1 23:00 UTC, baseline only
-                        row['kwh'] = None
-            return snapshot
-        h.usage = measured
-        with h.patches(): report = await self.prepare(h, request)
-        comparison = self.previous(report)
-        self.assertEqual(Decimal('240'), Decimal(report['summary']['total_kwh']))
-        self.assertEqual((230,230,0),tuple(comparison[key] for key in ('current_kwh','baseline_kwh','delta_kwh')))
-        self.assertEqual('common_measurements', comparison['comparison_scope'])
-        self.assertIsNone(comparison['full_baseline_kwh'])
-        self.assertEqual(240,comparison['full_current_kwh'])
-        self.assertEqual('230.00',comparison['costs']['current']['usage_cost'])
-        self.assertIsNone(comparison['costs']['current']['total_cost'])
-        device = comparison['groups']['devices']['sensor.device']
-        self.assertEqual('common_measurements',device['comparison_scope'])
-        self.assertEqual(Decimal('46'),Decimal(device['current_kwh']))
-        self.assertEqual(Decimal('48'),Decimal(device['own_current_kwh']))
-        self.assertIn('Common measurements only',report['html'])
+        for missing_device in (True, False):
+            with self.subTest(missing_device=missing_device):
+                h, _ = self.fixture('2026-01-03T12:00:00+00:00')
+                request = self.request(h)
+                original = h.usage
+                async def measured(*args, **kwargs):
+                    snapshot = await original(*args, **kwargs)
+                    ids = tuple(row['entity_id'] for row in args[1])
+                    if ids == ('sensor.grid',) or missing_device and ids == ('sensor.device',):
+                        for source_id in ids:
+                            for row in snapshot['source_buckets'][source_id]:
+                                if row['from'] == 1767308400000:  # Jan 1 23:00 UTC, baseline only
+                                    row['kwh'] = None
+                    return snapshot
+                h.usage = measured
+                with h.patches(): report = await self.prepare(h, request)
+                comparison = self.previous(report)
+                self.assertEqual(Decimal('240'), Decimal(report['summary']['total_kwh']))
+                self.assertEqual((230,230,0),tuple(comparison[key] for key in ('current_kwh','baseline_kwh','delta_kwh')))
+                self.assertEqual('common_measurements', comparison['comparison_scope'])
+                self.assertIsNone(comparison['full_baseline_kwh'])
+                self.assertEqual(240,comparison['full_current_kwh'])
+                self.assertEqual('230.00',comparison['costs']['current']['usage_cost'])
+                self.assertIsNone(comparison['costs']['current']['total_cost'])
+                device = comparison['groups']['devices']['sensor.device']
+                self.assertEqual('common_measurements' if missing_device else 'per_group_calendar_totals',device['comparison_scope'])
+                self.assertEqual(Decimal('46') if missing_device else Decimal('48'),Decimal(device['current_kwh']))
+                self.assertEqual(Decimal('48'),Decimal(device['own_current_kwh']))
+                if not missing_device:
+                    self.assertFalse(comparison['groups']['reconciles_household_delta'])
+                self.assertIn('Common measurements only',report['html'])
 
     async def test_zero_baseline_is_measured_zero_with_unknown_percentage(self):
         h, _ = self.fixture('2026-01-03T12:00:00+00:00')
