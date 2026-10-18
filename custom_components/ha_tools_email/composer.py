@@ -5,7 +5,7 @@ from __future__ import annotations
 from calendar import monthrange
 from datetime import datetime, timedelta, timezone
 from html import escape
-from math import isfinite
+from math import fsum, isfinite
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -921,7 +921,7 @@ def _calendar_comparison_window(
                       previous_local_start=previous_start.astimezone(zone).isoformat(),
                       previous_local_end=previous_end.astimezone(zone).isoformat(),
                       current_hours=current_hours, previous_hours=previous_hours,
-                      partial=partial, calendar_clamped=clamped)
+                      partial=partial, calendar_clamped=clamped, calendar_kind=cadence)
     # Recorder hourly changes cannot truthfully resolve half/quarter-hour boundaries.
     if any(bound.timestamp() % 3600 for bound in (previous_start, previous_end, start, end)):
         return {**comparison, "reason": "calendar_boundary_not_recorder_hour"}
@@ -930,6 +930,8 @@ def _calendar_comparison_window(
 
 def _compare_energy_snapshots(current, previous, comparison):
     """Only compare complete, same-source snapshots with explicit compatible provenance."""
+    if "source_buckets" in current or "source_buckets" in previous:
+        return _compare_source_intervals(current, previous, comparison)
     result = {**comparison, "status": "unknown", "reason": "incomplete_statistics",
               "delta_kwh": None, "percent": None}
 
@@ -971,6 +973,109 @@ def _compare_energy_snapshots(current, previous, comparison):
             "percent": percent if percent is not None and isfinite(percent) else None}
 
 
+def _compare_source_intervals(current, previous, comparison):
+    """Derive coverage from measured source hours, then compare the common mask.
+
+    Complete calendar totals retain their actual DST/month lengths. Incomplete
+    periods compare only matching local source hours, with no extrapolation.
+    """
+    result = {**comparison, "status": "unknown", "reason": "incomplete_statistics",
+              "current_kwh": None, "previous_kwh": None, "delta_kwh": None,
+              "percent": None, "full_current_kwh": None, "full_previous_kwh": None}
+    ids, prior_ids = current.get("source_ids"), previous.get("source_ids")
+    if any(not isinstance(value, list) or not value or len(value) > 256
+           or any(not isinstance(sid, str) or not sid for sid in value)
+           or len(set(value)) != len(value) for value in (ids, prior_ids)):
+        return result
+    if set(ids) != set(prior_ids):
+        return {**result, "reason": "source_set_changed"}
+    provenance, prior = current.get("measurement_provenance"), previous.get("measurement_provenance")
+    if (not isinstance(provenance, dict) or not isinstance(prior, dict)
+            or set(provenance) != set(ids) or provenance != prior
+            or any(not isinstance(provenance[sid], dict)
+                   or provenance[sid].get("method") != "recorder_hourly_change_v1"
+                   or provenance[sid].get("unit") != "kWh"
+                   or provenance[sid].get("source_unit") not in {"Wh", "kWh", "MWh"}
+                   or provenance[sid].get("has_sum") is not True
+                   or provenance[sid].get("unit_class") not in {None, "energy"} for sid in ids)):
+        return {**result, "reason": "measurement_provenance_unavailable_or_changed"}
+    try:
+        zone = ZoneInfo(comparison["timezone"])
+        grids = []
+        for prefix in ("current", "previous"):
+            start, end = (datetime.fromisoformat(comparison[f"{prefix}_{key}"]) for key in ("start", "end"))
+            if start.utcoffset() is None or end.utcoffset() is None:
+                return result
+            first, last = start.timestamp(), end.timestamp()
+            if first % 3600 or last % 3600 or not 0 < last - first <= 366 * 86400:
+                return result
+            origin = start.astimezone(zone).date()
+            grid = {}
+            for stamp in range(int(first), int(last), 3600):
+                local = datetime.fromtimestamp(stamp, zone)
+                day = ((local.month, local.day) if comparison.get("calendar_kind") == "yearly"
+                       else (local.date() - origin).days)
+                grid[stamp * 1000] = (day, local.hour, local.minute, local.fold)
+            grids.append(grid)
+        # Process one source at a time: memory is bounded by two calendar years,
+        # rather than a source-count by year matrix.
+        measured = [0, 0]
+        common_count = 0
+        totals, shared = [[], []], [[], []]
+        for sid in ids:
+            cells = []
+            for index, snapshot in enumerate((current, previous)):
+                buckets = snapshot.get("source_buckets")
+                rows = buckets.get(sid) if isinstance(buckets, dict) else None
+                if not isinstance(rows, list) or len(rows) > 10000:
+                    return result
+                seen, valid = set(), {}
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    stamp, stop, value = row.get("from"), row.get("to"), row.get("kwh")
+                    if type(stamp) not in (int, float) or stamp not in grids[index]:
+                        continue
+                    key = grids[index][stamp]
+                    if stamp in seen:
+                        valid.pop(key, None)
+                        continue
+                    seen.add(stamp)
+                    if (type(stop) in (int, float) and stop == stamp + 3600000
+                            and type(value) in (int, float) and isfinite(value) and value >= 0):
+                        valid[key] = value
+                measured[index] += len(valid)
+                totals[index].append(fsum(valid.values()))
+                cells.append(valid)
+            common = cells[0].keys() & cells[1].keys()
+            common_count += len(common)
+            for index in (0, 1):
+                shared[index].append(fsum(cells[index][key] for key in common))
+        expected = [len(grid) * len(ids) for grid in grids]
+        coverage = {"current": measured[0] / expected[0], "previous": measured[1] / expected[1],
+                    "common_current": common_count / expected[0], "common_previous": common_count / expected[1],
+                    "expected_current_seconds": expected[0] * 3600,
+                    "expected_previous_seconds": expected[1] * 3600}
+        full = [fsum(totals[i]) if measured[i] == expected[i] else None for i in (0, 1)]
+        result.update(coverage=coverage, full_current_kwh=full[0], full_previous_kwh=full[1],
+                      previous_kwh=full[1])
+        complete = all(value is not None for value in full)
+        if not complete and any(coverage[key] < .9 for key in
+                               ("current", "previous", "common_current", "common_previous")):
+            return result
+        values = full if complete else [fsum(values) for values in shared]
+        delta = values[0] - values[1]
+        percent = delta / values[1] * 100 if values[1] else None
+        if any(not isfinite(value) for value in (*values, delta)):
+            return result
+        return {**result, "status": "ready", "reason": None,
+                "comparison_scope": "calendar_totals" if complete else "common_measurements",
+                "current_kwh": values[0], "previous_kwh": values[1], "delta_kwh": delta,
+                "percent": percent if percent is not None and isfinite(percent) else None}
+    except (KeyError, TypeError, ValueError, OverflowError, ZoneInfoNotFoundError):
+        return result
+
+
 def _energy_comparison_lines(comparison, presentation=None):
     presentation = presentation or _presentation()
     lines = []
@@ -983,9 +1088,15 @@ def _energy_comparison_lines(comparison, presentation=None):
             f"Previous: [{bound('previous_start')} → {bound('previous_end')}); "
             f"{comparison['previous_hours']:g} elapsed hours. Timezone: {comparison['timezone']}. "
             f"Display timezone: {presentation['zone']}.",
-            "Calendar-period totals; unequal month or DST lengths are not normalized. "
+            ("Common measured source hours only; missing readings are not extrapolated. "
+             if comparison.get("comparison_scope") == "common_measurements" else
+             "Calendar-period totals; unequal month or DST lengths are not normalized. ") +
             "Both periods use the current configured grid sources; historical configuration is not reconstructed.",
         ])
+    coverage = comparison.get("coverage")
+    if isinstance(coverage, dict):
+        lines.append(f"Measured coverage: current {coverage['current']:.1%}, previous {coverage['previous']:.1%}; "
+                     f"common hours {coverage['common_current']:.1%} / {coverage['common_previous']:.1%}.")
     previous = comparison.get("previous_kwh")
     lines.append(f"Previous measured grid import: {previous:.2f} kWh." if previous is not None
                  else "Previous measured grid import: Unknown.")
@@ -996,10 +1107,10 @@ def _energy_comparison_lines(comparison, presentation=None):
         lines.append(f"Change in grid import: {comparison['delta_kwh']:+.2f} kWh; {percent_text}.")
     else:
         reason = {
-            "rolling_or_custom_window": "comparison requires a complete local calendar day, ISO week or month",
+            "rolling_or_custom_window": "comparison requires an aligned local calendar day, ISO week, month or year",
             "report_timezone_unavailable": "report timezone is unavailable",
             "calendar_boundary_not_recorder_hour": "local calendar boundaries do not align with Recorder hours",
-            "incomplete_statistics": "complete statistics are unavailable for one or both periods",
+            "incomplete_statistics": "insufficient compatible measured hours (at least 90% common coverage required)",
             "source_set_changed": "the measured grid source sets differ",
             "measurement_provenance_unavailable_or_changed": "measurement provenance is unavailable or differs",
         }.get(comparison["reason"], "comparison is unavailable")
