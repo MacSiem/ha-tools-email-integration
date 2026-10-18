@@ -86,7 +86,9 @@ class Report70ComparisonTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(chart['reconciles_comparison_energy'])
         self.assertEqual('partial', chart['status'])
         self.assertEqual('incomplete_marker_mapping', chart['reason'])
-        self.assertTrue(any(row['status'] == 'unknown' for row in chart['markers']))
+        self.assertEqual(23, len(chart['markers']))
+        self.assertTrue(all(row['status'] == 'ready' for row in chart['markers']))
+        self.assertEqual(Decimal('11.5'), sum(Decimal(row['baseline_kwh']) for row in chart['markers']))
         self.assertEqual('Europe/Warsaw', report['context']['comparison_timezone'])
         self.assertEqual('UTC', report['context']['measurement_timezone'])
         self.assertEqual('daily', report['context']['comparison_calendar_kind'])
@@ -147,7 +149,11 @@ class Report70ComparisonTest(unittest.IsolatedAsyncioTestCase):
                 device = comparison['groups']['devices']['sensor.device']
                 self.assertEqual('common_measurements' if missing_device else 'per_group_calendar_totals',device['comparison_scope'])
                 self.assertEqual(Decimal('46') if missing_device else Decimal('48'),Decimal(device['current_kwh']))
-                self.assertEqual(Decimal('48'),Decimal(device['own_current_kwh']))
+                if missing_device:
+                    self.assertEqual(Decimal('48'),Decimal(device['own_current_kwh']))
+                else:
+                    self.assertEqual(Decimal('48'),Decimal(device['baseline_kwh']))
+                    self.assertEqual(Decimal('0'),Decimal(device['delta_kwh']))
                 if not missing_device:
                     self.assertFalse(comparison['groups']['reconciles_household_delta'])
                 self.assertIn('Common measurements only',report['html'])
