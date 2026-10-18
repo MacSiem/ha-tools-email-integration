@@ -21,6 +21,44 @@ def snapshot(kwh=24, sid='sensor.grid'):
 
 
 class CalendarComparisonTest(unittest.TestCase):
+    def test_partial_calendar_period_compares_matching_local_fragment(self):
+        cases = [
+            ('daily', '2026-10-18T00:00+02:00', '2026-10-18T12:00+02:00',
+             '2026-10-17T00:00:00+02:00', '2026-10-17T12:00:00+02:00', 12, 12),
+            ('weekly', '2026-10-12T00:00+02:00', '2026-10-17T12:00+02:00',
+             '2026-10-05T00:00:00+02:00', '2026-10-10T12:00:00+02:00', 132, 132),
+            ('monthly', '2026-10-01T00:00+02:00', '2026-10-18T12:00+02:00',
+             '2026-09-01T00:00:00+02:00', '2026-09-18T12:00:00+02:00', 420, 420),
+            ('daily', '2026-03-29T00:00+01:00', '2026-03-29T12:00+02:00',
+             '2026-03-28T00:00:00+01:00', '2026-03-28T12:00:00+01:00', 11, 12),
+            ('weekly', '2026-10-19T00:00+02:00', '2026-10-25T12:00+01:00',
+             '2026-10-12T00:00:00+02:00', '2026-10-18T12:00:00+02:00', 157, 156),
+            ('yearly', '2024-01-01T00:00+01:00', '2024-02-29T12:00+01:00',
+             '2023-01-01T00:00:00+01:00', '2023-02-28T12:00:00+01:00', 1428, 1404),
+        ]
+        for cadence, start, end, prior_start, prior_end, hours, prior_hours in cases:
+            with self.subTest(cadence=cadence, end=end):
+                result = c._calendar_comparison_window(cadence,
+                    datetime.fromisoformat(start), datetime.fromisoformat(end), 'Europe/Warsaw', True)
+                self.assertEqual('pending', result['status'],
+                                 'A current calendar fragment must have an equally aligned baseline')
+                self.assertTrue(result['partial'])
+                self.assertEqual(prior_start, result['previous_local_start'])
+                self.assertEqual(prior_end, result['previous_local_end'])
+                self.assertEqual(hours, result['current_hours'])
+                self.assertEqual(prior_hours, result['previous_hours'])
+
+    def test_partial_month_clamps_previous_fragment_to_its_actual_end(self):
+        result = c._calendar_comparison_window('monthly',
+            datetime.fromisoformat('2026-03-01T00:00+01:00'),
+            datetime.fromisoformat('2026-03-31T12:00+02:00'), 'Europe/Warsaw', True)
+        self.assertEqual('pending', result['status'])
+        self.assertTrue(result['calendar_clamped'])
+        self.assertEqual('2026-02-01T00:00:00+01:00', result['previous_local_start'])
+        self.assertEqual('2026-03-01T00:00:00+01:00', result['previous_local_end'])
+        self.assertEqual(731, result['current_hours'])
+        self.assertEqual(672, result['previous_hours'])
+
     def window(self, cadence, now, zone='UTC'):
         start, end = scheduler.calendar_report_window({'cadence': cadence}, now, local_timezone=zone)
         return start, end, c._calendar_comparison_window(cadence, start, end, zone, True)

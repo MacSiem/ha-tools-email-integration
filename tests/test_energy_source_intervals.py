@@ -8,7 +8,9 @@ import copy
 import unittest
 from unittest.mock import patch
 
-from tests.test_energy_grid_provider import EnergyGridProviderTest, composer
+from tests import test_energy_grid_provider as fixture
+
+composer = fixture.composer
 
 
 class EnergySourceIntervalsTest(unittest.TestCase):
@@ -24,7 +26,7 @@ class EnergySourceIntervalsTest(unittest.TestCase):
         prefs = {"energy_sources": [{"type": "grid", "stat_energy_from": sid}
                                     for sid in rows]}
         with patch.object(composer, "async_get_energy_usage", new=capture):
-            EnergyGridProviderTest().compose(prefs, rows, gap=gap, mutation=mutation)
+            fixture.EnergyGridProviderTest().compose(prefs, rows, gap=gap, mutation=mutation)
         self.assertIn("source_buckets", captured,
                       "Coverage/grouping needs actual normalized intervals for each source")
         return captured
