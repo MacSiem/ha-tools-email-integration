@@ -112,8 +112,8 @@ class EnergyReportTest(unittest.TestCase):
         result = self.render(language='pl', timezone_name='America/Los_Angeles', hour_cycle='12')
         rows = self.rows(result)
         self.assertEqual('241,00', rows['totals.total_cost']['value'])
-        self.assertEqual('2026-01-01', rows['rates.0.valid_from']['value'])
-        self.assertEqual('2026-10-10', rows['fees.days.0.day']['value'])
+        self.assertEqual('1 sty 2026', rows['rates.0.valid_from']['value'])
+        self.assertEqual('10 paź 2026', rows['fees.days.0.day']['value'])
         self.assertIn('09.10.2026 05:00:00 PM -0700', rows['period.start']['value'])
         self.assertEqual('Brak danych', rows['chart.bins.0.fixed_cost']['value'])
         self.assertIn('Niezmierzone', result['text'])
@@ -135,7 +135,7 @@ class EnergyReportTest(unittest.TestCase):
         self.assertIn('02:00:00 +0200', rows['rates.0.profile.dynamic.intervals.0.from']['value'])
         self.assertEqual('-0.123400', rows['rates.0.profile.dynamic.intervals.0.energyRate']['value'])
         self.assertEqual('02:00', rows['rates.0.profile.rules.0.intervals.0.from']['value'])
-        self.assertEqual('2026-10-25', rows['rates.0.profile.rules.0.dates.0']['value'])
+        self.assertEqual('Oct 25, 2026', rows['rates.0.profile.rules.0.dates.0']['value'])
         self.assertEqual('10-01', rows['rates.0.profile.rules.0.season.from']['value'])
 
     def test_historical_and_comparison_costs_keep_own_currencies_without_repricing(self):
@@ -220,3 +220,22 @@ class EnergyReportTest(unittest.TestCase):
         for kind in ('html', 'text', 'csv'):
             self.assertNotIn('access_purpose', result[kind])
             self.assertNotIn('private-operational-marker', result[kind])
+
+
+    def test_energy_decimal_and_legacy_monthly_fee_have_local_format_and_units(self):
+        self.snapshot['totals']['kwh']='-0.1250'
+        self.snapshot['rates'][0]['legacy_combined_monthly']='2.00'
+        result=self.render(language='pl');rows=self.rows(result)
+        self.assertEqual('-0,1250',rows['totals.kwh']['value'])
+        self.assertEqual('EUR/miesiąc',rows['rates.0.legacy_combined_monthly']['unit'])
+        self.assertIn('-0,1250',result['text']);self.assertIn('-0,1250',result['html'])
+        self.assertFalse(rows['totals.kwh']['value'].startswith("'"))
+
+    def test_readable_report_hides_implementation_paths_while_csv_keeps_source_columns(self):
+        result=self.render()
+        self.assertEqual('Jan 1, 2026',self.rows(result)['rates.0.valid_from']['value'])
+        for kind in ('html','text'):
+            self.assertNotIn('chart.bins.0',result[kind])
+            self.assertNotIn('rates.0.profile',result[kind])
+            self.assertNotIn('groups.devices.sensor.device.kwh',result[kind])
+        self.assertIn('chart.bins.0',result['csv'])
