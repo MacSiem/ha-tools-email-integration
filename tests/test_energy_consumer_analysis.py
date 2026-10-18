@@ -115,6 +115,32 @@ class ConsumerAnalysisTest(unittest.TestCase):
         self.add(builder, MID, END, 130, (100, 40, 10))
         self.assertEqual('120', builder.finish()['groups']['areas']['kitchen']['kwh'])
 
+    def test_mixed_legacy_and_component_versions_reconcile_known_parts_before_usage(self):
+        b = book([version(rate=.005, monthly=0)])
+        legacy = b['tariffs'][0]['versions'][0]
+        legacy['valid_from'] = '2025-12-31'
+        legacy['valid_to'] = '2026-01-02'
+        legacy['rate_semantics'] = 'legacy_combined'
+        legacy['fixed_monthly'] = dict.fromkeys(legacy['fixed_monthly'], None)
+        legacy['legacy_combined_monthly'] = 0
+        new = version(rate=.005, monthly=0)
+        new['id'] = 'new'; new['valid_from'] = '2026-01-02'
+        new['profile']['zones'][0]['variableRate'] = .005
+        b['tariffs'][0]['versions'].append(new)
+        base = fixtures.EnergyAnalysisTest().builder(b)
+        first, middle, last = '2026-01-01T23:00Z', '2026-01-02T00:00Z', '2026-01-02T01:00Z'
+        from datetime import datetime
+        builder = analysis.EnergyAnalysisAccumulator(b, {'start': first, 'end': last, 'timezone': 'UTC'},
+            base._context, generated_at=datetime.fromisoformat(last.replace('Z', '+00:00')),
+            consumers=CONSUMERS, membership=MEMBERSHIP)
+        self.add(builder, first, middle, 1, (1, 0, 0))
+        self.add(builder, middle, last, 1, (1, 0, 0))
+        result = builder.finish(); groups = result['groups']
+        self.assertEqual('0.03', result['totals']['usage_cost'])
+        self.assertEqual('0.03', groups['areas']['kitchen']['usage_cost'])
+        self.assertIsNone(groups['areas']['kitchen']['energy_cost'])
+        self.assertEqual('0.01', groups['areas']['kitchen']['known_costs']['energy_cost'])
+
     def test_negative_price_cents_and_unpriced_or_invalid_inputs(self):
         b = book([version(rate=-.005, monthly=0)])
         b['tariffs'][0]['versions'][0]['profile']['allowNegativeEnergy'] = True

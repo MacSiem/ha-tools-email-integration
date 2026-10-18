@@ -125,24 +125,27 @@ class ConsumerPeriod:
                 row['known_costs'][key] = _money(state['amounts'][key]) if compatible and state['priced'][key] else None
             output[sid] = row
         reconciled = False
-        if compatible and self._partition:
+        if compatible and self._partition and active['pricing_complete']:
+            allocated = {}
             for key in COMPONENTS:
-                if active.get(key) is not None and all(row[key] is not None for row in output.values()):
+                target = active['known_costs'].get(key)
+                if target is not None and any(state['priced'][key] for state in self._states.values()):
                     values = {sid: state['amounts'][key] for sid, state in self._states.items()}
-                    # A measured zero is never awarded a cent merely due to ID order.
-                    adjusted = _reconcile(values, Decimal(active[key]))
+                    adjusted = _reconcile(values, Decimal(target))
+                    allocated[key] = adjusted
                     for sid, value in adjusted.items():
-                        output[sid][key] = output[sid]['known_costs'][key] = value
+                        if output[sid][key] is not None:
+                            output[sid][key] = value
+                        if output[sid]['known_costs'][key] is not None:
+                            output[sid]['known_costs'][key] = value
                     reconciled = True
             if active.get('usage_cost') is not None and all(row['usage_cost'] is not None for row in output.values()):
-                if all(all(row[key] is not None for key in COMPONENTS) for row in output.values()):
-                    adjusted = {sid: _money(sum((Decimal(row[key]) for key in COMPONENTS), Decimal(0))) for sid, row in output.items()}
-                elif all(row['energy_cost'] is None and row['variable_cost'] is None
-                         and row['legacy_combined_cost'] is not None for row in output.values()):
-                    adjusted = {sid: row['legacy_combined_cost'] for sid, row in output.items()}
-                else:
-                    adjusted = _reconcile({sid: state['amounts']['usage_cost'] for sid, state in self._states.items()}, Decimal(active['usage_cost']))
-                for sid, value in adjusted.items():
+                # The household bill sums rounded components, including their
+                # known portions across legacy/new versions. Reconcile those
+                # portions first; rounding the combined usage a second time
+                # would produce a different bill at a version boundary.
+                for sid in output:
+                    value = _money(sum((Decimal(values[sid]) for values in allocated.values()), Decimal(0)))
                     output[sid]['usage_cost'] = output[sid]['known_costs']['usage_cost'] = value
                 reconciled = True
         areas, floors, unassigned = {}, {}, []
@@ -176,6 +179,7 @@ class ConsumerPeriod:
             return row
 
         return {**{key: value for key, value in self._membership.items() if key != 'sources'},
+                'registry_revision': self._membership['revision'],
                 'energy_domain': self._domain, 'partition_complete': self._partition,
                 'devices': devices, 'areas': {key: aggregate(ids) for key, ids in areas.items()},
                 'floors': {key: aggregate(ids) for key, ids in floors.items()},
