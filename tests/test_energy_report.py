@@ -36,6 +36,47 @@ class Markup(HTMLParser):
         self.cells.append(data)
 
 
+
+class ReportNode:
+    def __init__(self, tag='', attrs=()):
+        self.tag, self.attrs, self.children = tag, dict(attrs), []
+
+    def text(self):
+        return ''.join(item if isinstance(item, str) else item.text() for item in self.children)
+
+    def find(self, **attrs):
+        result = []
+        for item in self.children:
+            if isinstance(item, ReportNode):
+                if all(item.attrs.get(key.replace('_', '-')) == value for key, value in attrs.items()):
+                    result.append(item)
+                result.extend(item.find(**attrs))
+        return result
+
+
+class ReportDOM(HTMLParser):
+    def __init__(self, source):
+        super().__init__()
+        self.root = ReportNode()
+        self.stack = [self.root]
+        self.feed(source)
+
+    def handle_starttag(self, tag, attrs):
+        node = ReportNode(tag, attrs)
+        self.stack[-1].children.append(node)
+        if tag not in ('meta',):
+            self.stack.append(node)
+
+    def handle_endtag(self, tag):
+        if len(self.stack) > 1:
+            if self.stack[-1].tag != tag:
+                raise AssertionError('Unbalanced email table markup')
+            self.stack.pop()
+
+    def handle_data(self, data):
+        self.stack[-1].children.append(data)
+
+
 class EnergyReportTest(unittest.TestCase):
     def setUp(self):
         self.snapshot = json.loads((ROOT / 'tests/fixtures/energy-report-schema2-v53.json').read_text())
@@ -176,7 +217,7 @@ class EnergyReportTest(unittest.TestCase):
         self.assertNotIn('<script>', result['html'])
         self.assertIn('&lt;script&gt;', result['html'])
         markup = Markup(result['html'])
-        self.assertFalse(set(markup.tags) - {'html', 'head', 'meta', 'style', 'body',
+        self.assertFalse(set(markup.tags) - {'html', 'head', 'title', 'meta', 'style', 'body',
             'table', 'caption', 'tr', 'th', 'td'})
         self.assertIn('@media(prefers-color-scheme:dark)', result['html'])
         self.assertNotIn('<svg', result['html'])
@@ -343,3 +384,102 @@ class EnergyReportTest(unittest.TestCase):
         self.assertEqual('9.8765432100123456789', self.rows(result)[
             'future_projection.unclassified_amount']['value'])
         self.assertNotIn('unclassified amount', result['html'])
+
+
+    def test_compact_kpi_group_contains_three_cards_without_metadata_rows(self):
+        report = self.render()
+        dom = ReportDOM(report['html']).root
+        group, = dom.find(data_section='kpis')
+        row, = [node for node in group.children if isinstance(node, ReportNode) and node.tag == 'tr']
+        cards = [node for node in row.children if isinstance(node, ReportNode) and node.tag == 'td']
+        self.assertEqual(3, len(cards))
+        self.assertEqual(['Measured energy', 'Period cost', 'Cheap-zone share'],
+            [card.find(data_role='kpi-label')[0].text() for card in cards])
+        self.assertEqual(['240.0', '241.00', 'Unknown'],
+            [card.find(data_role='kpi-number')[0].text() for card in cards])
+        for card in cards:
+            for metadata in ('Complete measurements', 'Complete pricing', 'Gross', 'Price basis'):
+                self.assertNotIn(metadata, card.text())
+        metadata, = dom.find(data_section='report-status')
+        self.assertIn('Complete measurements', metadata.text())
+        self.assertLess(report['html'].index('data-section="timeline"'),
+                        report['html'].index('data-section="report-status"'))
+
+    def test_timeline_uses_one_row_of_bin_columns_and_separate_full_number_table(self):
+        report = self.render()
+        dom = ReportDOM(report['html']).root
+        timeline, = dom.find(data_section='timeline')
+        plot, = timeline.find(data_role='plot')
+        columns = [node for node in plot.children if isinstance(node, ReportNode) and node.tag == 'td']
+        self.assertEqual(len(self.snapshot['chart']['bins']), len(columns))
+        for index, column in enumerate(columns):
+            self.assertEqual(str(index), column.attrs['data-bin'])
+            self.assertEqual(1, len(column.find(data_role='bar')))
+        values, = dom.find(data_section='measurement-values')
+        self.assertEqual(len(columns), len(values.find(data_role='measurement')))
+        self.assertIn('10.0', values.text())
+        self.assertIn('10.00', values.text())
+        self.assertLess(report['html'].index('data-section="timeline"'),
+                        report['html'].index('data-section="device-ranking"'))
+        self.assertLess(report['html'].index('data-section="device-ranking"'),
+                        report['html'].index('data-section="measurement-values"'))
+
+    def test_main_period_is_short_but_source_instants_preserve_offset_and_zone(self):
+        report = self.render(date_language='pl')
+        dom = ReportDOM(report['html']).root
+        period, = dom.find(data_section='period')
+        self.assertIn('10 paź 2026', period.text())
+        self.assertNotIn('Europe/Warsaw', period.text())
+        self.assertNotIn('+0200', period.text())
+        self.assertNotIn(':00:00', period.text())
+        source, = dom.find(data_section='source-times')
+        self.assertIn('+0200 [Europe/Warsaw]', source.text())
+        self.assertIn('02:00:00', source.text())
+        self.assertIn('Oct 10, 2026', self.rows(self.render())['period.start']['value'])
+
+    def test_intentional_details_do_not_duplicate_baseline_hours_or_internal_ids(self):
+        report = self.render()
+        dom = ReportDOM(report['html']).root
+        self.assertEqual(1, len(dom.find(data_section='timeline')))
+        self.assertEqual(1, len(dom.find(data_section='device-ranking')))
+        self.assertEqual(1, len(dom.find(data_section='measurement-values')))
+        self.assertEqual(1, len(dom.find(data_section='comparison-details')))
+        for kind in ('html', 'text'):
+            self.assertNotIn('sensor.device', report[kind])
+            self.assertNotIn('mask source seconds', report[kind])
+            self.assertNotIn('priced source seconds', report[kind])
+        self.assertIn('sensor.device', report['csv'])
+        self.assertIn('comparisons.previous.baseline_analysis.chart.bins.0', report['csv'])
+        details, = dom.find(data_section='comparison-groups')
+        for value in ('46', '48', 'Unknown'):
+            self.assertIn(value, details.text())
+
+    def test_negative_timeline_measurement_stays_textual_without_a_positive_bar(self):
+        self.snapshot['chart']['bins'][0]['kwh'] = '-0.0000123400'
+        report = self.render()
+        dom = ReportDOM(report['html']).root
+        timeline, = dom.find(data_section='timeline')
+        negative, = timeline.find(data_bin='0')
+        bar, = negative.find(data_role='bar')
+        self.assertEqual('0%', bar.attrs['height'])
+        self.assertIn('-0.0000123400', report['text'])
+        values, = dom.find(data_section='measurement-values')
+        self.assertIn('-0.0000123400', values.text())
+
+    def test_partial_zone_known_costs_and_unattributed_are_readable_without_invented_full_cost(self):
+        self.snapshot['chart']['bins'][0]['zone_breakdown'] = {
+            'status': 'partial', 'reason': 'multiple_zones_in_measurement',
+            'currency': 'PLN', 'price_basis': 'gross',
+            'zones': [{'version_id': 'test-v', 'zone_id': 'test-z', 'label': 'Measured zone',
+                       'kwh': None, 'recorded_kwh': '3.1400', 'usage_cost': None,
+                       'complete': False, 'known_costs': {'energy_cost': '13.37', 'variable_cost': None,
+                                                       'legacy_combined_cost': None}}],
+            'unattributed': {'recorded_kwh': '1.23', 'known_costs': {'energy_cost': '2.46'}}}
+        result = self.render()
+        self.assertIn('13.37', Markup(result['html']).cells)
+        self.assertIn('2.46', Markup(result['html']).cells)
+        self.assertIn('13.37', result['text'])
+        self.assertIn('2.46', result['text'])
+        rows = self.rows(result)
+        self.assertEqual('Unknown', rows['chart.bins.0.zone_breakdown.zones.0.usage_cost']['value'])
+        self.assertEqual('PLN', rows['chart.bins.0.zone_breakdown.zones.0.known_costs.energy_cost']['unit'])
