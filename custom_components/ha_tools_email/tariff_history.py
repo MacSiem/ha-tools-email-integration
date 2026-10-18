@@ -203,6 +203,12 @@ def validate_tariff_book(book):
                     _fail('invalid_version_range')
             if version.get('rate_semantics') not in ('components', 'legacy_combined'):
                 _fail('invalid_rate_semantics')
+            if version.get('validity_clock', 'civil') not in ('civil', 'legacy_profile'):
+                _fail('invalid_validity_clock')
+            if version.get('validity_clock') == 'legacy_profile' and (
+                    origin['kind'] != 'legacy' or version.get('provenance') not in
+                    ('migrated_unknown_start', 'migrated_explicit_start')):
+                _fail('legacy_validity_requires_migration')
             profile = validate_tariff_profile(version.get('profile'))
             if profile is None:
                 _fail('missing_profile')
@@ -236,6 +242,19 @@ def validate_tariff_book(book):
         # basis, but timezone must stay stable to avoid overlapping calendars.
         if len({v['profile']['timezone'] for v in versions}) != 1:
             _fail('timezone_change')
+        for version in versions:
+            p = version['profile']
+            p_start = p.get('validFrom')
+            p_end = ((_day(p['validTo']) + timedelta(days=1)).isoformat()
+                     if p.get('validTo') else None)
+            inner_start, inner_end = _bounds({**version, 'valid_from': p_start, 'valid_to': p_end,
+                                              'validity_clock': 'legacy_profile'})
+            outer_start, outer_end = _bounds(version)
+            if ((inner_start is not None and outer_start is not None and inner_start > outer_start)
+                    or (inner_end is not None and (outer_end is None or inner_end < outer_end))):
+                _fail('profile_validity_conflict')
+        if any(_bounds(a)[1] != _bounds(b)[0] for a, b in zip(versions, versions[1:])):
+            _fail('version_clock_gap_or_overlap')
     if result.get('active_tariff_id') is not None and (not _id(result['active_tariff_id']) or result['active_tariff_id'] not in ids):
         _fail('unknown_active_tariff')
     return result
@@ -258,6 +277,7 @@ def migrate_tariff_v1(profile, *, legacy_combined, tariff_id='legacy'):
                'rate_semantics': 'legacy_combined' if legacy_combined else 'components',
                'fixed_monthly': dict.fromkeys(FEE_KEYS),
                'legacy_combined_monthly': source.get('fixedMonthly'),
+               'validity_clock': 'legacy_profile',
                'provenance': 'migrated_unknown_start' if start is None else 'migrated_explicit_start'}
     book = {'schema': 2, 'active_tariff_id': tariff_id,
             'source_schema1': deepcopy(source), 'migration_issues': ['historical_reports_unchanged'],
@@ -269,7 +289,11 @@ def migrate_tariff_v1(profile, *, legacy_combined, tariff_id='legacy'):
 
 
 def _bounds(version):
-    zone = ZoneInfo(version['profile']['timezone'])
+    profile = version['profile']
+    clock = profile['clock']
+    zone = (timezone(timedelta(minutes=clock['offsetMinutes']))
+            if version.get('validity_clock') == 'legacy_profile' and clock['mode'] == 'fixed'
+            else ZoneInfo(profile['timezone']))
     return tuple(None if version.get(k) is None else int(_midnight(_day(version[k]), zone).timestamp() * 1000)
                  for k in ('valid_from', 'valid_to'))
 
@@ -298,15 +322,18 @@ def _fees(versions, start, end):
     totals = dict.fromkeys(FEE_KEYS + ('legacy_combined',), Decimal(0))
     known = dict.fromkeys(totals, True)
     parts, identities = [], set()
+    boundaries = {bound for version in versions for bound in _bounds(version) if bound is not None}
     while True:
         a = int(_midnight(day, zone).timestamp() * 1000)
         b = int(_midnight(day + timedelta(days=1), zone).timestamp() * 1000)
         if a >= end:
             break
         low, high = max(start, a), min(end, b)
-        if low < high:
-            v = _version_at(versions, low)
-            weight = Decimal(high - low) / Decimal(b - a) / Decimal(monthrange(day.year, day.month)[1])
+        cuts = sorted({low, high} | {value for value in boundaries if low < value < high}) if low < high else []
+        for segment_start, segment_end in zip(cuts, cuts[1:]):
+            v = _version_at(versions, segment_start)
+            fraction = Decimal(segment_end - segment_start) / Decimal(b - a)
+            weight = fraction / Decimal(monthrange(day.year, day.month)[1])
             values = dict.fromkeys(totals)
             if v is not None:
                 identities.add((v['profile']['currency'], v['profile']['priceBasis']))
@@ -322,7 +349,7 @@ def _fees(versions, start, end):
                 else:
                     totals[key] += _decimal(value) * weight
             parts.append({'day': day.isoformat(), 'version_id': None if v is None else v['id'],
-                          'day_fraction': str(Decimal(high - low) / Decimal(b - a))})
+                          'day_fraction': str(fraction)})
         day += timedelta(days=1)
     named_complete = all(known[k] for k in FEE_KEYS)
     return {'components': {k: _money(totals[k]) if known[k] else None for k in totals},
@@ -338,7 +365,7 @@ def _price(tariff, rows, coverage, fingerprint):
     sums = dict.fromkeys(('energy_cost', 'variable_cost', 'legacy_combined_cost'), Decimal(0))
     known = dict.fromkeys(sums, True)
     kwh = Decimal(0)
-    usage_sum, usage_known = Decimal(0), True
+    usage_known = True
     measurement_complete = bool(rows) and coverage.get('complete', True) is True
     models = {v['id']: EnergyTariff(v['profile']) for v in versions}
     for index, row in enumerate(rows):
@@ -368,12 +395,8 @@ def _price(tariff, rows, coverage, fingerprint):
                     amounts = {'energy_cost': energy, 'variable_cost': variable, 'legacy_combined_cost': Decimal(0)}
                     if v['rate_semantics'] == 'legacy_combined':
                         amounts = {'energy_cost': None, 'variable_cost': None, 'legacy_combined_cost': energy}
-                    if v['rate_semantics'] == 'legacy_combined':
-                        usage_sum += energy
-                    elif variable is None:
+                    if v['rate_semantics'] != 'legacy_combined' and variable is None:
                         usage_known = False
-                    else:
-                        usage_sum += energy + variable
                     result['costs'] = {k: None if value is None else str(value) for k, value in amounts.items()}
                     # Engine floats are compatibility diagnostics, never the bill.
                     for key in ('energyCost', 'variableCost', 'usageCost'):
@@ -406,10 +429,9 @@ def _price(tariff, rows, coverage, fingerprint):
     # Display components are rounded once; total uses those exact strings.
     usage = None
     if usage_known and measurement_complete and compatible and pricing_complete:
-        if rounded['energy_cost'] is not None and rounded['variable_cost'] is not None:
-            usage = _decimal(rounded['energy_cost']) + _decimal(rounded['variable_cost'])
-        else:
-            usage = _decimal(_money(usage_sum))
+        # Sum separately rounded known period parts even when a legacy version
+        # prevents claiming a complete named energy/distribution split.
+        usage = sum((_decimal(_money(value)) for value in sums.values()), Decimal(0))
     fixed = sum((_decimal(fee['components'][k]) for k in FEE_KEYS), Decimal(0)) if fee['complete'] and compatible else None
     total = usage + fixed if components_complete and measurement_complete and compatible and usage is not None and fixed is not None else None
     currency, basis = next(iter(identities)) if compatible else (None, None)
@@ -424,6 +446,7 @@ def _price(tariff, rows, coverage, fingerprint):
             'known_costs': {k: _money(v) if compatible and not overlapping else None for k, v in sums.items()},
             'fees': fee if compatible else None, 'rows': priced, 'issues': issues,
             'rates': [{'version_id': v['id'], 'valid_from': v.get('valid_from'), 'valid_to': v.get('valid_to'),
+                       'validity_clock': v.get('validity_clock', 'civil'),
                        'rate_semantics': v['rate_semantics'], 'currency': v['profile']['currency'],
                        'price_basis': v['profile']['priceBasis'], 'clock': deepcopy(v['profile']['clock']),
                        'profile': deepcopy(v['profile']), 'fixed_monthly': deepcopy(v['fixed_monthly']),
