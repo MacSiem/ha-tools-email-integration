@@ -26,6 +26,7 @@ from .energy_comparison_stream import PairedComparisonAccumulator
 from .energy_comparisons import compare_daily_mean7
 from .energy_group_comparisons import compare_period_groups
 from .energy_group_stream import GroupComparisonAccumulator
+from .energy_group_mean7 import compare_daily_group_mean7
 
 
 MAX_PENDING_ANALYSES = 4
@@ -37,7 +38,7 @@ def _digest(value):
                                      allow_nan=False).encode('utf-8')).hexdigest()
 
 
-def _finish(accumulator, context, provenance, comparisons=None, baseline_accumulator=None, group_pair=None):
+def _finish(accumulator, context, provenance, comparisons=None, baseline_accumulator=None, group_pair=None, mean_groups=None):
     result = accumulator.finish()
     # The pure accumulator deliberately accepts only a small public context.
     # Add operational tokens/provenance before the authoritative final hash.
@@ -73,9 +74,23 @@ def _finish(accumulator, context, provenance, comparisons=None, baseline_accumul
                 if not groups['reconciles_household_delta']:
                     groups['reconciles_household_delta'] = streamed['reconciles_household_delta']
             comparison['groups'] = groups
+        if mean_groups is not None:
+            groups = deepcopy(mean_groups)
+            groups['membership_as_of'] = result['groups'].get('membership_as_of')
+            groups['domain_provenance'] = provenance
+            result['comparisons']['mean7']['groups'] = groups
     result.pop('snapshot_id', None)
     result['snapshot_id'] = _digest(result)
     return result
+
+
+def _project_comparison_day(period, context, consumers, membership, domain, grid, readings, generated_at):
+    """Project one bounded day without finishing or duplicating baseline DTOs."""
+    target = EnergyAnalysisAccumulator(None, {**period, 'kind': 'day'}, context,
+        generated_at=generated_at, consumers=consumers, membership=membership,
+        consumer_domain=domain)
+    return target.add_chunk(grid, period['start'], period['end'],
+        consumer_snapshot=readings, include_group_hours=True)
 
 
 class EnergyAnalysisService:
@@ -239,7 +254,7 @@ class EnergyAnalysisService:
                     generated_at=self._clock(), consumers=deepcopy(configuration['consumers']),
                     membership=membership, consumer_domain=configuration['consumer_domain']), guard)
                 plan, pair, comparisons, current_day, baseline_accumulator = None, None, None, None, None
-                group_pair = None
+                group_pair, mean_groups, mean_projections = None, None, []
                 active_tariff = (next((row for row in state['book']['tariffs']
                     if row['id'] == state['book'].get('active_tariff_id')), None) if state['book'] else None)
                 if comparison is not None:
@@ -277,9 +292,10 @@ class EnergyAnalysisService:
                     await guard()
                     target = accumulator if side == 'current' else baseline_accumulator
                     projection = await self._cpu(partial(target.add_chunk, chunk['grid'], cursor, stop,
-                        consumer_snapshot=chunk['consumers'], include_group_hours=group_pair is not None), guard)
+                        consumer_snapshot=chunk['consumers'], include_group_hours=group_pair is not None or (comparison == 'mean7' and plan['status'] == 'ready')), guard)
                     if side == 'current' and comparison == 'mean7' and plan['status'] == 'ready':
                         current_day = chunk['grid']
+                        mean_projections.append(projection)
                     if pair is not None:
                         await self._cpu(partial(pair.push, side, chunk['grid'], cursor, stop), guard)
                         await self._cpu(partial(group_pair.push, side, projection, cursor, stop), guard)
@@ -300,18 +316,26 @@ class EnergyAnalysisService:
                             a, b = (datetime.fromisoformat(baseline[key]) for key in ('start', 'end'))
                             await guard()
                             chunk = await async_read_energy_chunk(self.hass, configuration, a, b,
-                                                                  guard=guard, include_consumers=False)
+                                                                  guard=guard, include_consumers=True)
                             await guard()
                             days.append(chunk['grid'])
-                            del chunk
+                            projected = await self._cpu(partial(_project_comparison_day,
+                                deepcopy(baseline), deepcopy(context), deepcopy(configuration['consumers']),
+                                membership, configuration['consumer_domain'], chunk['grid'], chunk['consumers'],
+                                self._clock()), guard)
+                            mean_projections.append(projected)
+                            del chunk, projected
                         compared = await self._cpu(partial(compare_daily_mean7, current_day, days,
                             period, plan['baseline_periods'], timezone_name=context['measurement_timezone'],
                             tariff=active_tariff), guard)
-                        del days, current_day
+                        mean_groups = await self._cpu(partial(compare_daily_group_mean7, mean_projections,
+                            [period, *plan['baseline_periods']], timezone_name=context['measurement_timezone'],
+                            tariff=active_tariff, household_comparison=compared), guard)
+                        del days, current_day, mean_projections
                     comparisons[comparison] = {**compared, 'baseline_kind': comparison,
                                                'baseline_periods': deepcopy(plan['baseline_periods'])}
                 result = await self._cpu(partial(_finish, accumulator, deepcopy(context),
-                                                configuration['domain_provenance'], comparisons, baseline_accumulator, group_pair), guard)
+                                                configuration['domain_provenance'], comparisons, baseline_accumulator, group_pair, mean_groups), guard)
                 # No await between this final check, detachment, caching and return.
                 self._assert_current(context)
                 self._cache = (key, monotonic(), deepcopy(result))

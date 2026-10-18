@@ -84,6 +84,94 @@ def _membership(projection, consumers):
     return normalized
 
 
+def group_projection_evidence(projection, start, end, *, previous_identity=None, previous_keys=None):
+    if (not isinstance(projection, dict) or type(projection.get('schema')) is not int
+            or projection['schema'] != 1
+            or projection.get('membership_mode') != 'current_snapshot'
+            or projection.get('energy_domain') not in ('grid_import', 'site_consumption')
+            or 'registry_revision' not in projection):
+        raise ValueError('invalid_group_projection')
+    consumers, consumer_provenance = _sources(projection, 'consumer', empty=True)
+    grids, grid_provenance = _sources(projection, 'grid')
+    identity = {key: deepcopy(projection[key]) for key in _IDENTITY}
+    identity['group_membership'] = _membership(projection, consumers)
+    # Source order is not an identity; detach and normalize it once.
+    for key in ('consumer_source_ids', 'grid_source_ids'):
+        identity[key].sort()
+    if previous_identity is not None and identity != previous_identity:
+        raise ValueError('group_context_changed')
+    hours = projection.get('hours')
+    stamps = hour_grid(start, end)
+    if not isinstance(hours, list) or len(hours) != len(stamps):
+        raise ValueError('invalid_group_hours')
+    rows, keys, partition = [], previous_keys, True
+    with localcontext() as context:
+        context.prec = 40
+        for stamp, hour in zip(stamps, hours):
+            if (not isinstance(hour, dict) or type(hour.get('from')) not in (int, float)
+                    or type(hour.get('to')) not in (int, float)
+                    or hour['from'] != stamp or hour['to'] != stamp + 3600000
+                    or type(hour.get('partition_complete')) is not bool):
+                raise ValueError('invalid_group_hour_boundary')
+            values = {}
+            for level in _LEVELS:
+                cells = hour.get(level)
+                if (not isinstance(cells, dict) or len(cells) > len(consumers)
+                        or any(not isinstance(key, str) or not key for key in cells)):
+                    raise ValueError('invalid_group_shape')
+                if level == 'devices' and set(cells) != consumers:
+                    raise ValueError('invalid_group_shape')
+                for key, value in cells.items():
+                    values[(level, key)] = _quantity(value)
+            for name in ('unassigned', 'unmeasured'):
+                if name not in hour:
+                    raise ValueError('invalid_group_shape')
+                values[(name, None)] = _quantity(hour[name])
+            if keys is None:
+                keys = tuple(sorted(values, key=lambda key: (key[0], key[1] or '')))
+            if len(values) != len(keys) or any(key not in values for key in keys):
+                raise ValueError('group_context_changed')
+            membership = identity['group_membership']
+            if membership is not None:
+                if any(set(hour[level]) != set(membership[level]) for level in _LEVELS):
+                    raise ValueError('invalid_group_membership')
+                if not membership['unassigned'][None] and values[('unassigned', None)] != 0:
+                    raise ValueError('invalid_structural_zero')
+            for sid in consumers - consumer_provenance:
+                if values[('devices', sid)] is not None:
+                    raise ValueError('group_measurement_without_provenance')
+            presence = hour.get('grid_source_presence')
+            if (not isinstance(presence, list) or any(not isinstance(sid, str) for sid in presence)
+                    or len(presence) != len(set(presence)) or not set(presence) <= grid_provenance):
+                raise ValueError('invalid_grid_source_presence')
+            if 'household_kwh' not in hour:
+                raise ValueError('invalid_group_shape')
+            household = _quantity(hour['household_kwh'])
+            if household is not None and set(presence) != grids:
+                raise ValueError('partial_grid_cannot_supply_household')
+            if (household is None or identity['energy_domain'] != 'grid_import') and values[('unmeasured', None)] is not None:
+                raise ValueError('invalid_unmeasured_projection')
+            # A partition claim alone proves nothing about valid evidence.
+            # Verify all cells and each alternative slice; never add levels.
+            known_partition = (identity['energy_domain'] == 'grid_import'
+                and household is not None and set(presence) == grids
+                and all(value is not None for value in values.values()))
+            if hour['partition_complete']:
+                if not known_partition:
+                    raise ValueError('invalid_group_partition')
+                remainder = values[('unmeasured', None)]
+                partitions = [sum((value for (level, _), value in values.items() if level == 'devices'), Decimal(0)) + remainder,
+                    sum((value for (level, _), value in values.items() if level == 'areas'), Decimal(0))
+                        + values[('unassigned', None)] + remainder,
+                    sum((value for (level, _), value in values.items() if level == 'floors'), Decimal(0)) + remainder]
+                if any(value != household for value in partitions):
+                    raise ValueError('invalid_group_partition')
+            partition = partition and hour['partition_complete'] and known_partition
+            rows.append((stamp, tuple(values[key] for key in keys), frozenset(presence),
+                         hour['partition_complete'] and known_partition))
+    return identity, keys, rows, partition
+
+
 class GroupComparisonAccumulator:
     def __init__(self, current_period, baseline_period, *, calendar_plan, tariff=None):
         if type(calendar_plan) is not CalendarComparisonPlan:
@@ -123,91 +211,8 @@ class GroupComparisonAccumulator:
                 'common_cost': [new_usage_cost_state(self._rates) for _ in range(2)] if self._rates else None}
 
     def _validate(self, projection, start, end):
-        if (not isinstance(projection, dict) or type(projection.get('schema')) is not int
-                or projection['schema'] != 1
-                or projection.get('membership_mode') != 'current_snapshot'
-                or projection.get('energy_domain') not in ('grid_import', 'site_consumption')
-                or 'registry_revision' not in projection):
-            raise ValueError('invalid_group_projection')
-        consumers, consumer_provenance = _sources(projection, 'consumer', empty=True)
-        grids, grid_provenance = _sources(projection, 'grid')
-        identity = {key: deepcopy(projection[key]) for key in _IDENTITY}
-        identity['group_membership'] = _membership(projection, consumers)
-        # Source order is not an identity; detach and normalize it once.
-        for key in ('consumer_source_ids', 'grid_source_ids'):
-            identity[key].sort()
-        if self._identity is not None and identity != self._identity:
-            raise ValueError('group_context_changed')
-        hours = projection.get('hours')
-        stamps = hour_grid(start, end)
-        if not isinstance(hours, list) or len(hours) != len(stamps):
-            raise ValueError('invalid_group_hours')
-        rows, keys, partition = [], self._keys, True
-        with localcontext() as context:
-            context.prec = 40
-            for stamp, hour in zip(stamps, hours):
-                if (not isinstance(hour, dict) or type(hour.get('from')) not in (int, float)
-                        or type(hour.get('to')) not in (int, float)
-                        or hour['from'] != stamp or hour['to'] != stamp + 3600000
-                        or type(hour.get('partition_complete')) is not bool):
-                    raise ValueError('invalid_group_hour_boundary')
-                values = {}
-                for level in _LEVELS:
-                    cells = hour.get(level)
-                    if (not isinstance(cells, dict) or len(cells) > len(consumers)
-                            or any(not isinstance(key, str) or not key for key in cells)):
-                        raise ValueError('invalid_group_shape')
-                    if level == 'devices' and set(cells) != consumers:
-                        raise ValueError('invalid_group_shape')
-                    for key, value in cells.items():
-                        values[(level, key)] = _quantity(value)
-                for name in ('unassigned', 'unmeasured'):
-                    if name not in hour:
-                        raise ValueError('invalid_group_shape')
-                    values[(name, None)] = _quantity(hour[name])
-                if keys is None:
-                    keys = tuple(sorted(values, key=lambda key: (key[0], key[1] or '')))
-                if len(values) != len(keys) or any(key not in values for key in keys):
-                    raise ValueError('group_context_changed')
-                membership = identity['group_membership']
-                if membership is not None:
-                    if any(set(hour[level]) != set(membership[level]) for level in _LEVELS):
-                        raise ValueError('invalid_group_membership')
-                    if not membership['unassigned'][None] and values[('unassigned', None)] != 0:
-                        raise ValueError('invalid_structural_zero')
-                for sid in consumers - consumer_provenance:
-                    if values[('devices', sid)] is not None:
-                        raise ValueError('group_measurement_without_provenance')
-                presence = hour.get('grid_source_presence')
-                if (not isinstance(presence, list) or any(not isinstance(sid, str) for sid in presence)
-                        or len(presence) != len(set(presence)) or not set(presence) <= grid_provenance):
-                    raise ValueError('invalid_grid_source_presence')
-                if 'household_kwh' not in hour:
-                    raise ValueError('invalid_group_shape')
-                household = _quantity(hour['household_kwh'])
-                if household is not None and set(presence) != grids:
-                    raise ValueError('partial_grid_cannot_supply_household')
-                if (household is None or identity['energy_domain'] != 'grid_import') and values[('unmeasured', None)] is not None:
-                    raise ValueError('invalid_unmeasured_projection')
-                # A partition claim alone proves nothing about valid evidence.
-                # Verify all cells and each alternative slice; never add levels.
-                known_partition = (identity['energy_domain'] == 'grid_import'
-                    and household is not None and set(presence) == grids
-                    and all(value is not None for value in values.values()))
-                if hour['partition_complete']:
-                    if not known_partition:
-                        raise ValueError('invalid_group_partition')
-                    remainder = values[('unmeasured', None)]
-                    partitions = [sum((value for (level, _), value in values.items() if level == 'devices'), Decimal(0)) + remainder,
-                        sum((value for (level, _), value in values.items() if level == 'areas'), Decimal(0))
-                            + values[('unassigned', None)] + remainder,
-                        sum((value for (level, _), value in values.items() if level == 'floors'), Decimal(0)) + remainder]
-                    if any(value != household for value in partitions):
-                        raise ValueError('invalid_group_partition')
-                partition = partition and hour['partition_complete'] and known_partition
-                rows.append((stamp, tuple(values[key] for key in keys), frozenset(presence),
-                             hour['partition_complete'] and known_partition))
-        return identity, keys, rows, partition
+        return group_projection_evidence(projection, start, end,
+            previous_identity=self._identity, previous_keys=self._keys)
 
     def push(self, side, projection, start, end):
         if side not in ('current', 'baseline') or self._result is not None:

@@ -77,7 +77,7 @@ class AnalysisComparisonsTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual('unknown', compared['status'])
             self.assertAlmostEqual(16/24, compared['coverage']['common_current'])
             self.assertIsNone(compared['delta_kwh'])
-            self.assertEqual(9, len(h.queries))
+            self.assertEqual(16, len(h.queries))
 
     async def test_invalid_comparison_before_private_io_and_ws_only_passes_supported_fields(self):
         h = self.harness()
