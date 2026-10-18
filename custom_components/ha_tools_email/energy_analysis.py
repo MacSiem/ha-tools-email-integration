@@ -49,6 +49,69 @@ def _public_context(context):
     return result
 
 
+def _pick(value, keys):
+    return {key: deepcopy(value[key]) for key in keys if key in value}
+
+
+def _public_period(period):
+    scalar_keys = ('status', 'reason', 'kind', 'start', 'end', 'local_start', 'local_end',
+                   'start_fold', 'end_fold', 'timezone', 'hours', 'partial', 'calendar_end',
+                   'calendar_local_end', 'calendar_hours', 'recorder_hour_aligned', 'calendar_clamped')
+    result = _pick(period, scalar_keys)
+    if any(value is not None and type(value) not in (str, bool, int, float) for value in result.values()):
+        raise ValueError('invalid_analysis_period')
+    if 'clamps' in period:
+        clamps = period['clamps']
+        if not isinstance(clamps, list) or any(not isinstance(code, str) for code in clamps):
+            raise ValueError('invalid_analysis_period')
+        result['clamps'] = list(clamps)
+    return result
+
+
+def _public_rate_profile(profile):
+    result = _pick(profile, ('schema', 'currency', 'timezone', 'priceBasis', 'energyUnit',
+                             'allowNegativeEnergy', 'defaultZone', 'validFrom', 'validTo'))
+    result['clock'] = _pick(profile['clock'], ('mode', 'offsetMinutes'))
+    result['zones'] = [_pick(zone, ('id', 'label', 'energyRate', 'variableRate', 'classification'))
+                       for zone in profile['zones']]
+    for kind in ('rules', 'exceptions'):
+        if kind not in profile:
+            continue
+        if profile[kind] is None:
+            result[kind] = None
+            continue
+        rules = []
+        for rule in profile[kind]:
+            clean = _pick(rule, ('zone', 'priority', 'weekdays', 'dates'))
+            if 'season' in rule:
+                clean['season'] = (_pick(rule['season'], ('from', 'to'))
+                                   if rule['season'] is not None else None)
+            clean['intervals'] = [_pick(interval, ('from', 'to')) for interval in rule['intervals']]
+            rules.append(clean)
+        result[kind] = rules
+    if 'dynamic' in profile:
+        result['dynamic'] = None if profile['dynamic'] is None else {
+            'intervals': [_pick(row, ('from', 'to', 'energyRate', 'variableRate', 'classification'))
+                          for row in profile['dynamic']['intervals']]}
+    # Deprecated profile.fixedMonthly is stored for schema1 preservation. Actual
+    # schema2 fees are version.fixed_monthly, exposed separately and unambiguously.
+    return result
+
+
+def _public_rates(rates):
+    result = []
+    for rate in rates:
+        clean = _pick(rate, ('version_id', 'valid_from', 'valid_to', 'validity_clock',
+                             'rate_semantics', 'currency', 'price_basis', 'fixed_monthly',
+                             'legacy_combined_monthly'))
+        clean['clock'] = _pick(rate['clock'], ('mode', 'offsetMinutes'))
+        clean['profile'] = _public_rate_profile(rate['profile'])
+        provenance = rate.get('provenance')
+        clean['provenance'] = provenance if isinstance(provenance, str) and len(provenance) <= 256 else None
+        result.append(clean)
+    return result
+
+
 class EnergyAnalysisAccumulator:
     """Append contiguous chunks and price the actual whole period exactly once."""
 
@@ -61,7 +124,7 @@ class EnergyAnalysisAccumulator:
         if self._generated < self._end:
             raise ValueError('future_analysis_measurement')
         self._book = validate_tariff_book(book) if book is not None else None
-        self._period, self._context = deepcopy(period), _public_context(context)
+        self._period, self._context = _public_period(period), _public_context(context)
         self._period.update(start=self._start.isoformat(), end=self._end.isoformat())
         self._cursor = self._start
         self._rows, self._issues = [], []
@@ -135,18 +198,21 @@ class EnergyAnalysisAccumulator:
                           else 'ready' if totals['total_cost'] is not None else 'partial')
         alternatives = []
         if pricing is not None:
+            alternative_keys = ('tariff_id', 'tariff_name', 'origin', 'measurement_fingerprint',
+                                'currency', 'price_basis', 'timezone', 'measurement_complete',
+                                'pricing_complete', 'components_complete', 'compatible', 'kwh',
+                                *cost_keys, 'known_costs', 'issues', 'comparable', 'delta_cost', 'comparison_reason')
             for row in pricing['tariffs']:
                 # Never return one diagnostic row matrix per alternative. The
                 # snapshot carries a single household bucket series plus totals.
-                alternatives.append({key: deepcopy(value) for key, value in row.items()
-                                     if key not in ('rows', 'fees', 'rates')})
+                alternatives.append(_pick(row, alternative_keys))
         context = {**self._context, 'grid_source_signature': self._signature}
         result = {'schema': 2, 'generated_at': self._generated.isoformat(), 'context': context,
                   'active_tariff_id': pricing['active_tariff_id'] if pricing is not None else None,
                   'period': deepcopy(self._period), 'coverage': coverage, 'status': status,
                   'pricing_status': pricing_status, 'totals': totals,
                   'measurement_fingerprint': fingerprint, 'buckets': deepcopy(self._rows),
-                  'alternatives': alternatives, 'rates': deepcopy(active['rates']) if active is not None else [],
+                  'alternatives': alternatives, 'rates': _public_rates(active['rates']) if active is not None else [],
                   'fees': deepcopy(active['fees']) if active is not None else None,
                   'rounding': deepcopy(pricing['rounding']) if pricing is not None else None,
                   'issues': list(self._issues)}
