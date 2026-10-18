@@ -74,7 +74,7 @@ def _extra_baseline(kind, start, end, target_day, zone):
     if not partial:
         target_end = target_limit
     else:
-        if kind == "day":
+        if kind in ("day", "week"):
             cutoff_day = target_day + (local_end.date() - local_start.date())
         elif kind == "month":
             if local_end.day > monthrange(target_day.year, target_day.month)[1]:
@@ -187,6 +187,16 @@ def resolve_analysis_periods(kind, now, timezone_name, *, anchor=None):
             comparisons["mean7"] = _comparison([
                 _extra_baseline(kind, start, end, day - timedelta(days=offset), zone)
                 for offset in range(1, 8)])
+        elif kind == "week":
+            iso_year, iso_week, _ = day.isocalendar()
+            try:
+                prior_week = date.fromisocalendar(iso_year - 1, iso_week, 1)
+            except ValueError:
+                comparisons["year_ago"] = {"status": "unknown", "reason": "iso_week_unavailable",
+                                            "baseline_periods": []}
+            else:
+                comparisons["year_ago"] = _comparison([
+                    _extra_baseline(kind, start, end, prior_week, zone)])
         elif kind in ("month", "year"):
             comparisons["year_ago"] = _comparison([
                 _extra_baseline(kind, start, end, day.replace(year=day.year - 1), zone)])

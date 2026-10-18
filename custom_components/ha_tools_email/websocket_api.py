@@ -336,6 +336,7 @@ async def _ws_set_tariff_book(hass, connection, msg):
     vol.Required('type'): f'{DOMAIN}/energy_analysis',
     vol.Optional('period', default='day'): vol.In(('day', 'week', 'month', 'year')),
     vol.Optional('anchor'): str,
+    vol.Optional('comparison'): str,
 })
 @websocket_api.async_response
 async def _ws_energy_analysis(hass, connection, msg):
@@ -350,7 +351,7 @@ async def _ws_energy_analysis(hass, connection, msg):
     user_id = connection.user.id
     try:
         result = await service.async_get_analysis(msg.get('period', 'day'), user_id,
-            **({'anchor': msg['anchor']} if 'anchor' in msg else {}))
+            **{key: msg[key] for key in ('anchor', 'comparison') if key in msg})
         if not await _snapshot_authorized(hass, connection):
             raise PermissionError('energy_sources_unauthorized')
         # This last async validation includes the concrete current source access

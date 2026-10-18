@@ -128,7 +128,7 @@ def _instant(value):
     return instant.astimezone(timezone.utc)
 
 
-async def async_read_energy_chunk(hass, configuration, start, end, *, guard):
+async def async_read_energy_chunk(hass, configuration, start, end, *, guard, include_consumers=True):
     """Read actual source hours after a caller-owned fresh context/access check.
 
     No authorization result is cached. A revoked role/context after any await
@@ -141,7 +141,7 @@ async def async_read_energy_chunk(hass, configuration, start, end, *, guard):
     configuration = deepcopy(configuration)
     sensors = configuration['grid_sensors']
     consumers = [{'entity_id': row['stat_consumption'], 'name': row.get('name') or row['stat_consumption']}
-                 for row in configuration['consumers']]
+                 for row in configuration['consumers']] if include_consumers else []
     ids = list(dict.fromkeys(row['entity_id'] for row in [*sensors, *consumers]))
     await guard()
     metadata = await async_get_energy_metadata(hass, ids)

@@ -22,6 +22,8 @@ from .composer import async_get_energy_metadata
 from .const import DOMAIN
 from .energy import _source_signature
 from .energy_analysis import EnergyAnalysisAccumulator
+from .energy_comparison_stream import PairedComparisonAccumulator
+from .energy_comparisons import compare_daily_mean7
 
 
 MAX_PENDING_ANALYSES = 4
@@ -33,12 +35,14 @@ def _digest(value):
                                      allow_nan=False).encode('utf-8')).hexdigest()
 
 
-def _finish(accumulator, context, provenance):
+def _finish(accumulator, context, provenance, comparisons=None):
     result = accumulator.finish()
     # The pure accumulator deliberately accepts only a small public context.
     # Add operational tokens/provenance before the authoritative final hash.
     result['context'].update(deepcopy(context))
     result['groups']['domain_provenance'] = provenance
+    if comparisons is not None:
+        result['comparisons'] = deepcopy(comparisons)
     result.pop('snapshot_id', None)
     result['snapshot_id'] = _digest(result)
     return result
@@ -79,7 +83,7 @@ class EnergyAnalysisService:
             self._cache = None
             raise RuntimeError('energy_snapshot_unloaded')
 
-    def _capture(self, kind, anchor=None):
+    def _capture(self, kind, anchor=None, comparison=None):
         self._check_running()
         configuration = capture_energy_configuration(self._manager.data or {})
         if not configuration['grid_sensors']:
@@ -88,6 +92,8 @@ class EnergyAnalysisService:
         resolved = resolve_analysis_periods(kind, self._clock(), zone, anchor=anchor)
         if resolved['status'] != 'ready':
             raise ValueError(resolved['reason'])
+        if comparison is not None and (not isinstance(comparison, str) or comparison not in resolved['comparisons']):
+            raise ValueError('invalid_analysis_comparison')
         period = {**resolved['current'], 'kind': kind}
         context = {'entry_id': self.entry_id, 'service_generation': self._nonce,
                    'tariff_revision': self.storage.current_tariff_revision,
@@ -97,10 +103,13 @@ class EnergyAnalysisService:
                    'source_signature': configuration['source_signature'],
                    'period_kind': kind, 'period_signature': _digest(period),
                    'period_anchor': period['local_start'][:10] if anchor is not None else None}
+        if comparison is not None:
+            context.update(comparison_kind=comparison,
+                           comparison_signature=_digest(resolved['comparisons'][comparison]))
         return configuration, period, context
 
     def _assert_current(self, context):
-        _, _, current = self._capture(context['period_kind'], context.get('period_anchor'))
+        _, _, current = self._capture(context['period_kind'], context.get('period_anchor'), context.get('comparison_kind'))
         if any(context.get(key) != value for key, value in current.items()):
             self._cache = None
             raise RuntimeError('energy_analysis_context_changed')
@@ -152,7 +161,7 @@ class EnergyAnalysisService:
         await guard()
         return result
 
-    async def async_get_analysis(self, kind, user_id, *, anchor=None):
+    async def async_get_analysis(self, kind, user_id, *, anchor=None, comparison=None):
         # Admission includes requests waiting for this service's own lock.
         self._check_running()
         if self._pending >= MAX_PENDING_ANALYSES:
@@ -169,7 +178,7 @@ class EnergyAnalysisService:
                 # Reading settings does not access Recorder, metadata or registry.
                 policy_state = await self.storage.async_get_feature_access()
                 self._check_running()
-                configuration, period, context = self._capture(kind, anchor)
+                configuration, period, context = self._capture(kind, anchor, comparison)
                 # No metadata, Recorder or registry read precedes BOTH gates.
                 await self._require_access(context, configuration, user_id, policy_state=policy_state)
                 self._assert_current(context)
@@ -199,20 +208,67 @@ class EnergyAnalysisService:
                     deepcopy(state['book']), deepcopy(period), deepcopy(context),
                     generated_at=self._clock(), consumers=deepcopy(configuration['consumers']),
                     membership=membership, consumer_domain=configuration['consumer_domain']), guard)
-                cursor, end = (datetime.fromisoformat(period[key]) for key in ('start', 'end'))
-                while cursor < end:
+                plan, pair, comparisons, current_day = None, None, None, None
+                if comparison is not None:
+                    resolved = resolve_analysis_periods(kind, self._clock(), context['measurement_timezone'],
+                                                       anchor=context['period_anchor'])
+                    self._assert_current(context)
+                    plan = resolved['comparisons'][comparison]
+                    comparisons = {}
+                    if plan['status'] == 'ready' and comparison != 'mean7':
+                        pair = await self._cpu(partial(PairedComparisonAccumulator, period,
+                            plan['baseline_periods'][0], timezone_name=context['measurement_timezone'],
+                            calendar_kind={'day': 'daily', 'week': 'weekly', 'month': 'monthly', 'year': 'yearly'}[kind]), guard)
+                windows = [period, plan['baseline_periods'][0]] if pair is not None else [period]
+                cursors = [datetime.fromisoformat(p['start']) for p in windows]
+                ends = [datetime.fromisoformat(p['end']) for p in windows]
+                while True:
+                    side = pair.needs_side() if pair is not None else ('current' if cursors[0] < ends[0] else None)
+                    if side is None:
+                        break
+                    index = 0 if side == 'current' else 1
+                    cursor, end = cursors[index], ends[index]
                     stop = min(cursor + timedelta(days=7), end)
                     await guard()
                     chunk = await async_read_energy_chunk(self.hass, configuration,
-                                                          cursor, stop, guard=guard)
+                                                          cursor, stop, guard=guard,
+                                                          include_consumers=side == 'current')
                     await guard()
-                    await self._cpu(partial(accumulator.add_chunk, chunk['grid'], cursor, stop,
-                                           consumer_snapshot=chunk['consumers']), guard)
+                    if side == 'current':
+                        await self._cpu(partial(accumulator.add_chunk, chunk['grid'], cursor, stop,
+                                               consumer_snapshot=chunk['consumers']), guard)
+                        if comparison == 'mean7' and plan['status'] == 'ready':
+                            current_day = chunk['grid']
+                    if pair is not None:
+                        await self._cpu(partial(pair.push, side, chunk['grid'], cursor, stop), guard)
                     # Do not retain a raw source matrix across chunk boundaries.
                     del chunk
-                    cursor = stop
+                    cursors[index] = stop
+                if comparison is not None:
+                    if plan['status'] != 'ready':
+                        compared = {'status': 'unknown', 'reason': plan['reason'], 'current_kwh': None,
+                                    'baseline_kwh': None, 'delta_kwh': None, 'percent': None}
+                    elif pair is not None:
+                        compared = await self._cpu(pair.finish, guard)
+                    else:
+                        # Mean7 is daily only: at most eight actual 23/24/25h
+                        # source windows, sharing one intersection across all8.
+                        days = []
+                        for baseline in plan['baseline_periods']:
+                            a, b = (datetime.fromisoformat(baseline[key]) for key in ('start', 'end'))
+                            await guard()
+                            chunk = await async_read_energy_chunk(self.hass, configuration, a, b,
+                                                                  guard=guard, include_consumers=False)
+                            await guard()
+                            days.append(chunk['grid'])
+                            del chunk
+                        compared = await self._cpu(partial(compare_daily_mean7, current_day, days,
+                            period, plan['baseline_periods'], timezone_name=context['measurement_timezone']), guard)
+                        del days, current_day
+                    comparisons[comparison] = {**compared, 'baseline_kind': comparison,
+                                               'baseline_periods': deepcopy(plan['baseline_periods'])}
                 result = await self._cpu(partial(_finish, accumulator, deepcopy(context),
-                                                configuration['domain_provenance']), guard)
+                                                configuration['domain_provenance'], comparisons), guard)
                 # No await between this final check, detachment, caching and return.
                 self._assert_current(context)
                 self._cache = (key, monotonic(), deepcopy(result))
@@ -229,7 +285,7 @@ class EnergyAnalysisService:
         try:
             context = result['context']
             self._assert_current(context)
-            _, period, _ = self._capture(context['period_kind'], context.get('period_anchor'))
+            _, period, _ = self._capture(context['period_kind'], context.get('period_anchor'), context.get('comparison_kind'))
             return result['period'] == period
         except (KeyError, TypeError, ValueError, RuntimeError, AttributeError):
             return False
@@ -247,7 +303,7 @@ class EnergyAnalysisService:
         self._pending += 1
         try:
             context = deepcopy(result['context'])
-            configuration, _, _ = self._capture(context['period_kind'], context.get('period_anchor'))
+            configuration, _, _ = self._capture(context['period_kind'], context.get('period_anchor'), context.get('comparison_kind'))
             await self._guard(context, configuration, user_id)
             return self.context_is_current(result)
         except PermissionError:
