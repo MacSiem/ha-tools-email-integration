@@ -372,16 +372,18 @@ class EnergyAnalysisService:
             self._pending -= 1
 
     async def async_get_report(self, kind, user_id, *, language, timezone_name,
-                               hour_cycle, anchor=None, comparison=None):
+                               hour_cycle, anchor=None, comparison=None, date_language=None):
         """Render the same authorized calculation without requiring SMTP."""
         from .energy_report import render_energy_analysis, validate_report_preferences
-        validate_report_preferences(language, timezone_name, hour_cycle)
+        date_options = {} if date_language is None else {'date_language': date_language}
+        validate_report_preferences(language, timezone_name, hour_cycle, **date_options)
         snapshot = await self.async_get_analysis(kind, user_id, anchor=anchor,
             comparison=comparison, purpose='report_read')
         if not await self.async_validate_result(snapshot, user_id):
             raise RuntimeError('energy_analysis_context_changed')
         report = await self.coordinator._async_run_cpu(partial(render_energy_analysis,
-            snapshot, language=language, timezone_name=timezone_name, hour_cycle=hour_cycle))
+            snapshot, language=language, timezone_name=timezone_name, hour_cycle=hour_cycle,
+            **date_options))
         # Renderer awaits the shared CPU lane. Reauthorize concrete sources and
         # this independent report purpose before releasing any rendered data.
         if not await self.async_validate_result(snapshot, user_id):
@@ -391,7 +393,7 @@ class EnergyAnalysisService:
         return {**report, 'context': deepcopy(snapshot['context']),
                 'period': deepcopy(snapshot['period']),
                 'display': {'language': language, 'timezone': timezone_name,
-                            'hour_cycle': hour_cycle}}
+                            'hour_cycle': hour_cycle, **date_options}}
 
     def context_is_current(self, result):
         """Final no-await WS fence. Call async_validate_result after WS awaits."""

@@ -430,6 +430,7 @@ async def _ws_energy_analysis(hass, connection, msg):
     vol.Optional('anchor'): str,
     vol.Optional('comparison'): str,
     vol.Required('language'): vol.In(('pl', 'en')),
+    vol.Optional('date_language'): vol.In(('pl', 'en')),
     vol.Required('timezone'): str,
     vol.Required('hour_cycle'): vol.In(('12', '24')),
 })
@@ -447,7 +448,7 @@ async def _ws_energy_report(hass, connection, msg):
     try:
         result = await service.async_get_report(msg.get('period', 'day'), user_id,
             language=msg['language'], timezone_name=msg['timezone'], hour_cycle=msg['hour_cycle'],
-            **{key: msg[key] for key in ('anchor', 'comparison') if key in msg})
+            **{key: msg[key] for key in ('anchor', 'comparison', 'date_language') if key in msg})
         if await service.async_validate_result(result, user_id) is not True:
             raise RuntimeError('energy_analysis_changed')
         if (hass.data.get(DOMAIN, {}).get('energy_analysis') is not service
