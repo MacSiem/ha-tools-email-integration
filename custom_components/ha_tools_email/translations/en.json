@@ -62,5 +62,31 @@
       "title": "Change your SMTP password",
       "description": "Before HA Tools Email 2.1.0 the SMTP password was saved through the `ha_tools_email.save_config` action. Home Assistant stores action data in its database, so that password may also be present in the database and in backups that include it.\n\nCreate a new app password with your email provider, enter it in Settings → Devices & services → HA Tools Email → Configure, and revoke the old one. This notice disappears once a password has been saved there."
     }
+  },
+  "entity": {
+    "sensor": {
+      "energy_zone": {
+        "name": "Tariff zone",
+        "state": {
+          "cheap": "Cheap",
+          "expensive": "Expensive",
+          "mixed": "Mixed"
+        }
+      },
+      "energy_price": {
+        "name": "Usage price now"
+      },
+      "energy_next_cheap": {
+        "name": "Next cheap period"
+      },
+      "energy_today_cost": {
+        "name": "Usage cost today"
+      }
+    },
+    "binary_sensor": {
+      "energy_cheap": {
+        "name": "Cheap tariff"
+      }
+    }
   }
 }

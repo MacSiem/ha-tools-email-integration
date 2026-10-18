@@ -191,13 +191,28 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up HA Tools Email from a config entry."""
     await _async_ensure_setup(hass)
+    from .energy import EnergySnapshotCoordinator
+    coordinator = EnergySnapshotCoordinator(hass, await _async_get_storage(hass))
+    hass.data[DOMAIN]['energy_snapshot'] = coordinator
+    try:
+        await coordinator.async_start()
+        await hass.config_entries.async_forward_entry_setups(entry, ['sensor', 'binary_sensor'])
+    except Exception:
+        coordinator.async_stop()
+        hass.data[DOMAIN].pop('energy_snapshot', None)
+        raise
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload the config entry."""
-    async_stop_scheduler(hass)
-    return True
+    unloaded = await hass.config_entries.async_unload_platforms(entry, ['sensor', 'binary_sensor'])
+    if unloaded:
+        coordinator = hass.data[DOMAIN].pop('energy_snapshot', None)
+        if coordinator:
+            coordinator.async_stop()
+        async_stop_scheduler(hass)
+    return unloaded
 
 
 async def _async_ensure_setup(hass: HomeAssistant) -> None:

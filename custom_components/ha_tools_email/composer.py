@@ -535,6 +535,28 @@ def _energy_grid_import_ids(prefs: dict[str, Any]) -> list[str]:
     return list(ids)
 
 
+async def async_grid_sensors(hass: Any) -> list[dict[str, Any]]:
+    """Resolve precisely the configured Energy Dashboard grid imports."""
+    sensors = []
+    try:
+        from homeassistant.components.energy.data import async_get_manager
+        manager = await async_get_manager(hass)
+        prefs = manager.data or {}
+        ids = _energy_grid_import_ids(prefs)
+        for sid in ids:
+            state = hass.states.get(sid) if hasattr(hass.states, "get") else None
+            sensors.append({"entity_id": sid, "name": (getattr(state, "attributes", {}) or {}).get("friendly_name") or sid})
+    except Exception:
+        # Unavailable preferences must not turn every discovered meter into a grid source.
+        pass
+    return sensors
+
+
+async def async_grid_usage(hass: Any, start: datetime, end: datetime) -> dict[str, Any]:
+    """Shared measurement boundary; never discover unrelated energy meters."""
+    return await async_get_energy_usage(hass, await async_grid_sensors(hass), start, end, "daily")
+
+
 async def async_build_energy_report_payload(
     hass: Any,
     *,
@@ -549,19 +571,7 @@ async def async_build_energy_report_payload(
     end = (_aware(window_end).astimezone(timezone.utc) if window_end is not None else
            _aware(now or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0))
     start = _aware(window_start).astimezone(timezone.utc) if window_start is not None else _period_start(cadence, end)
-    sensors = []
-    try:
-        from homeassistant.components.energy.data import async_get_manager
-        manager = await async_get_manager(hass)
-        prefs = manager.data or {}
-        ids = _energy_grid_import_ids(prefs)
-        for sid in ids:
-            state = hass.states.get(sid) if hasattr(hass.states, "get") else None
-            sensors.append({"entity_id": sid, "name": (getattr(state, "attributes", {}) or {}).get("friendly_name") or sid})
-    except Exception:
-        # Unavailable preferences must not turn every discovered meter into a grid source.
-        pass
-    snapshot = await async_get_energy_usage(hass, sensors, start, end, cadence)
+    snapshot = await async_get_energy_usage(hass, await async_grid_sensors(hass), start, end, cadence)
     payload = build_energy_report_payload(
         snapshot["devices"], cadence=cadence, now=end,
         currency=getattr(getattr(hass, "config", None), "currency", "") or "",
@@ -578,13 +588,9 @@ async def async_build_energy_report_payload(
         except Exception:
             tariff_profile = {"schema": 0}
         if tariff_profile is not None:
-            from .tariff import EnergyTariff
-            costs = EnergyTariff(tariff_profile).price_buckets(
-                snapshot.get("hourly_buckets", []),
-                {"from": start.isoformat(), "to": end.isoformat()},
-            )
-            if snapshot["status"] != "ready":
-                costs.update(complete=False, kwh=None, energyCost=None, variableCost=None, usageCost=None)
+            from .energy import price_measurements
+            costs = price_measurements(tariff_profile, snapshot, start, end,
+                                       start.timestamp() % 3600 == 0 and end.timestamp() % 3600 == 0)
             # The report only renders known measured usage charges; monthly fees
             # remain separate metadata, never a prorated or total household bill.
             breakdown = {}

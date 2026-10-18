@@ -46,6 +46,42 @@ async def _safe_smtp_config(hass: HomeAssistant) -> dict[str, Any]:
     }
 
 
+async def _snapshot_authorized(hass, connection):
+    """Recheck the authenticated active household user across asynchronous IO."""
+    user = getattr(connection, 'user', None)
+    if user is None or not getattr(user, 'is_active', False):
+        return False
+    current = await hass.auth.async_get_user(user.id)
+    return current is not None and current.is_active
+
+
+@websocket_api.websocket_command({
+    vol.Required('type'): f'{DOMAIN}/energy_snapshot',
+    vol.Optional('profile'): vol.Any(dict, None),
+})
+@websocket_api.async_response
+async def _ws_energy_snapshot(hass, connection, msg):
+    if not await _snapshot_authorized(hass, connection):
+        connection.send_error(msg['id'], 'unauthorized', 'Active household user required.')
+        return
+    coordinator = _bucket(hass).get('energy_snapshot')
+    if coordinator is None:
+        connection.send_error(msg['id'], 'energy_unavailable', 'Energy snapshot is unavailable.')
+        return
+    try:
+        result = await coordinator.async_snapshot(**({'profile': msg['profile']} if 'profile' in msg else {}))
+    except TariffValidationError:
+        connection.send_error(msg['id'], 'invalid_tariff_profile', 'Tariff profile is invalid.')
+        return
+    except Exception:
+        connection.send_error(msg['id'], 'energy_unavailable', 'Energy snapshot is unavailable.')
+        return
+    if not await _snapshot_authorized(hass, connection):
+        connection.send_error(msg['id'], 'unauthorized', 'Active household user required.')
+        return
+    connection.send_result(msg['id'], result)
+
+
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/get_tariff"})
 @websocket_api.async_response
 async def _ws_get_tariff(hass, connection, msg) -> None:
@@ -80,6 +116,11 @@ async def _ws_set_tariff(hass, connection, msg) -> None:
         # Do not expose Store paths, SMTP state, or private exception messages.
         connection.send_error(msg["id"], "tariff_save_failed", "Tariff settings could not be saved.")
         return
+    coordinator = _bucket(hass).get('energy_snapshot')
+    if coordinator is not None:
+        # The save has already been confirmed; a Recorder outage must not turn it
+        # into an ambiguous save response. Refresh runs through the shared lock.
+        hass.async_create_task(coordinator.async_refresh())
     connection.send_result(msg["id"], result)
 
 
@@ -380,6 +421,7 @@ def async_register_commands(hass: HomeAssistant) -> None:
     """Register all websocket commands."""
     for handler in (
         _ws_get_tariff,
+        _ws_energy_snapshot,
         _ws_set_tariff,
         _ws_get_config,
         _ws_get_attempt_history,

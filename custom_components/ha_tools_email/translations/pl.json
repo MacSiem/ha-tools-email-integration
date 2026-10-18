@@ -62,5 +62,31 @@
       "title": "Zmień hasło SMTP",
       "description": "Przed HA Tools Email 2.1.0 hasło SMTP było zapisywane akcją `ha_tools_email.save_config`. Home Assistant przechowuje dane akcji w swojej bazie danych, więc to hasło może znajdować się także w bazie i w kopiach zapasowych, które ją zawierają.\n\nUtwórz nowe hasło aplikacji u dostawcy poczty, wpisz je w Ustawienia → Urządzenia i usługi → HA Tools Email → Konfiguruj, a stare unieważnij. Ten komunikat zniknie po zapisaniu hasła w tym miejscu."
     }
+  },
+  "entity": {
+    "sensor": {
+      "energy_zone": {
+        "name": "Strefa taryfy",
+        "state": {
+          "cheap": "Tania",
+          "expensive": "Droga",
+          "mixed": "Mieszana"
+        }
+      },
+      "energy_price": {
+        "name": "Cena zużycia teraz"
+      },
+      "energy_next_cheap": {
+        "name": "Następna tania strefa"
+      },
+      "energy_today_cost": {
+        "name": "Koszt zużycia dziś"
+      }
+    },
+    "binary_sensor": {
+      "energy_cheap": {
+        "name": "Tania strefa"
+      }
+    }
   }
 }

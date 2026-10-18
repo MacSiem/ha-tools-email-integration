@@ -141,7 +141,8 @@ class EnergyTariff:
                 continue
             self.zones[z['id']] = {'zone': z['id'], 'label': z.get('label') if isinstance(z.get('label'), str) else z['id'],
                                    'energyRate': self._energy(z.get('energyRate'), path + '.energyRate'),
-                                   'variableRate': self._variable(z.get('variableRate'), path + '.variableRate')}
+                                   'variableRate': self._variable(z.get('variableRate'), path + '.variableRate'),
+                                   'classification': self._classification(z.get('classification'), path + '.classification')}
         self.default = p.get('defaultZone')
         if self.default is not None and (not isinstance(self.default, str) or self.default not in self.zones):
             fail('defaultZone', 'unknown_zone')
@@ -162,7 +163,8 @@ class EnergyTariff:
                         fail(path, 'invalid_interval')
                     self.dynamic.append({'from': start, 'to': end, 'zone': 'dynamic', 'label': 'Dynamic',
                                          'energyRate': self._energy(row.get('energyRate'), path + '.energyRate'),
-                                         'variableRate': self._variable(row.get('variableRate'), path + '.variableRate')})
+                                         'variableRate': self._variable(row.get('variableRate'), path + '.variableRate'),
+                                         'classification': self._classification(row.get('classification'), path + '.classification')})
                 self.dynamic.sort(key=lambda r: r['from'] if r['from'] is not None else 0)
                 for previous, current in zip(self.dynamic, self.dynamic[1:]):
                     if current['from'] is not None and previous['to'] is not None and current['from'] < previous['to']:
@@ -182,6 +184,11 @@ class EnergyTariff:
     def _variable(self, value, path):
         if value is not None and (not _finite(value) or value < 0):
             self._fail(path, 'invalid_fee')
+        return value
+
+    def _classification(self, value, path):
+        if value is not None and value not in ('cheap', 'expensive', 'mixed'):
+            self._fail(path, 'invalid_classification')
         return value
 
     def _rules(self, value, kind):
