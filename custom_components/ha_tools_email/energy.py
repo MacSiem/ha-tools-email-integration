@@ -12,7 +12,7 @@ from math import isfinite
 from zoneinfo import ZoneInfo
 
 from .composer import async_grid_sensors, async_get_energy_usage
-from .tariff import EnergyTariff, validate_tariff_profile
+from .tariff import EnergyTariff, validate_tariff_profile, price_measurements
 
 _OVERRIDE_UNSET = object()
 
@@ -56,15 +56,6 @@ def next_cheap(model, now, horizon=timedelta(days=8)):
         previous_cheap = cheap
     result.update(status='not_found_in_horizon', reason='bounded_horizon')
     return result
-
-
-def price_measurements(profile, measurement, start, end, boundary_complete=True):
-    """Shared report/entity pricing with a single completeness policy."""
-    costs = EnergyTariff(profile).price_buckets(measurement.get('hourly_buckets', []),
-        {'from': start.isoformat(), 'to': end.isoformat()})
-    if measurement.get('status') != 'ready' or not boundary_complete:
-        costs.update(complete=False, kwh=None, energyCost=None, variableCost=None, usageCost=None)
-    return costs
 
 
 def build_snapshot(state, measurement, *, now, measurement_timezone, profile_source='shared'):

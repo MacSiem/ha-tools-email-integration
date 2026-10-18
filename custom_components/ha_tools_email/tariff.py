@@ -352,3 +352,12 @@ class EnergyTariff:
                     kwh=kwh, energyCost=energy, variableCost=variable, usageCost=usage,
                     currency=p.get('currency'), priceBasis=p.get('priceBasis') if p.get('priceBasis') in ('gross', 'net') else None, timezone=p.get('timezone'),
                     clock=deepcopy(self.clock), fixedMonthly=p.get('fixedMonthly') if self.valid and _finite(p.get('fixedMonthly')) else None)
+
+
+def price_measurements(profile, measurement, start, end, boundary_complete=True):
+    """Shared report/entity pricing with a single completeness policy."""
+    costs = EnergyTariff(profile).price_buckets(measurement.get('hourly_buckets', []),
+        {'from': start.isoformat(), 'to': end.isoformat()})
+    if measurement.get('status') != 'ready' or not boundary_complete:
+        costs.update(complete=False, kwh=None, energyCost=None, variableCost=None, usageCost=None)
+    return costs

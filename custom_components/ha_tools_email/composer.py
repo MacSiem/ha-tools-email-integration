@@ -583,7 +583,7 @@ async def async_build_energy_report_payload(
         except Exception:
             tariff_profile = {"schema": 0}
         if tariff_profile is not None:
-            from .energy import price_measurements
+            from .tariff import price_measurements
             costs = price_measurements(tariff_profile, snapshot, start, end,
                                        start.timestamp() % 3600 == 0 and end.timestamp() % 3600 == 0)
             # The report only renders known measured usage charges; monthly fees

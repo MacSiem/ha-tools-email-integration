@@ -102,6 +102,29 @@ action:
         Check the device and the SMTP settings in Settings → Devices & services → HA Tools Email → Configure.
 ```
 
+## Shared Energy snapshot and entities
+
+The integration exposes a shared Energy device with current tariff zone, current
+usage price, cheap-period status, next cheap start and today's measured usage
+cost. All five entities and `ha_tools_email/energy_snapshot` use the same tariff
+engine and grid-import Recorder measurements. Entity identifiers remain stable
+across reloads. PL/EN names are included.
+
+The snapshot accepts an optional `profile` for a validated read-only card override;
+omitting it reads the persisted shared tariff. Overrides never change global
+entities or save settings. The response contains bounded current/next_cheap/today
+sections and actual tariff currency, without meter identifiers, SMTP settings or
+raw profiles. Active household users can read it; tariff writes remain admin-only.
+
+Profiles may explicitly set `classification` to `cheap`, `expensive` or `mixed` on
+zones and dynamic intervals. Missing classification stays unknown; prices and names
+do not imply a cheap period. The primary current price includes energy and variable
+fees. Unknown variable fees mean unknown usage price and cost. Fixed monthly fees
+are metadata only, never prorated into today's charge. Today's window starts at
+HA-local midnight and ends at the last completed Recorder hour; fractional-hour
+calendar boundaries remain unknown. A future cheap start is bounded to eight days
+and skips the current continuous cheap segment.
+
 ## Energy data and previews
 
 Energy reports measure the unique grid-import `stat_energy_from` sources configured
