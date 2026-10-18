@@ -104,6 +104,39 @@ async def _ws_get_tariff_book(hass, connection, msg):
 
 
 @websocket_api.websocket_command({
+    vol.Required('type'): f'{DOMAIN}/preview_tariff_book',
+    vol.Required('book'): dict,
+    vol.Required('expected_revision'): vol.All(int, vol.Range(min=0)),
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def _ws_preview_tariff_book(hass, connection, msg):
+    if not await _book_authorized(hass, connection, admin=True):
+        connection.send_error(msg['id'], 'unauthorized', 'Active administrator required.')
+        return
+    bucket = hass.data.get(DOMAIN, {})
+    storage, coordinator = bucket.get('storage'), bucket.get('energy_snapshot')
+    try:
+        result = await storage.async_preview_tariff_book(msg['book'], expected_revision=msg['expected_revision'])
+    except TariffRevisionConflict:
+        connection.send_error(msg['id'], 'tariff_revision_conflict', 'Tariff history changed. Reload before continuing.')
+        return
+    except TariffValidationError:
+        connection.send_error(msg['id'], 'invalid_tariff_book', 'Tariff history or revision is invalid.')
+        return
+    except Exception:
+        connection.send_error(msg['id'], 'tariff_book_preview_failed', 'Tariff history could not be validated.')
+        return
+    if not await _book_authorized(hass, connection, admin=True):
+        connection.send_error(msg['id'], 'unauthorized', 'Active administrator required.')
+        return
+    if not _book_context_current(hass, storage, coordinator, result['revision']):
+        connection.send_error(msg['id'], 'tariff_book_changed', 'Tariff history changed. Reload before continuing.')
+        return
+    connection.send_result(msg['id'], result)
+
+
+@websocket_api.websocket_command({
     vol.Required('type'): f'{DOMAIN}/set_tariff_book',
     vol.Required('book'): dict,
     vol.Required('expected_revision'): vol.All(int, vol.Range(min=0)),
@@ -562,6 +595,7 @@ def async_register_commands(hass: HomeAssistant) -> None:
     for handler in (
         _ws_get_tariff,
         _ws_get_tariff_book,
+        _ws_preview_tariff_book,
         _ws_set_tariff_book,
         _ws_energy_snapshot,
         _ws_energy_price_queries,

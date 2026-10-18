@@ -199,6 +199,19 @@ class EmailStorage:
             return {'book': raw, 'revision': state['revision'], 'updated_at': state['updated_at'],
                     'legacy_profile': state['profile'] if raw is None else None}
 
+    async def async_preview_tariff_book(self, book, *, expected_revision, now=None):
+        """Return validated proposed history and exact past ranges, without writes."""
+        if type(expected_revision) is not int or expected_revision < 0:
+            raise TariffValidationError([{'path': 'expected_revision', 'reason': 'invalid_revision'}])
+        with self._book_admission():
+            async with self._lock:
+                data = await self._async_tariff_data_locked()
+                if self._tariff_state(data)['revision'] != expected_revision:
+                    raise TariffRevisionConflict('tariff_revision_conflict')
+                clean, changes = await self._async_book_cpu(partial(
+                    prepare_tariff_book_edit, data.get('tariff_book'), book, now or datetime.now(timezone.utc)))
+                return {'book': clean, 'historical_changes': changes, 'revision': expected_revision}
+
     async def async_save_tariff_book(self, book, *, expected_revision, historical_edit_ack=False,
                                     now=None, before_save=None) -> dict[str, Any]:
         """Publish one validated copy only after the existing confirmed Store write.

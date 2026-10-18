@@ -340,10 +340,13 @@ def prepare_tariff_book_edit(before, proposed, now):
         b = new_tariffs.get(sid, {}).get('versions', [])
         points = {bound for version in a + b for bound in _bounds(version)
                   if bound is not None and bound < cutoff}
-        for point in sorted(points):
+        ordered = sorted(points)
+        for index, point in enumerate(ordered):
             if signature(_version_at(a, point)) != signature(_version_at(b, point)):
-                changes.append({'tariff_id': sid, 'from': datetime.fromtimestamp(point / 1000, timezone.utc).isoformat()})
-                break
+                stop = ordered[index + 1] if index + 1 < len(ordered) else cutoff
+                changes.append({'tariff_id': sid,
+                                'from': datetime.fromtimestamp(point / 1000, timezone.utc).isoformat(),
+                                'to': datetime.fromtimestamp(stop / 1000, timezone.utc).isoformat()})
     return clean, changes
 
 
