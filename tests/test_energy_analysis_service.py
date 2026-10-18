@@ -52,7 +52,13 @@ class Harness:
             auth=types.SimpleNamespace(async_get_user=auth),
             config_entries=types.SimpleNamespace(async_get_entry=lambda _: self.entry))
         self.book = book([version(monthly=31)])
-        self.storage = types.SimpleNamespace(current_tariff_revision=4)
+        self.policy = {'schema': 1, 'features': {}}
+        self.storage = types.SimpleNamespace(current_tariff_revision=4, current_feature_access_revision=0)
+        async def get_policy():
+            return {'policy': copy.deepcopy(self.policy),
+                    'revision': self.storage.current_feature_access_revision,
+                    'status': 'ready' if self.policy.get('schema') == 1 else 'invalid_configuration'}
+        self.storage.async_get_feature_access = get_policy
         async def get_book():
             return {'book': copy.deepcopy(self.book), 'revision': self.storage.current_tariff_revision}
         self.storage.async_get_tariff_book = get_book
@@ -152,6 +158,66 @@ class EnergyAnalysisServiceTest(unittest.TestCase):
                 self.assertNotEqual(before['snapshot_id'], fresh['snapshot_id'])
         asyncio.run(run())
 
+    def test_feature_denied_or_invalid_policy_prevents_all_private_io(self):
+        async def run():
+            for policy in (
+                {'schema': 1, 'features': {'energy_analysis': {'read': {'mode': 'admin'}}}},
+                {'schema': 0},
+            ):
+                h = Harness(); h.policy = policy
+                with self.subTest(policy=policy), h.patches(), patch.object(
+                        service, 'async_get_energy_metadata', AsyncMock()) as metadata:
+                    with self.assertRaises(PermissionError):
+                        await h.subject.async_get_analysis('day', 'user')
+                    metadata.assert_not_awaited()
+                    self.assertEqual([], h.queries)
+                    self.assertEqual([], h.registry_ids)
+        asyncio.run(run())
+
+    def test_selected_user_cache_does_not_grant_other_user_or_native_denied_source(self):
+        async def run():
+            h = Harness()
+            h.policy = {'schema': 1, 'features': {'energy_analysis': {
+                'read': {'mode': 'selected_users', 'user_ids': ['allowed']}}}}
+            with h.patches():
+                result = await h.subject.async_get_analysis('day', 'allowed')
+                self.assertEqual(0, result['context']['feature_access_revision'])
+                count = len(h.queries)
+                with self.assertRaises(PermissionError):
+                    await h.subject.async_get_analysis('day', 'denied')
+                self.assertEqual(count, len(h.queries))
+                h.permissions.access_all_entities = lambda _: False
+                with self.assertRaises(PermissionError):
+                    await h.subject.async_get_analysis('day', 'allowed')
+                self.assertEqual(count, len(h.queries))
+        asyncio.run(run())
+
+    def test_policy_revocation_during_grid_io_blocks_consumer_and_final_output(self):
+        async def run():
+            h = Harness()
+            async def revoke(*args):
+                h.policy['features']['energy_analysis'] = {'read': {'mode': 'admin'}}
+            h.on_read = revoke
+            with h.patches():
+                with self.assertRaises(PermissionError):
+                    await h.subject.async_get_analysis('day', 'user')
+                self.assertEqual([('sensor.grid',)], [ids for ids, _, _ in h.queries])
+                self.assertIsNone(h.subject._cache)
+        asyncio.run(run())
+
+    def test_confirmed_policy_revision_invalidates_cached_and_inflight_dto(self):
+        async def run():
+            h = Harness()
+            with h.patches():
+                result = await h.subject.async_get_analysis('day', 'user')
+                h.storage.current_feature_access_revision = 1
+                self.assertFalse(h.subject.context_is_current(result))
+                self.assertFalse(await h.subject.async_validate_result(result, 'user'))
+                fresh = await h.subject.async_get_analysis('day', 'user')
+                self.assertEqual(1, fresh['context']['feature_access_revision'])
+                self.assertNotEqual(result['snapshot_id'], fresh['snapshot_id'])
+        asyncio.run(run())
+
     def test_all_current_kinds_and_year_53_absolute_bounded_chunks(self):
         async def run():
             h = Harness(); h.book = None
@@ -182,6 +248,7 @@ class EnergyAnalysisServiceTest(unittest.TestCase):
             changes = {
                 'tariff': lambda h: setattr(h.storage, 'current_tariff_revision', 5),
                 'registry': lambda h: setattr(h.registry, 'revision', 3),
+                'feature_policy': lambda h: setattr(h.storage, 'current_feature_access_revision', 1),
                 'source': lambda h: h.manager.data['device_consumption'][0].update(name='Other'),
                 'timezone': lambda h: setattr(h.hass.config, 'time_zone', 'Europe/Warsaw'),
                 'calendar': lambda h: setattr(h, 'now', h.now + timedelta(hours=1)),
