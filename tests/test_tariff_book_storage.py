@@ -32,6 +32,18 @@ class BookStorageTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(initial, await s.async_get_tariff_book())
         self.assertEqual(1, len(s._store.saved))
 
+    async def test_entire_runtime_bucket_replaced_during_validation_never_writes(self):
+        _, s = self.storage()
+        lane = s.hass.data['ha_tools_email']['energy_snapshot']
+        async def replaced(job):
+            result = job()
+            s.hass.data['ha_tools_email'] = {'energy_snapshot': object()}
+            return result
+        lane._async_run_cpu = replaced
+        with self.assertRaisesRegex(RuntimeError, 'energy_snapshot_unloaded'):
+            await s.async_save_tariff_book(book(), expected_revision=0, now=NOW)
+        self.assertEqual([], s._store.saved)
+
     async def test_additive_save_restart_shared_revision_and_foreign_state(self):
         module, s = self.storage()
         foreign = {'smtp_config': {'password': '!secret synthetic'}, 'schedules': [{'id': 'keep'}],
