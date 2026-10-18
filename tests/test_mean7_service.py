@@ -1,13 +1,13 @@
 """Mean-seven costs use the active history and existing service access fences."""
 from decimal import Decimal
 import unittest
-from tests.test_analysis_group_baseline import AnalysisGroupBaselineTest
+from tests import test_analysis_group_baseline as group_fixtures
 from tests import test_energy_analysis_service as fixtures
 
 
 class MeanSevenServiceTest(unittest.IsolatedAsyncioTestCase):
     def harness(self):
-        h = AnalysisGroupBaselineTest().harness()
+        h = group_fixtures.AnalysisGroupBaselineTest().harness()
         old = fixtures.version(rate=.4, version_id='old', monthly=31)
         new = fixtures.version(start='2026-10-10', rate=.5, version_id='new', monthly=31)
         old['profile']['zones'][0]['variableRate'] = .1

@@ -236,6 +236,8 @@ class EnergyAnalysisService:
                     membership=membership, consumer_domain=configuration['consumer_domain']), guard)
                 plan, pair, comparisons, current_day, baseline_accumulator = None, None, None, None, None
                 group_pair = None
+                active_tariff = (next((row for row in state['book']['tariffs']
+                    if row['id'] == state['book'].get('active_tariff_id')), None) if state['book'] else None)
                 if comparison is not None:
                     resolved = resolve_analysis_periods(kind, self._clock(), context['measurement_timezone'],
                                                        anchor=context['period_anchor'])
@@ -243,8 +245,6 @@ class EnergyAnalysisService:
                     plan = resolved['comparisons'][comparison]
                     comparisons = {}
                     if plan['status'] == 'ready' and comparison != 'mean7':
-                        active_tariff = (next((row for row in state['book']['tariffs']
-                            if row['id'] == state['book'].get('active_tariff_id')), None) if state['book'] else None)
                         pair = await self._cpu(partial(PairedComparisonAccumulator, period,
                             plan['baseline_periods'][0], timezone_name=context['measurement_timezone'],
                             calendar_kind={'day': 'daily', 'week': 'weekly', 'month': 'monthly', 'year': 'yearly'}[kind],
@@ -301,7 +301,8 @@ class EnergyAnalysisService:
                             days.append(chunk['grid'])
                             del chunk
                         compared = await self._cpu(partial(compare_daily_mean7, current_day, days,
-                            period, plan['baseline_periods'], timezone_name=context['measurement_timezone']), guard)
+                            period, plan['baseline_periods'], timezone_name=context['measurement_timezone'],
+                            tariff=active_tariff), guard)
                         del days, current_day
                     comparisons[comparison] = {**compared, 'baseline_kind': comparison,
                                                'baseline_periods': deepcopy(plan['baseline_periods'])}
