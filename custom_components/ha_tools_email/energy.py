@@ -15,6 +15,7 @@ import json
 from math import ceil
 from zoneinfo import ZoneInfo
 
+from .const import DOMAIN
 from .composer import async_grid_sensors, async_get_energy_usage, async_get_energy_metadata
 from .tariff import EnergyTariff, validate_tariff_profile, price_measurements, _stamp
 
@@ -126,17 +127,34 @@ MAX_PRICE_JSON_BYTES = 512 * 1024
 MAX_PRICE_MINUTES = 2048 * 60
 MAX_PRICE_WORK = 2_000_000
 MAX_PENDING_PRICE_JOBS = 4
+MAX_PENDING_CPU_JOBS = 8
 
 
-def _prepare_price_queries(queries, profile):
-    """Bound JSON and the actual minute/rule-interval work before CPU dispatch."""
+def _price_query_input(queries, profile):
+    """Small structural/JSON gate before copying data into the CPU lane."""
+    if not isinstance(queries, list) or not 1 <= len(queries) <= MAX_PRICE_QUERIES:
+        raise ValueError('invalid_energy_price_queries')
+    count = 0
+    for query in queries:
+        if not isinstance(query, dict) or not isinstance(query.get('buckets'), list):
+            raise ValueError('invalid_energy_price_queries')
+        if 'coverage' in query and not isinstance(query['coverage'], dict):
+            raise ValueError('invalid_energy_price_queries')
+        count += len(query['buckets'])
+        if count > MAX_PRICE_BUCKETS:
+            raise ValueError('invalid_energy_price_queries')
     try:
         size = len(json.dumps({'queries': queries, 'profile': profile},
                               ensure_ascii=False, allow_nan=False).encode('utf-8'))
     except (ValueError, TypeError, OverflowError, RecursionError):
         raise ValueError('invalid_energy_price_queries') from None
-    if size > MAX_PRICE_JSON_BYTES or not isinstance(queries, list) or not 1 <= len(queries) <= MAX_PRICE_QUERIES:
+    if size > MAX_PRICE_JSON_BYTES:
         raise ValueError('invalid_energy_price_queries')
+    return deepcopy(queries)
+
+
+def _prepare_price_queries(queries, profile):
+    """Bound JSON and the actual minute/rule-interval work before CPU dispatch."""
     model = EnergyTariff(profile)
     # rate_at can examine every rule and every interval, including exceptions.
     weight = 1 + sum(max(1, len(rule['intervals'])) for rule in model.rules + model.exceptions)
@@ -164,7 +182,7 @@ def _prepare_price_queries(queries, profile):
             work += checkpoints * weight
             if minutes > MAX_PRICE_MINUTES or work > MAX_PRICE_WORK:
                 raise ValueError('invalid_energy_price_queries')
-    return model, deepcopy(queries)
+    return model, queries
 
 
 def _price_queries(model, queries, revision, profile_source):
@@ -182,6 +200,11 @@ def _price_queries(model, queries, revision, profile_source):
             'profile_source': profile_source, 'results': results}
 
 
+def _price_query_job(queries, profile, revision, profile_source):
+    model, bounded = _prepare_price_queries(queries, profile)
+    return _price_queries(model, bounded, revision, profile_source)
+
+
 class EnergySnapshotCoordinator:
     """Serialize refreshes; all five entities read one bounded public snapshot."""
 
@@ -189,7 +212,12 @@ class EnergySnapshotCoordinator:
         self.hass, self.storage, self.provider = hass, storage, provider
         self.data = None
         self._lock = asyncio.Lock()
-        self._cpu_lock = asyncio.Lock()
+        data = getattr(hass, 'data', None)
+        bucket = data.setdefault(DOMAIN, {}) if isinstance(data, dict) else {}
+        # This lane survives config-entry unload/reload. An old worker thread
+        # must actually finish before the replacement coordinator starts one.
+        self._cpu_lane = bucket.setdefault('energy_cpu_lane', {'lock': asyncio.Lock(), 'pending': 0})
+        self._cpu_lock = self._cpu_lane['lock']
         self._pricing_pending = 0
         self._measurement = None
         self._measurement_key = None
@@ -228,8 +256,8 @@ class EnergySnapshotCoordinator:
                 else:
                     clean, revision = validate_tariff_profile(profile), None
                 self._check_running()
-                model, bounded = _prepare_price_queries(queries, clean)
-                result = await self._async_run_cpu(partial(_price_queries, model, bounded, revision,
+                bounded = _price_query_input(queries, clean)
+                result = await self._async_run_cpu(partial(_price_query_job, bounded, clean, revision,
                                                           'shared' if shared else 'override'))
                 self._check_running()
                 if shared:
@@ -372,14 +400,37 @@ class EnergySnapshotCoordinator:
         return await self._async_run_cpu(build)
 
     async def _async_run_cpu(self, job):
-        async with self._cpu_lock:
-            self._check_running()
-            executor = getattr(self.hass, 'async_add_executor_job', None)
-            # Real Home Assistant always supplies an executor. The synchronous
-            # path is only for bounded source-only test doubles.
-            result = await executor(job) if executor is not None else job()
-            self._check_running()
-            return result
+        if self._cpu_lane['pending'] >= MAX_PENDING_CPU_JOBS:
+            raise RuntimeError('energy_pricing_busy')
+        self._cpu_lane['pending'] += 1
+        try:
+            async with self._cpu_lock:
+                self._check_running()
+                executor = getattr(self.hass, 'async_add_executor_job', None)
+                if executor is None:  # Bounded source-only test doubles.
+                    return job()
+                pending = asyncio.ensure_future(executor(job))
+                cancelled = False
+                while True:
+                    try:
+                        result = await asyncio.shield(pending)
+                        break
+                    except asyncio.CancelledError:
+                        # Cancelling an await does not stop a Python executor
+                        # thread. Hold the lane until that exact job completes.
+                        cancelled = True
+                        if pending.cancelled():
+                            raise
+                    except Exception:
+                        if cancelled:
+                            raise asyncio.CancelledError from None
+                        raise
+                if cancelled:
+                    raise asyncio.CancelledError
+                self._check_running()
+                return result
+        finally:
+            self._cpu_lane['pending'] -= 1
 
     def _check_running(self):
         if self._stopped:
