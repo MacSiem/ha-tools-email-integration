@@ -5,7 +5,7 @@ Only zone/version scalar states plus one peak representative survive the loop.
 """
 from datetime import datetime, timezone
 from decimal import Decimal, localcontext
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .energy_zone_bins import ZoneBreakdown, zone_labels
 
@@ -23,7 +23,10 @@ def build_period_summary(rows, period, active, totals):
     """
     with localcontext() as context:
         context.prec = 40
-        zone = ZoneInfo(period['timezone'])
+        try:
+            zone = ZoneInfo(period['timezone'])
+        except (KeyError, TypeError, ValueError, ZoneInfoNotFoundError):
+            zone = None
         breakdown = ZoneBreakdown(active, zone_labels(active))
         priced = active['rows'] if active is not None else ()
         cheap, classified = Decimal(0), Decimal(0)
@@ -86,13 +89,16 @@ def build_period_summary(rows, period, active, totals):
             a, b, quantity = peak
             start = datetime.fromtimestamp(a / 1000, timezone.utc)
             end = datetime.fromtimestamp(b / 1000, timezone.utc)
-            local_start, local_end = start.astimezone(zone), end.astimezone(zone)
-            peak_hour.update(status='ready' if complete else 'partial',
-                reason=None if complete else 'incomplete_period',
+            local_start = start.astimezone(zone) if zone is not None else None
+            local_end = end.astimezone(zone) if zone is not None else None
+            peak_hour.update(status='unknown' if zone is None else 'ready' if complete else 'partial',
+                reason='measurement_timezone_unavailable' if zone is None else None if complete else 'incomplete_period',
                 id=f'{int(a)}:{int(b)}', **{'from': a, 'to': b},
                 start=start.isoformat(), end=end.isoformat(),
-                local_start=local_start.isoformat(), local_end=local_end.isoformat(),
-                fold=local_start.fold, end_fold=local_end.fold,
+                local_start=local_start.isoformat() if local_start is not None else None,
+                local_end=local_end.isoformat() if local_end is not None else None,
+                fold=local_start.fold if local_start is not None else None,
+                end_fold=local_end.fold if local_end is not None else None,
                 kwh=_text(quantity), tied_count=tied_count)
         period_zones = breakdown.finish({
             'complete': complete, 'recorded_kwh': totals['recorded_household_kwh'],
