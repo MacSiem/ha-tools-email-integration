@@ -55,6 +55,16 @@ async def _snapshot_authorized(hass, connection):
     return current is not None and current.is_active
 
 
+def _energy_context_current(hass, coordinator, result):
+    """No await between this lifecycle/context guard and the result send."""
+    if hass.data.get(DOMAIN, {}).get('energy_snapshot') is not coordinator:
+        return False
+    if not getattr(coordinator, 'running', not getattr(coordinator, '_stopped', False)):
+        return False
+    check = getattr(coordinator, 'tariff_context_is_current', None)
+    return check(result) if check is not None else True
+
+
 @websocket_api.websocket_command({
     vol.Required('type'): f'{DOMAIN}/energy_snapshot',
     vol.Optional('profile'): vol.Any(dict, None),
@@ -64,7 +74,7 @@ async def _ws_energy_snapshot(hass, connection, msg):
     if not await _snapshot_authorized(hass, connection):
         connection.send_error(msg['id'], 'unauthorized', 'Active household user required.')
         return
-    coordinator = _bucket(hass).get('energy_snapshot')
+    coordinator = hass.data.get(DOMAIN, {}).get('energy_snapshot')
     if coordinator is None:
         connection.send_error(msg['id'], 'energy_unavailable', 'Energy snapshot is unavailable.')
         return
@@ -78,6 +88,45 @@ async def _ws_energy_snapshot(hass, connection, msg):
         return
     if not await _snapshot_authorized(hass, connection):
         connection.send_error(msg['id'], 'unauthorized', 'Active household user required.')
+        return
+    if not _energy_context_current(hass, coordinator, result):
+        connection.send_error(msg['id'], 'energy_unavailable', 'Energy snapshot is unavailable.')
+        return
+    connection.send_result(msg['id'], result)
+
+
+@websocket_api.websocket_command({
+    vol.Required('type'): f'{DOMAIN}/energy_price_queries',
+    vol.Required('queries'): list,
+    vol.Optional('profile'): vol.Any(dict, None),
+})
+@websocket_api.async_response
+async def _ws_energy_price_queries(hass, connection, msg):
+    """Read-only pricing of supplied card buckets, never household measurement."""
+    if not await _snapshot_authorized(hass, connection):
+        connection.send_error(msg['id'], 'unauthorized', 'Active household user required.')
+        return
+    coordinator = hass.data.get(DOMAIN, {}).get('energy_snapshot')
+    if coordinator is None:
+        connection.send_error(msg['id'], 'energy_unavailable', 'Energy pricing is unavailable.')
+        return
+    try:
+        result = await coordinator.async_price_queries(msg['queries'],
+            **({'profile': msg['profile']} if 'profile' in msg else {}))
+    except TariffValidationError:
+        connection.send_error(msg['id'], 'invalid_tariff_profile', 'Tariff profile is invalid.')
+        return
+    except ValueError:
+        connection.send_error(msg['id'], 'invalid_energy_price_queries', 'Price queries exceed supported structure or limits.')
+        return
+    except Exception:
+        connection.send_error(msg['id'], 'energy_unavailable', 'Energy pricing is unavailable.')
+        return
+    if not await _snapshot_authorized(hass, connection):
+        connection.send_error(msg['id'], 'unauthorized', 'Active household user required.')
+        return
+    if not _energy_context_current(hass, coordinator, result):
+        connection.send_error(msg['id'], 'energy_unavailable', 'Energy pricing is unavailable.')
         return
     connection.send_result(msg['id'], result)
 
@@ -422,6 +471,7 @@ def async_register_commands(hass: HomeAssistant) -> None:
     for handler in (
         _ws_get_tariff,
         _ws_energy_snapshot,
+        _ws_energy_price_queries,
         _ws_set_tariff,
         _ws_get_config,
         _ws_get_attempt_history,

@@ -34,8 +34,9 @@ class EnergySensor(EnergySnapshotEntity, SensorEntity):
 
     @property
     def state_class(self):
-        # Usage charges may decrease with negative energy prices.
-        return SensorStateClass.MEASUREMENT if self.key in ('price', 'today_cost') else None
+        # Daily monetary costs can fall and reset at HA-local midnight. Without
+        # explicit last_reset semantics they must not claim long-term totals.
+        return SensorStateClass.MEASUREMENT if self.key == 'price' else None
 
     @property
     def native_unit_of_measurement(self):

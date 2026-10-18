@@ -10,10 +10,13 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from math import isfinite
 from functools import partial
+from bisect import bisect_right
+import json
+from math import ceil
 from zoneinfo import ZoneInfo
 
 from .composer import async_grid_sensors, async_get_energy_usage, async_get_energy_metadata
-from .tariff import EnergyTariff, validate_tariff_profile, price_measurements
+from .tariff import EnergyTariff, validate_tariff_profile, price_measurements, _stamp
 
 _OVERRIDE_UNSET = object()
 
@@ -117,6 +120,68 @@ def _source_signature(sensors, metadata):
     return tuple(result)
 
 
+MAX_PRICE_QUERIES = 64
+MAX_PRICE_BUCKETS = 2048
+MAX_PRICE_JSON_BYTES = 512 * 1024
+MAX_PRICE_MINUTES = 2048 * 60
+MAX_PRICE_WORK = 2_000_000
+MAX_PENDING_PRICE_JOBS = 4
+
+
+def _prepare_price_queries(queries, profile):
+    """Bound JSON and the actual minute/rule-interval work before CPU dispatch."""
+    try:
+        size = len(json.dumps({'queries': queries, 'profile': profile},
+                              ensure_ascii=False, allow_nan=False).encode('utf-8'))
+    except (ValueError, TypeError, OverflowError, RecursionError):
+        raise ValueError('invalid_energy_price_queries') from None
+    if size > MAX_PRICE_JSON_BYTES or not isinstance(queries, list) or not 1 <= len(queries) <= MAX_PRICE_QUERIES:
+        raise ValueError('invalid_energy_price_queries')
+    model = EnergyTariff(profile)
+    # rate_at can examine every rule and every interval, including exceptions.
+    weight = 1 + sum(max(1, len(rule['intervals'])) for rule in model.rules + model.exceptions)
+    count = minutes = work = 0
+    for query in queries:
+        if not isinstance(query, dict) or not isinstance(query.get('buckets'), list):
+            raise ValueError('invalid_energy_price_queries')
+        if 'coverage' in query and not isinstance(query['coverage'], dict):
+            raise ValueError('invalid_energy_price_queries')
+        rows = query['buckets']
+        count += len(rows)
+        if count > MAX_PRICE_BUCKETS:
+            raise ValueError('invalid_energy_price_queries')
+        for raw in rows:
+            row = raw if isinstance(raw, dict) else {}
+            start, end = _stamp(row.get('from')), _stamp(row.get('to'))
+            # Invalid/oversized intervals return unknown immediately in the
+            # existing model. They do not create an unbounded checkpoint scan.
+            checkpoints = 1
+            if start is not None and end is not None and 0 < end - start <= 86400000:
+                span = ceil((end - start) / 60000)
+                minutes += span
+                checkpoints += span + 1
+                checkpoints += bisect_right(model._boundaries, end - 1) - bisect_right(model._boundaries, start)
+            work += checkpoints * weight
+            if minutes > MAX_PRICE_MINUTES or work > MAX_PRICE_WORK:
+                raise ValueError('invalid_energy_price_queries')
+    return model, deepcopy(queries)
+
+
+def _price_queries(model, queries, revision, profile_source):
+    results = []
+    for query in queries:
+        priced = model.price_buckets(query['buckets'], query.get('coverage'))
+        # Keep the exact model result, except unknown clock extension fields are
+        # deliberately withheld from the public API.
+        clock = {'mode': model.clock['mode']} if model.valid else {}
+        if clock.get('mode') == 'fixed':
+            clock['offsetMinutes'] = model.clock['offsetMinutes']
+        priced['clock'] = clock
+        results.append(priced)
+    return {'schema': 1, 'tariff_revision': revision,
+            'profile_source': profile_source, 'results': results}
+
+
 class EnergySnapshotCoordinator:
     """Serialize refreshes; all five entities read one bounded public snapshot."""
 
@@ -124,6 +189,8 @@ class EnergySnapshotCoordinator:
         self.hass, self.storage, self.provider = hass, storage, provider
         self.data = None
         self._lock = asyncio.Lock()
+        self._cpu_lock = asyncio.Lock()
+        self._pricing_pending = 0
         self._measurement = None
         self._measurement_key = None
         self._measurement_at = None
@@ -132,6 +199,47 @@ class EnergySnapshotCoordinator:
         self._unsub = None
         self._boundary_unsub = None
         self._model_boundaries = []
+
+    @property
+    def running(self):
+        return not self._stopped
+
+    def tariff_context_is_current(self, result):
+        """No-await guard for the final WS send after authorization IO."""
+        if self._stopped:
+            return False
+        if result.get('profile_source') == 'shared':
+            return self.storage.current_tariff_revision == result.get('tariff_revision')
+        return True
+
+    async def async_price_queries(self, queries, *, profile=_OVERRIDE_UNSET):
+        """Price card-supplied intervals; never read Recorder or update entities."""
+        self._check_running()
+        if self._pricing_pending >= MAX_PENDING_PRICE_JOBS:
+            raise RuntimeError('energy_pricing_busy')
+        self._pricing_pending += 1
+        try:
+            async with self._lock:
+                self._check_running()
+                shared = profile is _OVERRIDE_UNSET
+                if shared:
+                    state = await self.storage.async_get_tariff()
+                    clean, revision = state['profile'], state['revision']
+                else:
+                    clean, revision = validate_tariff_profile(profile), None
+                self._check_running()
+                model, bounded = _prepare_price_queries(queries, clean)
+                result = await self._async_run_cpu(partial(_price_queries, model, bounded, revision,
+                                                          'shared' if shared else 'override'))
+                self._check_running()
+                if shared:
+                    current = await self.storage.async_get_tariff()
+                    self._check_running()
+                    if current['revision'] != revision:
+                        raise RuntimeError('energy_tariff_changed')
+                return result
+        finally:
+            self._pricing_pending -= 1
 
     def async_add_listener(self, listener):
         self._listeners.add(listener)
@@ -261,10 +369,17 @@ class EnergySnapshotCoordinator:
 
     async def _async_build_snapshot(self, state, measurement, **kwargs):
         build = partial(build_snapshot, state, measurement, **kwargs)
-        executor = getattr(self.hass, 'async_add_executor_job', None)
-        # Real Home Assistant always supplies the executor; the synchronous path
-        # keeps this pure coordinator usable by bounded source-only test doubles.
-        return await executor(build) if executor is not None else build()
+        return await self._async_run_cpu(build)
+
+    async def _async_run_cpu(self, job):
+        async with self._cpu_lock:
+            self._check_running()
+            executor = getattr(self.hass, 'async_add_executor_job', None)
+            # Real Home Assistant always supplies an executor. The synchronous
+            # path is only for bounded source-only test doubles.
+            result = await executor(job) if executor is not None else job()
+            self._check_running()
+            return result
 
     def _check_running(self):
         if self._stopped:

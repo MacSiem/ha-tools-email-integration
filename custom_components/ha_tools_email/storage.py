@@ -137,6 +137,18 @@ class EmailStorage:
                 self._tariff_only_loaded = None
             return deepcopy(self._data)
 
+    @property
+    def current_tariff_revision(self) -> int | None:
+        """Synchronous publication token after confirmed writes, without IO.
+
+        Used after the final authorization await so unload/save cannot publish an
+        answer whose context was invalidated during that await.
+        """
+        if self._data is None:
+            return None
+        revision = self._data.get('tariff_revision', 0)
+        return revision if type(revision) is int and revision >= 0 else 0
+
     async def async_get_tariff(self) -> dict[str, Any]:
         """Authenticated household settings read; never migrates or reads SMTP files."""
         async with self._lock:
