@@ -15,6 +15,10 @@ class MeanSevenGroupServiceTest(unittest.IsolatedAsyncioTestCase):
                 tuple(Decimal(row[k]) for k in ('current_kwh','baseline_kwh','delta_kwh')))
             self.assertEqual('43.20', row['delta_usage_cost'])
             self.assertTrue(groups['reconciles_household_delta'])
+            self.assertTrue(groups['reconciles_household_cost_delta'])
+            self.assertEqual(Decimal(result['comparisons']['mean7']['costs']['delta_cost']),
+                Decimal(row['delta_usage_cost'])+Decimal(groups['unassigned']['delta_usage_cost'])+
+                Decimal(groups['unmeasured']['delta_usage_cost']))
             self.assertNotIn('fixed_cost', row['costs']['current'])
             self.assertEqual([['sensor.device']], h.registry_ids)
             self.assertEqual(16, len(h.queries))

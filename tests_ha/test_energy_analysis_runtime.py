@@ -79,6 +79,9 @@ async def test_native_analysis_selected_comparison_chart_and_policy(hass, hass_s
             assert costs['current']['usage_cost'] == costs['baseline']['usage_cost'] == result['totals']['usage_cost']
             groups = compared['groups']
             assert groups['reconciles_household_delta']
+            assert groups['reconciles_household_cost_delta']
+            assert sum((Decimal(row['delta_usage_cost']) for row in groups['devices'].values()),
+                Decimal(groups['unmeasured']['delta_usage_cost'])) == Decimal(costs['delta_cost'])
             group = groups['unassigned']
             assert tuple(Decimal(group[key]) for key in ('current_kwh', 'baseline_kwh', 'delta_kwh')) == (Decimal(3), Decimal(3), Decimal(0))
             assert group['delta_usage_cost'] == '0.00'
