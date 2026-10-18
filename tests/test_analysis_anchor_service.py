@@ -1,5 +1,4 @@
 """Selected periods reach actual bounded analysis and final context validation."""
-import copy
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import unittest

@@ -79,13 +79,13 @@ class EnergyAnalysisService:
             self._cache = None
             raise RuntimeError('energy_snapshot_unloaded')
 
-    def _capture(self, kind):
+    def _capture(self, kind, anchor=None):
         self._check_running()
         configuration = capture_energy_configuration(self._manager.data or {})
         if not configuration['grid_sensors']:
             raise ValueError('energy_analysis_unavailable')
         zone = self.hass.config.time_zone
-        resolved = resolve_analysis_periods(kind, self._clock(), zone)
+        resolved = resolve_analysis_periods(kind, self._clock(), zone, anchor=anchor)
         if resolved['status'] != 'ready':
             raise ValueError(resolved['reason'])
         period = {**resolved['current'], 'kind': kind}
@@ -95,11 +95,12 @@ class EnergyAnalysisService:
                    'registry_revision': self.registry.revision,
                    'measurement_timezone': zone,
                    'source_signature': configuration['source_signature'],
-                   'period_kind': kind, 'period_signature': _digest(period)}
+                   'period_kind': kind, 'period_signature': _digest(period),
+                   'period_anchor': period['local_start'][:10] if anchor is not None else None}
         return configuration, period, context
 
     def _assert_current(self, context):
-        _, _, current = self._capture(context['period_kind'])
+        _, _, current = self._capture(context['period_kind'], context.get('period_anchor'))
         if any(context.get(key) != value for key, value in current.items()):
             self._cache = None
             raise RuntimeError('energy_analysis_context_changed')
@@ -151,7 +152,7 @@ class EnergyAnalysisService:
         await guard()
         return result
 
-    async def async_get_analysis(self, kind, user_id):
+    async def async_get_analysis(self, kind, user_id, *, anchor=None):
         # Admission includes requests waiting for this service's own lock.
         self._check_running()
         if self._pending >= MAX_PENDING_ANALYSES:
@@ -168,7 +169,7 @@ class EnergyAnalysisService:
                 # Reading settings does not access Recorder, metadata or registry.
                 policy_state = await self.storage.async_get_feature_access()
                 self._check_running()
-                configuration, period, context = self._capture(kind)
+                configuration, period, context = self._capture(kind, anchor)
                 # No metadata, Recorder or registry read precedes BOTH gates.
                 await self._require_access(context, configuration, user_id, policy_state=policy_state)
                 self._assert_current(context)
@@ -228,7 +229,7 @@ class EnergyAnalysisService:
         try:
             context = result['context']
             self._assert_current(context)
-            _, period, _ = self._capture(context['period_kind'])
+            _, period, _ = self._capture(context['period_kind'], context.get('period_anchor'))
             return result['period'] == period
         except (KeyError, TypeError, ValueError, RuntimeError, AttributeError):
             return False
@@ -246,7 +247,7 @@ class EnergyAnalysisService:
         self._pending += 1
         try:
             context = deepcopy(result['context'])
-            configuration, _, _ = self._capture(context['period_kind'])
+            configuration, _, _ = self._capture(context['period_kind'], context.get('period_anchor'))
             await self._guard(context, configuration, user_id)
             return self.context_is_current(result)
         except PermissionError:
