@@ -67,6 +67,18 @@ class ConsumerPeriod:
             name = row.get('name')
             if isinstance(name, str) and name.strip() and len(name) <= 256:
                 self._membership['sources'][row['stat_consumption']]['name'] = name
+        # Derive once from the same detached registry snapshot as the values.
+        # Each source appears once per alternative partition: O(consumers).
+        self._group_membership = {'devices': {}, 'areas': {}, 'floors': {}, 'unassigned': []}
+        for sid in self._ids:
+            assignment = self._membership['sources'][sid]
+            self._group_membership['devices'][sid] = [sid]
+            area, floor = assignment['area_id'], assignment['floor_id']
+            if area is None:
+                self._group_membership['unassigned'].append(sid)
+            else:
+                self._group_membership['areas'].setdefault(area, []).append(sid)
+            self._group_membership['floors'].setdefault(floor or '__no_floor__', []).append(sid)
         self._domain, self._hours = domain, hours
         self._states = {sid: _state() for sid in [*self._ids, REMAINDER]}
         self._provenance, self._issues, self._partition = None, set(), True
@@ -133,7 +145,8 @@ class ConsumerPeriod:
         projection = ({'schema': 1, 'consumer_source_ids': sorted(self._ids),
             'consumer_provenance': deepcopy(provenance) if provenance is not None else {},
             'registry_revision': self._membership['revision'], 'membership_mode': 'current_snapshot',
-            'energy_domain': self._domain, 'hours': projected} if include_hours else None)
+            'energy_domain': self._domain, 'group_membership': deepcopy(self._group_membership),
+            'hours': projected} if include_hours else None)
         return staged, projection
 
     def commit_chunk(self, staged):

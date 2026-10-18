@@ -47,6 +47,43 @@ def _sources(projection, name, *, empty=False):
     return set(ids), set(provenance)
 
 
+def _membership(projection, consumers):
+    """Validate independent partitions, canonicalizing source order in O(C)."""
+    raw = projection.get('group_membership')
+    if 'group_membership' not in projection:
+        return None
+    if not isinstance(raw, dict) or set(raw) != {*_LEVELS, 'unassigned'}:
+        raise ValueError('invalid_group_membership')
+    normalized = {}
+    for level in (*_LEVELS, 'unassigned'):
+        groups = raw[level] if level != 'unassigned' else {None: raw[level]}
+        if (not isinstance(groups, dict)
+                or level != 'unassigned' and len(groups) > len(consumers)):
+            raise ValueError('invalid_group_membership')
+        normalized[level] = {}
+        seen = set()
+        for key, members in groups.items():
+            if (level != 'unassigned' and (not isinstance(key, str) or not key)
+                    or not isinstance(members, list) or len(members) > len(consumers)
+                    or any(not isinstance(sid, str) for sid in members)):
+                raise ValueError('invalid_group_membership')
+            ids = frozenset(members)
+            if (len(ids) != len(members) or not ids <= consumers or seen & ids
+                    or level != 'unassigned' and not ids):
+                raise ValueError('invalid_group_membership')
+            seen.update(ids)
+            normalized[level][key] = ids
+        if level in ('devices', 'floors') and seen != consumers:
+            raise ValueError('invalid_group_membership')
+    if normalized['devices'] != {sid: frozenset((sid,)) for sid in consumers}:
+        raise ValueError('invalid_group_membership')
+    area_ids = set().union(*normalized['areas'].values()) if normalized['areas'] else set()
+    unassigned = normalized['unassigned'][None]
+    if area_ids & unassigned or area_ids | unassigned != consumers:
+        raise ValueError('invalid_group_membership')
+    return normalized
+
+
 class GroupComparisonAccumulator:
     def __init__(self, current_period, baseline_period, *, calendar_plan, tariff=None):
         if type(calendar_plan) is not CalendarComparisonPlan:
@@ -58,6 +95,8 @@ class GroupComparisonAccumulator:
         self._slots = [None, None]
         self._identity = self._keys = self._states = None
         self._partition = [True, True]
+        self._common_partition = True
+        self._house_common_count = 0
         self._rates = HistoricalTariffRates(tariff) if tariff is not None else None
         self._result = None
         self.peak_retained_cells = 0
@@ -79,6 +118,7 @@ class GroupComparisonAccumulator:
     def _new_state(self):
         return {'own_count': [0, 0], 'own': [Decimal(0), Decimal(0)],
                 'common_count': 0, 'common': [Decimal(0), Decimal(0)],
+                'common_mask_equals_house': True,
                 'own_cost': [new_usage_cost_state(self._rates) for _ in range(2)] if self._rates else None,
                 'common_cost': [new_usage_cost_state(self._rates) for _ in range(2)] if self._rates else None}
 
@@ -92,6 +132,7 @@ class GroupComparisonAccumulator:
         consumers, consumer_provenance = _sources(projection, 'consumer', empty=True)
         grids, grid_provenance = _sources(projection, 'grid')
         identity = {key: deepcopy(projection[key]) for key in _IDENTITY}
+        identity['group_membership'] = _membership(projection, consumers)
         # Source order is not an identity; detach and normalize it once.
         for key in ('consumer_source_ids', 'grid_source_ids'):
             identity[key].sort()
@@ -128,6 +169,12 @@ class GroupComparisonAccumulator:
                     keys = tuple(sorted(values, key=lambda key: (key[0], key[1] or '')))
                 if len(values) != len(keys) or any(key not in values for key in keys):
                     raise ValueError('group_context_changed')
+                membership = identity['group_membership']
+                if membership is not None:
+                    if any(set(hour[level]) != set(membership[level]) for level in _LEVELS):
+                        raise ValueError('invalid_group_membership')
+                    if not membership['unassigned'][None] and values[('unassigned', None)] != 0:
+                        raise ValueError('invalid_structural_zero')
                 for sid in consumers - consumer_provenance:
                     if values[('devices', sid)] is not None:
                         raise ValueError('group_measurement_without_provenance')
@@ -158,7 +205,8 @@ class GroupComparisonAccumulator:
                     if any(value != household for value in partitions):
                         raise ValueError('invalid_group_partition')
                 partition = partition and hour['partition_complete'] and known_partition
-                rows.append((stamp, tuple(values[key] for key in keys)))
+                rows.append((stamp, tuple(values[key] for key in keys), frozenset(presence),
+                             hour['partition_complete'] and known_partition))
         return identity, keys, rows, partition
 
     def push(self, side, projection, start, end):
@@ -174,12 +222,12 @@ class GroupComparisonAccumulator:
         states = deepcopy(self._states) if self._states is not None else [self._new_state() for _ in keys]
         # A rate proof stays beside its UTC row for reuse by own/common masks.
         # This adds O(chunk hours), never one resolver per projected group.
-        rows = [(stamp, values, UsageCostHour(stamp, self._rates)
+        rows = [(stamp, values, presence, partitioned, UsageCostHour(stamp, self._rates)
                  if self._rates and identity['energy_domain'] == 'grid_import' else None)
-                for stamp, values in rows]
+                for stamp, values, presence, partitioned in rows]
         with localcontext() as context:
             context.prec = 40
-            for stamp, values, price in rows:
+            for stamp, values, presence, partitioned, price in rows:
                 for state, value in zip(states, values):
                     if value is not None:
                         state['own_count'][index] += 1
@@ -216,13 +264,28 @@ class GroupComparisonAccumulator:
                 elif frames[0] != frames[1]:
                     self._advance(0 if plan.ranks[frames[0]] < plan.ranks[frames[1]] else 1)
                 else:
-                    for state, a, b in zip(self._states, rows[0][1], rows[1][1]):
-                        if a is not None and b is not None:
+                    presence = rows[0][2] & rows[1][2]
+                    whole_house_frame = presence == set(self._identity['grid_source_ids'])
+                    # Household common measurements select source intersections.
+                    # A strict subset cannot be attributed to a whole-house slice.
+                    if presence and not whole_house_frame:
+                        self._common_partition = False
+                    if whole_house_frame:
+                        self._house_common_count += 1
+                        self._common_partition = self._common_partition and rows[0][3] and rows[1][3]
+                    for key, state, a, b in zip(self._keys, self._states, rows[0][1], rows[1][1]):
+                        known = a is not None and b is not None
+                        structural_zero = (key == ('unassigned', None)
+                            and self._identity['group_membership'] is not None
+                            and not self._identity['group_membership']['unassigned'][None])
+                        if not structural_zero and known != whole_house_frame:
+                            state['common_mask_equals_house'] = False
+                        if known:
                             state['common_count'] += 1
                             for index, value in enumerate((a, b)):
                                 state['common'][index] += value
                                 if self._rates and self._identity['energy_domain'] == 'grid_import':
-                                    rows[index][2].add_group(state['common_cost'][index], value)
+                                    rows[index][4].add_group(state['common_cost'][index], value)
                     self._advance(0)
                     self._advance(1)
         for index in (0, 1):
@@ -303,5 +366,26 @@ class GroupComparisonAccumulator:
                 and all(self._partition) and all(state['own_count'] == [len(grid) for grid in self._calendar_plan.grids]
                     for state in self._states) and household.get('status') == 'ready'
                 and household.get('comparison_scope') == 'calendar_totals')
+            if (self._identity['energy_domain'] == 'grid_import'
+                    and self._identity['group_membership'] is not None
+                    and self._calendar_plan.aligned and self._common_partition
+                    and self._house_common_count > 0 and household.get('status') == 'ready'
+                    and household.get('comparison_scope') == 'common_measurements'):
+                expected = [len(grid) for grid in self._calendar_plan.grids]
+                def same_selected_mask(key, state):
+                    structural_zero = (key == ('unassigned', None)
+                        and not self._identity['group_membership']['unassigned'][None])
+                    if structural_zero:
+                        return True
+                    counts, common = state['own_count'], state['common_count']
+                    # Complete groups select their own period totals, which may
+                    # contain calendar folds/tails outside the household mask.
+                    if counts == expected and counts != [common, common]:
+                        return False
+                    ready = counts == expected or all(count / total >= .9
+                        for count, total in zip((*counts, common, common), (*expected, *expected)))
+                    return ready and state['common_mask_equals_house']
+                result['reconciles_household_delta'] = all(same_selected_mask(key, state)
+                    for key, state in zip(self._keys, self._states))
             self._result = result
         return deepcopy(self._result)
