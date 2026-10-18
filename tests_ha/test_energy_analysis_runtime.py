@@ -8,6 +8,7 @@ import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from homeassistant.components.energy.data import async_get_manager
+from homeassistant.util.yaml.objects import NodeStrClass
 from homeassistant.components.recorder import models
 from homeassistant.components.recorder.statistics import async_add_external_statistics
 
@@ -26,7 +27,8 @@ pytestmark = pytest.mark.asyncio
 @pytest.mark.freeze_time('2026-10-18T12:30:00+00:00')
 async def test_native_analysis_selected_comparison_chart_and_policy(hass, hass_storage,
         recorder_mock, freezer, hass_ws_client, hass_read_only_access_token, missing_source, missing_consumer_hour, comparison, shared_gap):
-    await hass.config.async_set_time_zone('UTC')
+    # Real HA YAML annotates timezone text; keep the same UTC arithmetic.
+    await hass.config.async_set_time_zone(NodeStrClass('Etc/UTC'))
     manager = await async_get_manager(hass)
     grid = [{'stat_energy_from': 'analysis:grid'}]
     if missing_source:
@@ -58,6 +60,8 @@ async def test_native_analysis_selected_comparison_chart_and_policy(hass, hass_s
     response = await client.receive_json()
     assert response['success'], response
     result = response['result']; compared = result['comparisons'][comparison]
+    assert result['period']['timezone'] == 'Etc/UTC'
+    assert type(result['period']['timezone']) is str
     assert result['period']['hours'] == 12
     assert result['context']['comparison_kind'] == comparison
     assert result['chart']['grain'] == 'hour'
