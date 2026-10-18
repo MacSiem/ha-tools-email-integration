@@ -479,9 +479,9 @@ def render_energy_report_html(
         f"<td style=\"padding:12px 8px;border-bottom:1px solid #e2e8f0\">{escape(row['name'])}"
         + (f'<br><span style="font-size:12px;color:#52647b">{row["measured_hours"]}/{row["expected_hours"]} measured hours</span>'
            if "measured_hours" in row else "") + "</td>"
-        f"<td style=\"padding:9px 4px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:700\">{row['kwh']:.2f}</td>"
-        + (f'<td style="padding:9px 4px;border-bottom:1px solid #e2e8f0;text-align:right">{escape(_energy_cost_text(row["cost"], currency))}</td>' if has_costs else '') +
-        f"<td style=\"padding:9px 4px;border-bottom:1px solid #e2e8f0;text-align:right;color:#64748b\">{row['share']:.0f}%</td>"
+        f"<td style=\"padding:9px 4px;border-bottom:1px solid #e2e8f0;text-align:right;font-weight:700;white-space:nowrap\">{row['kwh']:.2f}</td>"
+        + (f'<td style="padding:9px 4px;border-bottom:1px solid #e2e8f0;text-align:right;white-space:nowrap">{escape(_energy_cost_text(row["cost"], currency))}</td>' if has_costs else '') +
+        f"<td style=\"padding:9px 4px;border-bottom:1px solid #e2e8f0;text-align:right;color:#64748b;white-space:nowrap\">{row['share']:.0f}%</td>"
         "</tr>"
         for row in devices[:25]
     )
@@ -511,7 +511,7 @@ def render_energy_report_html(
       {coverage_html}
       <h2 style="font-size:18px;margin:26px 0 12px">{"Grid import sources" if source_kind == "grid" else "Top consumers"}</h2>
       <p style="color:#52647b;font-size:13px">Share of recorded usage. Missing readings are never filled with zero.</p>
-      <table style="width:100%;table-layout:fixed;border-collapse:collapse;border:1px solid #e2e8f0">
+      <table style="width:100%;table-layout:auto;border-collapse:collapse;border:1px solid #e2e8f0">
         <thead><tr class="mail-card" style="background:#f1f5f9">
           <th style="padding:9px 8px;text-align:left;width:50%">{"Grid import source" if source_kind == "grid" else "Consumer"}</th>
           <th style="padding:9px 4px;text-align:right">kWh</th>
