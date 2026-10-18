@@ -9,7 +9,7 @@ from math import fsum, isfinite
 from types import MappingProxyType
 
 from .energy_measurements import calendar_grid, _instant
-from .tariff_history import HistoricalTariffRates, calculate_energy_amounts, _money
+from .tariff_history import HistoricalTariffRates, calculate_energy_amounts, _money, _usage_decimal
 
 
 _COMPONENTS = ('energy_cost', 'variable_cost', 'legacy_combined_cost')
@@ -117,11 +117,19 @@ class UsageCostHour:
         if values:
             _add_usage_cost_rate(state, values, self._rate, calculate_energy_amounts)
 
+    def add_group(self, state, quantity):
+        # Projected residuals are already exact Decimal quantities. Converting
+        # them through source float fsum could cross a cent-rounding boundary.
+        quantity = _usage_decimal(quantity)
+        _add_usage_cost_quantity(state, quantity, 3600, self._rate, calculate_energy_amounts)
+
 
 def _add_usage_cost_rate(state, values, rate, calculate):
-    seconds = len(values) * 3600
+    _add_usage_cost_quantity(state, fsum(values), len(values) * 3600, rate, calculate)
+
+
+def _add_usage_cost_quantity(state, quantity, seconds, rate, calculate):
     state['seconds'] += seconds
-    quantity = fsum(values)
     with localcontext() as context:
         context.prec = 40
         state['kwh'] += Decimal(str(quantity))

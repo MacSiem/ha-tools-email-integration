@@ -10,7 +10,7 @@ from decimal import Decimal, InvalidOperation, localcontext
 from math import isfinite
 
 from .energy_comparison_core import (CalendarComparisonPlan, new_usage_cost_state,
-                                     add_usage_cost, finish_usage_cost)
+                                     UsageCostHour, finish_usage_cost)
 from .energy_measurements import _instant, hour_grid, valid_provenance
 from .tariff_history import HistoricalTariffRates, _money
 
@@ -158,8 +158,6 @@ class GroupComparisonAccumulator:
                     if any(value != household for value in partitions):
                         raise ValueError('invalid_group_partition')
                 partition = partition and hour['partition_complete'] and known_partition
-                if self._rates and any(value is not None and not isfinite(float(value)) for value in values.values()):
-                    raise ValueError('unrepresentable_group_cost_quantity')
                 rows.append((stamp, tuple(values[key] for key in keys)))
         return identity, keys, rows, partition
 
@@ -174,15 +172,20 @@ class GroupComparisonAccumulator:
         identity, keys, rows, partition = self._validate(projection, start, end)
         # Stage O(G) scalars. Any rejected push leaves both slots/cursors intact.
         states = deepcopy(self._states) if self._states is not None else [self._new_state() for _ in keys]
+        # A rate proof stays beside its UTC row for reuse by own/common masks.
+        # This adds O(chunk hours), never one resolver per projected group.
+        rows = [(stamp, values, UsageCostHour(stamp, self._rates)
+                 if self._rates and identity['energy_domain'] == 'grid_import' else None)
+                for stamp, values in rows]
         with localcontext() as context:
             context.prec = 40
-            for stamp, values in rows:
+            for stamp, values, price in rows:
                 for state, value in zip(states, values):
                     if value is not None:
                         state['own_count'][index] += 1
                         state['own'][index] += value
                         if self._rates and identity['energy_domain'] == 'grid_import':
-                            add_usage_cost(state['own_cost'][index], stamp, [value], self._rates)
+                            price.add_group(state['own_cost'][index], value)
         self._identity, self._keys, self._states = identity, keys, states
         self._partition[index] = self._partition[index] and partition
         self._slots[index] = {'rows': rows, 'head': 0}
@@ -219,7 +222,7 @@ class GroupComparisonAccumulator:
                             for index, value in enumerate((a, b)):
                                 state['common'][index] += value
                                 if self._rates and self._identity['energy_domain'] == 'grid_import':
-                                    add_usage_cost(state['common_cost'][index], rows[index][0], [value], self._rates)
+                                    rows[index][2].add_group(state['common_cost'][index], value)
                     self._advance(0)
                     self._advance(1)
         for index in (0, 1):
