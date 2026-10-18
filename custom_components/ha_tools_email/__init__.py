@@ -192,14 +192,34 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up HA Tools Email from a config entry."""
     await _async_ensure_setup(hass)
     from .energy import EnergySnapshotCoordinator
+    from .registry_adapter import RegistryMembership
+    from .analysis_service import EnergyAnalysisService
+
     coordinator = EnergySnapshotCoordinator(hass, await _async_get_storage(hass))
-    hass.data[DOMAIN]['energy_snapshot'] = coordinator
+    bucket = hass.data[DOMAIN]
+    bucket['energy_snapshot'] = coordinator
+    registry, service = None, None
     try:
+        registry = RegistryMembership(hass, lambda revision: hass.bus.async_fire(
+            f'{DOMAIN}_energy_analysis_updated', {'registry_revision': revision}))
+        service = EnergyAnalysisService(hass, entry.entry_id, coordinator, registry)
+        bucket['energy_membership'], bucket['energy_analysis'] = registry, service
+        registry.start()
         await coordinator.async_start()
         await hass.config_entries.async_forward_entry_setups(entry, ['sensor', 'binary_sensor'])
-    except Exception:
+    except BaseException:
+        # Cancellation is also a setup failure: remove listeners and prevent an
+        # in-flight analysis from publishing through a half-initialized entry.
+        if service is not None:
+            service.async_stop()
+        if registry is not None:
+            registry.stop()
         coordinator.async_stop()
-        hass.data[DOMAIN].pop('energy_snapshot', None)
+        current = hass.data.get(DOMAIN, {})
+        for key, owned in (('energy_analysis', service), ('energy_membership', registry),
+                           ('energy_snapshot', coordinator)):
+            if current.get(key) is owned:
+                current.pop(key, None)
         raise
     return True
 
@@ -208,7 +228,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload the config entry."""
     unloaded = await hass.config_entries.async_unload_platforms(entry, ['sensor', 'binary_sensor'])
     if unloaded:
-        coordinator = hass.data[DOMAIN].pop('energy_snapshot', None)
+        bucket = hass.data[DOMAIN]
+        service = bucket.pop('energy_analysis', None)
+        if service:
+            service.async_stop()
+        registry = bucket.pop('energy_membership', None)
+        if registry:
+            registry.stop()
+        coordinator = bucket.pop('energy_snapshot', None)
         if coordinator:
             coordinator.async_stop()
         async_stop_scheduler(hass)

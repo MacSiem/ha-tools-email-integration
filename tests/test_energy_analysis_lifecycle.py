@@ -4,6 +4,7 @@ Reuse the existing AST loading approach to exercise lifecycle without importing
 SMTP/HA platform services. The executed functions are unmodified product code.
 """
 import ast
+import asyncio
 from pathlib import Path
 import sys
 import types
@@ -22,6 +23,8 @@ class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
                 self.storage, self.running = storage, True
                 created['coordinator'].append(self)
             async def async_start(self):
+                if fail == 'cancel':
+                    raise asyncio.CancelledError
                 if fail == 'start':
                     raise RuntimeError('synthetic start failure')
             def async_stop(self):
@@ -86,10 +89,10 @@ class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn('energy_membership', bucket)
 
     async def test_failed_start_or_platform_setup_leaves_no_live_analysis_or_listener(self):
-        for boundary in ('start', 'platforms'):
+        for boundary in ('start', 'platforms', 'cancel'):
             ns, hass, entry, made, events, mods = self.fixture(fail=boundary)
             with patch.dict(sys.modules, mods):
-                with self.assertRaises(RuntimeError):
+                with self.assertRaises(asyncio.CancelledError if boundary == 'cancel' else RuntimeError):
                     await ns['async_setup_entry'](hass, entry)
             self.assertEqual(1, len(made['service']))
             self.assertTrue(made['service'][0].stopped)
