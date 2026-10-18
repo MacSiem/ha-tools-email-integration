@@ -17,7 +17,8 @@ from .composer import (async_build_energy_report_payload, async_build_report_pay
 from .scheduler import (async_reload_schedules, async_send_now, calculate_next_fire,
                         calendar_report_window, effective_schedule_timezone, fire_period_key,
                         normalize_schedule_calendar, async_resolve_manual_period)
-from .storage import EmailStorage, TariffRevisionConflict
+from .storage import EmailStorage, TariffRevisionConflict, FeatureAccessRevisionConflict
+from .feature_access import default_feature_access, effective_feature_capabilities
 from .tariff import TariffValidationError
 
 
@@ -79,6 +80,119 @@ def _book_context_current(hass, storage, coordinator, revision=None):
     return (bucket.get('storage') is storage and bucket.get('energy_snapshot') is coordinator
             and coordinator is not None and getattr(coordinator, 'running', False)
             and (revision is None or storage.current_tariff_revision == revision))
+
+
+def _feature_context_current(hass, storage, revision=None):
+    return (storage is not None
+            and hass.data.get(DOMAIN, {}).get('storage') is storage
+            and getattr(hass, 'state', None) != 'stopping'
+            and (revision is None or storage.current_feature_access_revision == revision))
+
+
+async def _feature_user(hass, connection):
+    user = getattr(connection, 'user', None)
+    if user is None or not getattr(user, 'is_active', False):
+        return None
+    current = await hass.auth.async_get_user(user.id)
+    return current if current is not None and current.is_active is True else None
+
+
+@websocket_api.websocket_command({vol.Required('type'): f'{DOMAIN}/get_feature_access'})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def _ws_get_feature_access(hass, connection, msg):
+    """Allowlist settings are visible only to the current active administrator."""
+    if not await _book_authorized(hass, connection, admin=True):
+        connection.send_error(msg['id'], 'unauthorized', 'Active administrator required.')
+        return
+    storage = hass.data.get(DOMAIN, {}).get('storage')
+    try:
+        result = await storage.async_get_feature_access()
+    except Exception:
+        connection.send_error(msg['id'], 'feature_access_read_failed', 'Access settings could not be read.')
+        return
+    if not await _book_authorized(hass, connection, admin=True):
+        connection.send_error(msg['id'], 'unauthorized', 'Active administrator required.')
+        return
+    if not _feature_context_current(hass, storage, result['revision']):
+        connection.send_error(msg['id'], 'feature_access_changed', 'Access settings changed. Reload before continuing.')
+        return
+    connection.send_result(msg['id'], result)
+
+
+@websocket_api.websocket_command({vol.Required('type'): f'{DOMAIN}/feature_capabilities'})
+@websocket_api.async_response
+async def _ws_feature_capabilities(hass, connection, msg):
+    """Only this authenticated user's tool gates; native resource rights still apply."""
+    if await _feature_user(hass, connection) is None:
+        connection.send_error(msg['id'], 'unauthorized', 'Active household user required.')
+        return
+    storage = hass.data.get(DOMAIN, {}).get('storage')
+    try:
+        state = await storage.async_get_feature_access()
+        user = await _feature_user(hass, connection)
+        if user is None:
+            raise PermissionError('unauthorized')
+        valid = state['status'] == 'ready'
+        capabilities = effective_feature_capabilities(
+            state['policy'] if valid else default_feature_access(), user_id=connection.user.id,
+            is_active=valid, is_admin=getattr(user, 'is_admin', False))
+    except PermissionError:
+        connection.send_error(msg['id'], 'unauthorized', 'Active household user required.')
+        return
+    except Exception:
+        connection.send_error(msg['id'], 'feature_access_read_failed', 'Access settings could not be read.')
+        return
+    if not _feature_context_current(hass, storage, state['revision']):
+        connection.send_error(msg['id'], 'feature_access_changed', 'Access settings changed. Reload before continuing.')
+        return
+    connection.send_result(msg['id'], {'capabilities': capabilities, 'revision': state['revision'],
+                                      'status': state['status']})
+
+
+@websocket_api.websocket_command({
+    vol.Required('type'): f'{DOMAIN}/set_feature_access',
+    vol.Required('policy'): dict,
+    vol.Required('expected_revision'): vol.All(int, vol.Range(min=0)),
+})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def _ws_set_feature_access(hass, connection, msg):
+    if not await _book_authorized(hass, connection, admin=True):
+        connection.send_error(msg['id'], 'unauthorized', 'Active administrator required.')
+        return
+    storage = hass.data.get(DOMAIN, {}).get('storage')
+
+    async def before_save():
+        if not await _book_authorized(hass, connection, admin=True):
+            return False
+        return _feature_context_current(hass, storage)
+
+    try:
+        result = await storage.async_save_feature_access(msg['policy'],
+            expected_revision=msg['expected_revision'], before_save=before_save)
+    except FeatureAccessRevisionConflict:
+        connection.send_error(msg['id'], 'feature_access_revision_conflict', 'Access settings changed. Reload before saving.')
+        return
+    except PermissionError:
+        connection.send_error(msg['id'], 'unauthorized', 'Active administrator required.')
+        return
+    except ValueError:
+        connection.send_error(msg['id'], 'invalid_feature_access', 'Access settings or revision are invalid.')
+        return
+    except Exception:
+        connection.send_error(msg['id'], 'feature_access_save_failed', 'Access settings could not be saved.')
+        return
+    # This event is safe even if the saving user's role is revoked after commit.
+    # It contains no identities, policy content, or household data.
+    hass.bus.async_fire(f'{DOMAIN}_feature_access_updated', {'revision': result['revision']})
+    if not await _book_authorized(hass, connection, admin=True):
+        connection.send_error(msg['id'], 'unauthorized', 'Active administrator required.')
+        return
+    if not _feature_context_current(hass, storage, result['revision']):
+        connection.send_error(msg['id'], 'feature_access_changed', 'Access settings changed. Reload before continuing.')
+        return
+    connection.send_result(msg['id'], result)
 
 
 @websocket_api.websocket_command({vol.Required('type'): f'{DOMAIN}/get_tariff_book'})
@@ -628,6 +742,9 @@ async def _async_preview_mail(hass, connection, msg, kind) -> None:
 def async_register_commands(hass: HomeAssistant) -> None:
     """Register all websocket commands."""
     for handler in (
+        _ws_get_feature_access,
+        _ws_set_feature_access,
+        _ws_feature_capabilities,
         _ws_get_tariff,
         _ws_get_tariff_book,
         _ws_preview_tariff_book,

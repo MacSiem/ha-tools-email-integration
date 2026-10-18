@@ -1,13 +1,13 @@
 """Actual policy routes: fresh identity, confirmed writes and private allowlists."""
 import types
 import unittest
-from tests.test_tariff_book_websocket import BookWebsocketTest
+from tests import test_tariff_book_websocket as fixtures
 from tests.test_feature_access_storage import DEFAULT, SELECTED
 
 
 class FeatureAccessWebsocketTest(unittest.IsolatedAsyncioTestCase):
     def fixture(self):
-        ws, hass, storage, lane, conn, results, errors = BookWebsocketTest.fixture(self)
+        ws, hass, storage, lane, conn, results, errors = fixtures.BookWebsocketTest.fixture(self)
         events = []
         hass.bus = types.SimpleNamespace(async_fire=lambda *args: events.append(args))
         # Policy administration belongs to this tool without requiring Energy.
