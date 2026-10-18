@@ -12,6 +12,15 @@ spec.loader.exec_module(measurements)
 
 
 class MeasurementEvidenceTest(unittest.TestCase):
+    def test_absent_readings_never_become_observed_zero(self):
+        start, end = '2026-01-01T00:00Z', '2026-01-01T01:00Z'
+        result = measurements.measurement_evidence(readings(start, end, value=None), start, end)
+        self.assertEqual('no_data', result['status'])
+        self.assertIsNone(result['kwh'])
+        self.assertIsNone(result['recorded_household_kwh'])
+        self.assertIsNone(result['observed_source_kwh'])
+        self.assertEqual(0, result['coverage']['measured_source_seconds'])
+
     def test_missing_source_hour_keeps_known_cells_and_withholds_household_total(self):
         start, end = '2026-01-01T00:00Z', '2026-01-01T10:00Z'
         snapshot = readings(start, end, missing=(('sensor.b', 9),))
