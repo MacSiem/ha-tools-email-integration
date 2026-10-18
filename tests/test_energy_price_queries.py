@@ -256,7 +256,10 @@ class FinalAuthGuardTests(unittest.IsolatedAsyncioTestCase):
         conn = types.SimpleNamespace(user=user, send_result=lambda *v: results.append(v), send_error=lambda *v: errors.append(v))
         await ws._ws_energy_price_queries(hass, conn, {'id': 1, 'queries': [query([{'PRIVATE': 'x' * 524288}])]})
         self.assertEqual('invalid_energy_price_queries', errors[-1][1])
-        await ws._ws_energy_price_queries(hass, conn, {'id': 2, 'queries': [query()], 'profile': {'schema': 0, 'PRIVATE': True}})
+        # These pure fixtures load the same tariff.py under two synthetic package
+        # names. Align exception identity as in the real single-package runtime.
+        with patch.object(ws, 'TariffValidationError', energy.validate_tariff_profile.__globals__['TariffValidationError']):
+            await ws._ws_energy_price_queries(hass, conn, {'id': 2, 'queries': [query()], 'profile': {'schema': 0, 'PRIVATE': True}})
         self.assertEqual('invalid_tariff_profile', errors[-1][1])
         async def fail(*args, **kwargs):
             raise OSError('SMTP_PRIVATE_PATH')
