@@ -9,7 +9,7 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant.components import websocket_api
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 
 from .const import DOMAIN, EVENT_SCHEDULES_CHANGED, VALID_CADENCES, VALID_KINDS
 from .composer import (async_build_energy_report_payload, async_build_report_payload,
@@ -123,6 +123,60 @@ async def _feature_user(hass, connection):
         return None
     current = await hass.auth.async_get_user(user.id)
     return current if current is not None and current.is_active is True else None
+
+
+@websocket_api.websocket_command({vol.Required('type'): f'{DOMAIN}/subscribe_analysis_updates'})
+@websocket_api.async_response
+async def _ws_subscribe_analysis_updates(hass, connection, msg):
+    """Control-only invalidation, independent of feature read permission.
+
+    Revoking feature access must still purge an already mounted view. Actual
+    reads retain their own fresh feature and native source authorization.
+    """
+    service = hass.data.get(DOMAIN, {}).get('energy_analysis')
+    if await _feature_user(hass, connection) is None:
+        connection.send_error(msg['id'], 'unauthorized', 'Active household user required.')
+        return
+    if (service is None or service._stopped
+            or hass.data.get(DOMAIN, {}).get('energy_analysis') is not service):
+        connection.send_error(msg['id'], 'analysis_subscription_unavailable', 'Analysis updates unavailable.')
+        return
+    removers = []
+    stopped = False
+
+    @callback
+    def unsubscribe():
+        nonlocal stopped
+        if stopped:
+            return
+        stopped = True
+        for remove in removers:
+            remove()
+        removers.clear()
+        service._update_subscriptions.discard(unsubscribe)
+        # Core owns its subscription dictionary (including close iteration).
+        # Keep this idempotent callback there until Core removes it.
+
+    @callback
+    def changed(_event):
+        if stopped:
+            return
+        if (service._stopped or
+                hass.data.get(DOMAIN, {}).get('energy_analysis') is not service):
+            unsubscribe()
+            return
+        # Never forward event.data, identities, policies or entity values.
+        connection.send_event(msg['id'], {})
+
+    try:
+        for event in (f'{DOMAIN}_energy_analysis_updated', f'{DOMAIN}_feature_access_updated'):
+            removers.append(hass.bus.async_listen(event, changed))
+        service._update_subscriptions.add(unsubscribe)
+        connection.subscriptions[msg['id']] = unsubscribe
+        connection.send_result(msg['id'])
+    except BaseException:
+        unsubscribe()
+        raise
 
 
 @websocket_api.websocket_command({vol.Required('type'): f'{DOMAIN}/get_feature_access'})
@@ -865,6 +919,7 @@ def async_register_commands(hass: HomeAssistant) -> None:
         _ws_get_feature_access,
         _ws_set_feature_access,
         _ws_feature_capabilities,
+        _ws_subscribe_analysis_updates,
         _ws_get_tariff,
         _ws_get_tariff_book,
         _ws_preview_tariff_book,

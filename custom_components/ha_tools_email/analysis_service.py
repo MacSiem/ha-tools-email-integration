@@ -117,11 +117,14 @@ class EnergyAnalysisService:
         self._stopped = False
         self._cache = None
         self._normalization = None
+        self._update_subscriptions = set()
 
     def async_stop(self):
         """Synchronous unload fence; running CPU jobs retain their existing lane."""
         self._stopped = True
         self._cache = None
+        for unsubscribe in tuple(self._update_subscriptions):
+            unsubscribe()
 
     def _check_running(self):
         bucket = self.hass.data.get(DOMAIN, {})

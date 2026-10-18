@@ -197,6 +197,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     coordinator = EnergySnapshotCoordinator(hass, await _async_get_storage(hass))
     bucket = hass.data[DOMAIN]
+    previous_service = bucket.get('energy_analysis')
+    if previous_service is not None:
+        previous_service.async_stop()
     bucket['energy_snapshot'] = coordinator
     registry, service = None, None
     try:
