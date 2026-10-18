@@ -218,5 +218,8 @@ async def test_native_dedicated_updates_recheck_initial_active_user(
         assert not hass.data[DOMAIN]['energy_analysis']._update_subscriptions
     finally:
         await client.close()
+        # Core initiated this close on user deactivation. Finish the owning
+        # HTTP test client as well before fixture timer verification.
+        await client.client.close()
         await hass.config_entries.async_unload(entry.entry_id)
         await hass.async_block_till_done()
