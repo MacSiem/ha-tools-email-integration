@@ -12,6 +12,7 @@ import json
 from .composer import (_energy_grid_import_ids, async_get_energy_metadata,
                        async_get_energy_usage)
 from .energy_measurements import hour_grid, MAX_SOURCES
+from .feature_access import feature_access_allowed
 from .energy_registry import build_interval_breakdown
 from .tariff_history import _bounded
 
@@ -74,7 +75,7 @@ def capture_energy_configuration(preferences):
     return result
 
 
-async def async_require_energy_source_access(hass, user_id, source_ids):
+async def async_require_energy_source_access(hass, user_id, source_ids, *, feature_policy=None):
     """Fresh detailed-analysis access, including entity-restricted HA users.
 
     External statistics have no entity policy target. They require admin or
@@ -92,6 +93,17 @@ async def async_require_energy_source_access(hass, user_id, source_ids):
     user = await hass.auth.async_get_user(user_id)
     if user is None or not user.is_active:
         raise PermissionError('energy_sources_unauthorized')
+    # Evaluate both gates from the same fresh HA user with no intervening IO.
+    # Legacy callers can request source-only checks; the detailed service always
+    # supplies its revision-fenced policy, including on cached results.
+    if feature_policy is not None:
+        try:
+            allowed = feature_access_allowed(feature_policy, 'energy_analysis', 'read',
+                user_id=user_id, is_active=user.is_active, is_admin=user.is_admin)
+        except ValueError:
+            allowed = False
+        if not allowed:
+            raise PermissionError('energy_feature_unauthorized')
     if user.is_admin:
         return
     permissions = getattr(user, 'permissions', None)

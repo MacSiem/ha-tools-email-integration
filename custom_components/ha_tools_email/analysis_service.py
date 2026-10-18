@@ -91,6 +91,7 @@ class EnergyAnalysisService:
         period = {**resolved['current'], 'kind': kind}
         context = {'entry_id': self.entry_id, 'service_generation': self._nonce,
                    'tariff_revision': self.storage.current_tariff_revision,
+                   'feature_access_revision': self.storage.current_feature_access_revision,
                    'registry_revision': self.registry.revision,
                    'measurement_timezone': zone,
                    'source_signature': configuration['source_signature'],
@@ -113,12 +114,23 @@ class EnergyAnalysisService:
                 *({'entity_id': row['stat_consumption']} for row in configuration['consumers'])]
         return list({row['entity_id']: row for row in rows}.values())
 
+    async def _require_access(self, context, configuration, user_id, *, policy_state=None):
+        state = policy_state if policy_state is not None else await self.storage.async_get_feature_access()
+        self._assert_current(context)
+        if state['revision'] != context['feature_access_revision']:
+            raise RuntimeError('energy_analysis_context_changed')
+        if state['status'] != 'ready':
+            raise PermissionError('energy_feature_unauthorized')
+        ids = [row['entity_id'] for row in self._sensors(configuration)]
+        await async_require_energy_source_access(self.hass, user_id, ids, feature_policy=state['policy'])
+        self._assert_current(context)
+
     async def _guard(self, context, configuration, user_id):
         """Nonrecursive fresh access + external Recorder normalization fence."""
         self._assert_current(context)
         sensors = self._sensors(configuration)
         ids = [row['entity_id'] for row in sensors]
-        await async_require_energy_source_access(self.hass, user_id, ids)
+        await self._require_access(context, configuration, user_id)
         self._assert_current(context)
         metadata = await async_get_energy_metadata(self.hass, ids)
         self._assert_current(context)
@@ -130,7 +142,7 @@ class EnergyAnalysisService:
             raise RuntimeError('energy_analysis_context_changed')
         context['normalization_signature'] = signature
         # In particular, role revocation during metadata IO must not publish.
-        await async_require_energy_source_access(self.hass, user_id, ids)
+        await self._require_access(context, configuration, user_id)
         self._assert_current(context)
 
     async def _cpu(self, job, guard):
@@ -152,10 +164,13 @@ class EnergyAnalysisService:
                     from homeassistant.components.energy.data import async_get_manager
                     self._manager = await async_get_manager(self.hass)
                     self._check_running()
+                # Establish the policy revision before capturing the context.
+                # Reading settings does not access Recorder, metadata or registry.
+                policy_state = await self.storage.async_get_feature_access()
+                self._check_running()
                 configuration, period, context = self._capture(kind)
-                ids = [row['entity_id'] for row in self._sensors(configuration)]
-                # No metadata, Recorder or registry read precedes source access.
-                await async_require_energy_source_access(self.hass, user_id, ids)
+                # No metadata, Recorder or registry read precedes BOTH gates.
+                await self._require_access(context, configuration, user_id, policy_state=policy_state)
                 self._assert_current(context)
                 state = await self.storage.async_get_tariff_book()
                 self._check_running()
