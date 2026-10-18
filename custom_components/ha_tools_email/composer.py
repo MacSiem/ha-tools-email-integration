@@ -79,6 +79,27 @@ def _report_date(value: datetime, presentation: dict[str, Any]) -> str:
     return f"{local.day:02d} {months[local.month-1]} {local.year}, {local:%H:%M %Z} ({local:%z})"
 
 
+def _energy_chart_label(chart: dict[str, Any], row: dict[str, Any],
+                        model: dict[str, Any], presentation: dict[str, Any]) -> str:
+    """Render absolute bounds without changing the measured calendar-day identity."""
+    granularity = chart.get("granularity")
+    if (chart.get("id") not in {"energy-usage", "energy-cost", "variable-fees"}
+            or granularity not in {"hour", "calendar_day"}):
+        return row["label"]
+    try:
+        start = datetime.fromtimestamp(row["from"] / 1000, timezone.utc)
+        end = datetime.fromtimestamp(row["to"] / 1000, timezone.utc)
+    except (KeyError, TypeError, ValueError, OverflowError, OSError):
+        return row["label"]
+    # Daily totals belong to the report calendar, even when HA displays another day.
+    local = (_presentation(presentation["language"], model.get("timezone"))
+             if granularity == "calendar_day" else presentation)
+    bounds = f"{_report_date(start, local)} → {_report_date(end, local)}"
+    if granularity == "calendar_day":
+        return f"{bounds} ({row['hours']}h; {model['timezone']})"
+    return bounds
+
+
 def _title(kind: str, cadence: str, presentation: dict[str, Any]) -> str:
     pl = presentation["language"] == "pl"
     label = ({"daily": "dzienny", "weekly": "tygodniowy", "monthly": "miesięczny"}.get(cadence, cadence)
@@ -421,7 +442,7 @@ def build_energy_report_payload(
     )
     payload = {
         "subject": subject,
-        "body": "\n".join(body_lines) + ("\n\nStatic chart data\n" + render_charts_plain(summary["visualization"]) if _include_charts else ""),
+        "body": "\n".join(body_lines) + ("\n\nStatic chart data\n" + render_charts_plain(summary["visualization"], row_label=lambda chart, row: _energy_chart_label(chart, row, summary["visualization"], presentation)) if _include_charts else ""),
         "html": html,
         "summary": summary,
     }
@@ -499,7 +520,7 @@ def render_energy_report_html(
         </tr></thead>
         <tbody>{rows}</tbody>
       </table>
-      {render_charts_html(visualization, embedded=True) if include_charts else ""}
+      {render_charts_html(visualization, embedded=True, row_label=lambda chart, row: _energy_chart_label(chart, row, visualization, presentation or _presentation())) if include_charts else ""}
       """, presentation=presentation)
 
 
@@ -793,7 +814,7 @@ async def async_build_energy_report_payload(
         )
         comparison = _compare_energy_snapshots(snapshot, previous, comparison)
     payload["summary"]["comparison"] = comparison
-    comparison_lines = _energy_comparison_lines(comparison)
+    comparison_lines = _energy_comparison_lines(comparison, presentation)
     payload["body"] += "\n\n" + "\n".join(comparison_lines)
     comparison_html = ('<div class="mail-card" style="margin:16px 0;padding:14px 16px;'
                        'background:#eff6ff;border:1px solid #bfdbfe">'
@@ -807,7 +828,8 @@ async def async_build_energy_report_payload(
         payload["summary"], snapshot.get("hourly_buckets", []), chart_tariff_rows,
         timezone_name=report_timezone if report_timezone is not None else getattr(config, "time_zone", None),
         interactive_url=interactive_url, source_kind="grid",
-    ))
+    ), row_label=lambda chart, row: _energy_chart_label(
+        chart, row, payload["summary"]["visualization"], presentation))
     if _finalize:
         _finish_plain(payload, now, presentation)
     return payload
@@ -908,14 +930,18 @@ def _compare_energy_snapshots(current, previous, comparison):
             "percent": percent if percent is not None and isfinite(percent) else None}
 
 
-def _energy_comparison_lines(comparison):
+def _energy_comparison_lines(comparison, presentation=None):
+    presentation = presentation or _presentation()
     lines = []
+    def bound(key):
+        return _report_date(datetime.fromisoformat(comparison[key]), presentation)
     if "previous_start" in comparison:
         lines.extend([
-            f"Current: [{comparison['current_local_start']} → {comparison['current_local_end']}); "
+            f"Current: [{bound('current_start')} → {bound('current_end')}); "
             f"{comparison['current_hours']:g} elapsed hours.",
-            f"Previous: [{comparison['previous_local_start']} → {comparison['previous_local_end']}); "
-            f"{comparison['previous_hours']:g} elapsed hours. Timezone: {comparison['timezone']}.",
+            f"Previous: [{bound('previous_start')} → {bound('previous_end')}); "
+            f"{comparison['previous_hours']:g} elapsed hours. Timezone: {comparison['timezone']}. "
+            f"Display timezone: {presentation['zone']}.",
             "Calendar-period totals; unequal month or DST lengths are not normalized. "
             "Both periods use the current configured grid sources; historical configuration is not reconstructed.",
         ])

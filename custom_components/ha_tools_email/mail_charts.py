@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from html import escape
 from math import isfinite
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -267,14 +267,15 @@ def _chart_note(chart: dict[str, Any], model: dict[str, Any]) -> str:
 
 
 def render_charts_html(model: dict[str, Any], *, embedded: bool = False,
-                       include_context: bool = True, context_only: bool = False) -> str:
+                       include_context: bool = True, context_only: bool = False,
+                       row_label: Callable[[dict[str, Any], dict[str, Any]], str] | None = None) -> str:
     sections = []
     for chart in ([] if context_only else model['charts']):
         rows = []
         for row in chart['rows']:
             # One full-width label row and one full-width bar row fit a 320px mail viewport.
             rows.append('<tr><td style="padding:10px 0 4px;word-break:break-word;overflow-wrap:anywhere">'
-                        f'<strong>{escape(row["label"])}</strong></td></tr>'
+                        f'<strong>{escape(row_label(chart, row) if row_label else row["label"])}</strong></td></tr>'
                         '<tr><td style="padding:0 0 8px"><table role="presentation" width="100%" '
                         'cellspacing="0" cellpadding="0" style="width:100%;table-layout:fixed"><tr>'
                         f'<td style="width:65%;padding-right:8px">{_bar(chart, row)}</td>'
@@ -307,11 +308,13 @@ def render_charts_html(model: dict[str, Any], *, embedded: bool = False,
 
 
 def render_charts_plain(model: dict[str, Any], *, include_context: bool = True,
-                        context_only: bool = False) -> str:
+                        context_only: bool = False,
+                        row_label: Callable[[dict[str, Any], dict[str, Any]], str] | None = None) -> str:
     lines = []
     for chart in ([] if context_only else model['charts']):
         lines.extend([chart['title'] + (' ¹' if model.get('context') == LOG_CAVEAT else ''), _scale_text(chart)])
-        lines.extend(f'{row["label"]}: {row["display"]} {chart["unit"]}' for row in chart['rows'])
+        lines.extend(f'{row_label(chart, row) if row_label else row["label"]}: {row["display"]} {chart["unit"]}'
+                     for row in chart['rows'])
         lines.append(_chart_note(chart, model))
     if not context_only and model.get('unique_problems') is not None:
         lines.append(f'Unique problems: {_number(_finite(model["unique_problems"]))} '
@@ -324,11 +327,12 @@ def render_charts_plain(model: dict[str, Any], *, include_context: bool = True,
     return '\n'.join(lines)
 
 
-def attach_mail_charts(payload: dict[str, Any], model: dict[str, Any]) -> None:
+def attach_mail_charts(payload: dict[str, Any], model: dict[str, Any], *,
+                       row_label: Callable[[dict[str, Any], dict[str, Any]], str] | None = None) -> None:
     """HTML and plaintext consume the exact same returned summary visualization."""
     payload['summary']['visualization'] = model
-    payload['body'] += TEXT_START + render_charts_plain(model)
-    append_mail_html(payload, render_charts_html(model, embedded=REPORT_INSERT in payload['html']))
+    payload['body'] += TEXT_START + render_charts_plain(model, row_label=row_label)
+    append_mail_html(payload, render_charts_html(model, embedded=REPORT_INSERT in payload['html'], row_label=row_label))
 
 
 REPORT_INSERT = "<!-- HA_TOOLS_REPORT_SECTIONS -->"
