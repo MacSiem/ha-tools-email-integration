@@ -103,7 +103,7 @@ async def test_native_household_ws_shared_override_and_unloaded(hass, hass_stora
 
 
 @pytest.mark.parametrize('command', ['energy_snapshot', 'energy_price_queries'])
-@pytest.mark.parametrize('mutation', ['unload', 'revision', 'revoke'])
+@pytest.mark.parametrize('mutation', ['unload', 'reload', 'revision', 'revoke'])
 async def test_native_ws_final_auth_await_rejects_stale_result(hass, hass_storage, hass_ws_client,
                                                              command, mutation):
     entry, storage = await _setup(hass)
@@ -119,6 +119,8 @@ async def test_native_ws_final_auth_await_rejects_stale_result(hass, hass_storag
         if calls == 2:
             if mutation == 'unload':
                 assert await hass.config_entries.async_unload(entry.entry_id)
+            elif mutation == 'reload':
+                assert await hass.config_entries.async_reload(entry.entry_id)
             elif mutation == 'revision':
                 changed = deepcopy(profile())
                 changed['zones'][0]['energyRate'] = 2
@@ -136,13 +138,14 @@ async def test_native_ws_final_auth_await_rejects_stale_result(hass, hass_storag
 
 
 async def test_native_recorder_external_import_without_state_prices_daily_monetary(hass, hass_storage,
-                                                                                 recorder_mock):
+                                                                                 recorder_mock, freezer):
     """Actual Recorder SQL metadata/change query, actual Energy manager, no provider doubles."""
     from datetime import datetime, timedelta, timezone
     from homeassistant.components.energy.data import async_get_manager
     from homeassistant.components.recorder import models
     from homeassistant.components.recorder.statistics import async_add_external_statistics
 
+    freezer.move_to('2026-10-18T12:30:00+00:00')
     await hass.config.async_set_time_zone('UTC')
     manager = await async_get_manager(hass)
     manager.data = {'energy_sources': [{'type': 'grid', 'flow_from': [
