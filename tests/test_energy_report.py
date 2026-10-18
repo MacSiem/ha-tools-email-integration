@@ -239,3 +239,13 @@ class EnergyReportTest(unittest.TestCase):
             self.assertNotIn('rates.0.profile',result[kind])
             self.assertNotIn('groups.devices.sensor.device.kwh',result[kind])
         self.assertIn('chart.bins.0',result['csv'])
+
+
+    def test_pricing_coverage_counters_are_seconds_not_money(self):
+        for language in ('en','pl'):
+            rows=self.rows(self.render(language=language))
+            counters=[row for path,row in rows.items() if '.priced_source_seconds.' in path]
+            self.assertTrue(counters)
+            self.assertEqual({'s'}, {row['unit'] for row in counters})
+            self.assertTrue(any(row['value']=='86400' for row in counters))
+            self.assertEqual('EUR',rows['comparisons.previous.costs.current.energy_cost']['unit'])
