@@ -76,7 +76,7 @@ def _finish(accumulator, context, provenance, comparisons=None, baseline_accumul
             comparison['groups'] = groups
         if mean_groups is not None:
             groups = deepcopy(mean_groups)
-            groups['membership_as_of'] = result['groups'].get('membership_as_of')
+            groups['membership_as_of'] = result['groups'].get('captured_at')
             groups['domain_provenance'] = provenance
             result['comparisons']['mean7']['groups'] = groups
     result.pop('snapshot_id', None)

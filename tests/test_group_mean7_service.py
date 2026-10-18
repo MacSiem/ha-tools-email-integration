@@ -19,7 +19,7 @@ class MeanSevenGroupServiceTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([['sensor.device']], h.registry_ids)
             self.assertEqual(16, len(h.queries))
             self.assertEqual(8, sum(ids == ('sensor.device',) for ids,_,_ in h.queries))
-            self.assertEqual(result['groups']['membership_as_of'], groups['membership_as_of'])
+            self.assertEqual(result['groups']['captured_at'], groups['membership_as_of'])
             self.assertEqual(result, await h.subject.async_get_analysis('day', 'user', anchor='2026-10-10', comparison='mean7'))
             self.assertEqual(16, len(h.queries))
             self.assertTrue(await h.subject.async_validate_result(result,'user'))
