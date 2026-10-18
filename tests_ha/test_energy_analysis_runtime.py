@@ -150,15 +150,59 @@ async def test_native_analysis_selected_comparison_chart_and_policy(hass, hass_s
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_native_household_ack_and_delivery_for_analysis_feature_events(
-        hass, hass_ws_client, hass_read_only_access_token):
+async def test_native_household_dedicated_updates_are_empty_and_general_events_denied(
+        hass, hass_storage, recorder_mock, hass_ws_client, hass_read_only_access_token):
+    manager = await async_get_manager(hass)
+    manager.data = {'energy_sources': [{'type': 'grid', 'flow_from': [{'stat_energy_from': 'analysis:grid'}], 'flow_to': []}], 'device_consumption': []}
+    entry, storage = await _setup(hass)
+    service = hass.data[DOMAIN]['energy_analysis']
     client = await hass_ws_client(hass, hass_read_only_access_token)
-    for event in ('ha_tools_email_energy_analysis_updated', 'ha_tools_email_feature_access_updated'):
+    events = (f'{DOMAIN}_energy_analysis_updated', f'{DOMAIN}_feature_access_updated')
+    for event in events:
         await client.send_json_auto_id({'type': 'subscribe_events', 'event_type': event})
-        ack = await client.receive_json()
-        assert ack['success'], ack
-        hass.bus.async_fire(event, {'revision': 7})
+        denied = await client.receive_json()
+        assert not denied['success'] and denied['error']['code'] == 'unauthorized'
+    await client.send_json_auto_id({'type': f'{DOMAIN}/subscribe_analysis_updates'})
+    ack = await client.receive_json()
+    assert ack['success'], ack
+    assert len(service._update_subscriptions) == 1
+    # Revocation does not suppress this control signal; actual reads still deny.
+    await storage.async_save_feature_access({'schema': 1, 'features': {
+        'energy_analysis': {'read': {'mode': 'admin'}}}}, expected_revision=0)
+    for event in events:
+        hass.bus.async_fire(event, {'private': {'user_id': 'secret', 'policy': 'private'}, 'entity_id': 'sensor.secret'})
         delivered = await client.receive_json()
-        assert delivered['type'] == 'event'
-        assert delivered['event']['event_type'] == event
-        assert delivered['event']['data'] == {'revision': 7}
+        assert delivered == {'id': ack['id'], 'type': 'event', 'event': {}}
+    await client.send_json_auto_id({'type': f'{DOMAIN}/energy_analysis', 'period': 'day'})
+    denied = await client.receive_json()
+    assert not denied['success'] and denied['error']['code'] == 'unauthorized'
+    await client.send_json_auto_id({'type': 'unsubscribe_events', 'subscription': ack['id']})
+    assert (await client.receive_json())['success']
+    assert not service._update_subscriptions
+    await client.send_json_auto_id({'type': f'{DOMAIN}/subscribe_analysis_updates'})
+    assert (await client.receive_json())['success']
+    assert len(service._update_subscriptions) == 1
+    await client.close()
+    await hass.async_block_till_done()
+    assert not service._update_subscriptions
+    client = await hass_ws_client(hass, hass_read_only_access_token)
+    await client.send_json_auto_id({'type': f'{DOMAIN}/subscribe_analysis_updates'})
+    assert (await client.receive_json())['success']
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert not service._update_subscriptions
+    # Core can subsequently unsubscribe/close an already stopped listener.
+    await client.close()
+    await hass.async_block_till_done()
+    assert not service._update_subscriptions
+
+
+async def test_native_dedicated_updates_recheck_initial_active_user(
+        hass, hass_storage, recorder_mock, hass_ws_client, hass_read_only_access_token, hass_read_only_user):
+    entry, _ = await _setup(hass)
+    client = await hass_ws_client(hass, hass_read_only_access_token)
+    await hass.auth.async_update_user(hass_read_only_user, is_active=False)
+    await client.send_json_auto_id({'type': f'{DOMAIN}/subscribe_analysis_updates'})
+    denied = await client.receive_json()
+    assert not denied['success'] and denied['error']['code'] == 'unauthorized'
+    assert not hass.data[DOMAIN]['energy_analysis']._update_subscriptions
+    assert await hass.config_entries.async_unload(entry.entry_id)

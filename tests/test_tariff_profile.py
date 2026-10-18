@@ -131,6 +131,7 @@ def load_storage():
     package.__path__ = [str(ROOT)]
     core = types.ModuleType('homeassistant.core')
     core.HomeAssistant = object
+    core.callback = lambda function: function
     ha_store = types.ModuleType('homeassistant.helpers.storage')
     class Store:
         def __class_getitem__(cls, item):
@@ -281,6 +282,7 @@ def load_websocket():
     package.__path__ = [str(ROOT)]
     core = types.ModuleType('homeassistant.core')
     core.HomeAssistant = object
+    core.callback = lambda function: function
     ws = types.ModuleType('homeassistant.components.websocket_api')
     ws.ActiveConnection = object
     ws.websocket_command = lambda schema: lambda fn: fn
@@ -358,3 +360,45 @@ class TariffWebsocketTest(unittest.IsolatedAsyncioTestCase):
             await ws._ws_set_tariff(hass, connection, msg)
             self.assertEqual(code, errors[-1][1])
             self.assertNotIn('private', errors[-1][2])
+
+
+class AnalysisUpdateSubscriptionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_fixed_signals_sanitize_and_cleanup_once_after_replacement(self):
+        ws, _ = load_websocket()
+        listeners, removed, delivered, results = {}, [], [], []
+        user = types.SimpleNamespace(id='household', is_active=True)
+        async def get_user(user_id):
+            self.assertEqual(user_id, user.id)
+            return user
+        def listen(event, callback):
+            listeners[event] = callback
+            def remove():
+                self.assertNotIn(event, removed)
+                removed.append(event)
+                listeners.pop(event)
+            return remove
+        service = types.SimpleNamespace(_stopped=False, _update_subscriptions=set())
+        bucket = {'energy_analysis': service}
+        hass = types.SimpleNamespace(data={ws.DOMAIN: bucket},
+            auth=types.SimpleNamespace(async_get_user=get_user),
+            bus=types.SimpleNamespace(async_listen=listen))
+        foreign = lambda: None
+        connection = types.SimpleNamespace(user=user, subscriptions={99: foreign},
+            send_event=lambda key, data: delivered.append((key, data)),
+            send_result=lambda key: results.append(key),
+            send_error=lambda *args: self.fail(str(args)))
+        await ws._ws_subscribe_analysis_updates(hass, connection, {'id': 7})
+        self.assertEqual(results, [7])
+        self.assertEqual(set(listeners), {ws.DOMAIN+'_energy_analysis_updated', ws.DOMAIN+'_feature_access_updated'})
+        callbacks = list(listeners.values())
+        for changed in callbacks:
+            changed(types.SimpleNamespace(data={'private': 'secret'}))
+        self.assertEqual(delivered, [(7, {}), (7, {})])
+        bucket['energy_analysis'] = object()
+        callbacks[0](None)
+        connection.subscriptions[7]()
+        callbacks[1](None)
+        self.assertEqual(len(removed), 2)
+        self.assertFalse(service._update_subscriptions)
+        self.assertIs(connection.subscriptions[99], foreign)
+        self.assertEqual(delivered, [(7, {}), (7, {})])
