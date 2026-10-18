@@ -13,6 +13,7 @@ DAY_DISPLAY_LIMIT = 31
 HTML_START = '<!-- HA Tools static charts -->'
 HTML_END = '<!-- End HA Tools static charts -->'
 TEXT_START = '\n\nStatic chart data\n'
+LOG_CAVEAT = 'Occurrences in retained aggregates; not exact events or complete event history.'
 
 
 def _finite(value: Any) -> int | float | None:
@@ -74,7 +75,7 @@ def _chart(key: str, title: str, unit: str, rows: list[dict[str, Any]], *,
 
 def build_log_chart_model(summary: dict[str, Any]) -> dict[str, Any]:
     """Counts come from the same normalized retained aggregates as the mail tables."""
-    note = 'Occurrences in retained aggregates; not exact events or complete event history.'
+    note = LOG_CAVEAT
     charts = [
         _chart('log-levels', 'Retained occurrences by level', 'occurrences',
                [_row(k, v) for k, v in sorted(summary.get('level_counts', {}).items())],
@@ -259,51 +260,67 @@ def _side(width: float, fill: float, *, negative: bool) -> str:
             f'<tr>{inside}</tr></table></td>')
 
 
-def render_charts_html(model: dict[str, Any], *, embedded: bool = False) -> str:
+def _chart_note(chart: dict[str, Any], model: dict[str, Any]) -> str:
+    # Only the exact shared log prefix moves; all distinct factual notes stay verbatim.
+    note = chart['note']
+    return note.removeprefix(LOG_CAVEAT).lstrip() if model.get('context') == LOG_CAVEAT else note
+
+
+def render_charts_html(model: dict[str, Any], *, embedded: bool = False,
+                       include_context: bool = True, context_only: bool = False) -> str:
     sections = []
-    for chart in model['charts']:
+    for chart in ([] if context_only else model['charts']):
         rows = []
         for row in chart['rows']:
             # One full-width label row and one full-width bar row fit a 320px mail viewport.
             rows.append('<tr><td style="padding:10px 0 4px;word-break:break-word;overflow-wrap:anywhere">'
-                        f'<strong>{escape(row["label"])}</strong><br>'
-                        f'{escape(row["display"])} {escape(chart["unit"])}</td></tr>'
-                        f'<tr><td style="padding:0 0 8px">{_bar(chart, row)}</td></tr>')
+                        f'<strong>{escape(row["label"])}</strong></td></tr>'
+                        '<tr><td style="padding:0 0 8px"><table role="presentation" width="100%" '
+                        'cellspacing="0" cellpadding="0" style="width:100%;table-layout:fixed"><tr>'
+                        f'<td style="width:65%;padding-right:8px">{_bar(chart, row)}</td>'
+                        '<td class="mail-bar-value" style="width:35%;text-align:right;word-break:break-word">'
+                        f'{escape(row["display"])} {escape(chart["unit"])}</td></tr></table></td></tr>')
         if not rows:
             rows.append('<tr><td style="padding:10px 0">No retained chart data.</td></tr>')
-        sections.append('<table width="100%" cellspacing="0" cellpadding="0" '
+        sections.append('<table class="mail-card" width="100%" cellspacing="0" cellpadding="0" '
                         'style="width:100%;table-layout:fixed;border-collapse:collapse;margin:18px 0;'
                         'font-size:14px;line-height:1.5;color:#0f172a;background:#ffffff">'
                         '<caption style="text-align:left;font-size:16px;font-weight:700;'
-                        f'word-break:break-word">{escape(chart["title"])}</caption>'
+                        f'word-break:break-word">{escape(chart["title"])}{" ¹" if model.get("context") == LOG_CAVEAT else ""}</caption>'
                         '<tbody><tr><td style="padding:6px 0;word-break:break-word">'
                         f'{escape(_scale_text(chart))}</td></tr>{"".join(rows)}'
                         '<tr><td style="padding:10px 0;color:#475569;word-break:break-word">'
-                        f'{escape(chart["note"])}</td></tr></tbody></table>')
-    if model.get('unique_problems') is not None:
+                        f'{escape(_chart_note(chart, model))}</td></tr></tbody></table>')
+    if not context_only and model.get('unique_problems') is not None:
         sections.append(f'<p style="font-size:14px">Unique problems: {_number(_finite(model["unique_problems"]))} '
                         '(distinct retained groups; a separate metric from occurrences).</p>')
     link = safe_energy_url(model.get('interactive_url'))
     if link:
         sections.append(f'<p style="font-size:14px;word-break:break-word"><a href="{escape(link, quote=True)}" '
                         'style="color:#1d4ed8">Open Home Assistant Energy reference</a></p>')
+    if include_context and model.get('context') == LOG_CAVEAT:
+        sections.append('<section class="mail-how-to-read"><h2 style="font-size:16px">How to read these numbers ¹</h2>'
+                        f'<p>{escape(LOG_CAVEAT)}</p></section>')
     style = ("font-family:Arial,sans-serif;color:#0f172a" if embedded else
              "max-width:692px;margin:0 auto;padding:14px;font-family:Arial,sans-serif;background:#ffffff;color:#0f172a")
     return HTML_START + f'<div style="{style}">' + ''.join(sections) + '</div>' + HTML_END
 
 
-def render_charts_plain(model: dict[str, Any]) -> str:
+def render_charts_plain(model: dict[str, Any], *, include_context: bool = True,
+                        context_only: bool = False) -> str:
     lines = []
-    for chart in model['charts']:
-        lines.extend([chart['title'], _scale_text(chart)])
+    for chart in ([] if context_only else model['charts']):
+        lines.extend([chart['title'] + (' ¹' if model.get('context') == LOG_CAVEAT else ''), _scale_text(chart)])
         lines.extend(f'{row["label"]}: {row["display"]} {chart["unit"]}' for row in chart['rows'])
-        lines.append(chart['note'])
-    if model.get('unique_problems') is not None:
+        lines.append(_chart_note(chart, model))
+    if not context_only and model.get('unique_problems') is not None:
         lines.append(f'Unique problems: {_number(_finite(model["unique_problems"]))} '
                      '(distinct retained groups; separate from occurrences).')
     link = safe_energy_url(model.get('interactive_url'))
     if link:
         lines.append(f'Home Assistant Energy reference: {link}')
+    if include_context and model.get('context') == LOG_CAVEAT:
+        lines.extend(['How to read these numbers ¹', LOG_CAVEAT])
     return '\n'.join(lines)
 
 
