@@ -925,27 +925,48 @@ async def _async_preview_mail(hass, connection, msg, kind) -> None:
         connection.send_error(msg["id"], "invalid_payload", str(err))
         return
     start, end = options.pop("report_window")
+    if kind == 'energy_report':
+        try:
+            # Pin the producing service before composition's first await. A new
+            # generation must not validate and publish an older service's DTO.
+            service = _bucket(hass).get('energy_analysis')
+            if service is None:
+                raise RuntimeError('energy_analysis_not_ready')
+            user_id = connection.user.id
+            payload = await async_build_report_payload(hass, _bucket(hass).get('storage'),
+                kind=kind, cadence=msg['cadence'], now=now,
+                window_start=start, window_end=end, **options,
+                actor=user_id, purpose='report_read',
+                report_preferences=msg.get('report_preferences'))
+            if msg.get('format') != 'mail':
+                result = payload['summary']
+            else:
+                result = {**{key:payload[key] for key in
+                    ('snapshot_id','subject','body','html','csv','period')},
+                    'cadence':msg['cadence'],'generated_at':now.isoformat(),
+                    'effective_timezone':payload['period']['timezone'],
+                    'source':payload['summary']['source']}
+            if await service.async_validate_result(payload,user_id) is not True:
+                raise RuntimeError('energy_analysis_context_changed')
+            if (hass.data.get(DOMAIN, {}).get('energy_analysis') is not service
+                    or payload.get('context', {}).get('access_purpose') != 'report_read'
+                    or not service.context_is_current(payload)):
+                raise RuntimeError('energy_analysis_context_changed')
+        except PermissionError:
+            connection.send_error(msg['id'], 'unauthorized', 'Report or source access required.')
+            return
+        except Exception:
+            connection.send_error(msg['id'], 'energy_report_unavailable', 'Energy report is unavailable.')
+            return
+        # No await between the final service/context/purpose fence and release.
+        connection.send_result(msg['id'],result)
+        return
     payload = await async_build_report_payload(hass, _bucket(hass).get("storage"),
         kind=kind, cadence=msg["cadence"], now=now,
         window_start=start, window_end=end, **options,
         **({"actor":connection.user.id,"purpose":"report_read",
              "report_preferences":msg.get("report_preferences")} if kind == "energy_report" else {}),
         **({"max_entries": limit} if kind == "log_digest" else {}))
-    if kind == 'energy_report':
-        service = _bucket(hass).get('energy_analysis')
-        if service is None or not await service.async_validate_result(payload,connection.user.id):
-            raise RuntimeError('energy_analysis_context_changed')
-        if not service.context_is_current(payload):
-            raise RuntimeError('energy_analysis_context_changed')
-        if msg.get('format') != 'mail':
-            connection.send_result(msg['id'],payload['summary'])
-        else:
-            connection.send_result(msg['id'],{**{key:payload[key] for key in
-                ('snapshot_id','subject','body','html','csv','period')},
-                'cadence':msg['cadence'],'generated_at':now.isoformat(),
-                'effective_timezone':payload['period']['timezone'],
-                'source':payload['summary']['source']})
-        return
     summary = payload["summary"]
     source = summary.get("source") or {
         "name": "recorder", "kind": "grid_import", "status": summary.get("status", "no_data"),
