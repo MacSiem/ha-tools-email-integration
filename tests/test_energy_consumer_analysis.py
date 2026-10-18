@@ -46,7 +46,7 @@ class ConsumerAnalysisTest(unittest.TestCase):
         self.assertEqual('120', groups['areas']['kitchen']['kwh'])
         self.assertEqual('80', groups['areas']['office']['kwh'])
         self.assertEqual('20', groups['unassigned']['kwh'])
-        self.assertEqual('40', groups['unmeasured']['kwh'])
+        self.assertEqual(Decimal(40), Decimal(groups['unmeasured']['kwh']))
         self.assertEqual('200', groups['devices'][IDS[0]]['measured_kwh'])
         self.assertEqual('parent_residual', groups['devices'][IDS[0]]['attribution'])
         self.assertEqual('120.00', groups['floors']['ground']['usage_cost'])
@@ -114,6 +114,29 @@ class ConsumerAnalysisTest(unittest.TestCase):
                               consumer_snapshot=changed)
         self.add(builder, MID, END, 130, (100, 40, 10))
         self.assertEqual('120', builder.finish()['groups']['areas']['kitchen']['kwh'])
+
+    def test_negative_price_cents_and_unpriced_or_invalid_inputs(self):
+        b = book([version(rate=-.005, monthly=0)])
+        b['tariffs'][0]['versions'][0]['profile']['allowNegativeEnergy'] = True
+        builder = self.builder(b)
+        self.add(builder, START, MID, 1.5, (1, .5, .5))
+        self.add(builder, MID, END, 1.5, (1, .5, .5))
+        result = builder.finish(); groups = result['groups']
+        self.assertEqual('-0.02', result['totals']['usage_cost'])
+        self.assertEqual(Decimal('-.02'), sum(Decimal(row['usage_cost'])
+            for row in list(groups['devices'].values()) + [groups['unmeasured']]))
+        self.assertEqual('0.00', groups['unmeasured']['usage_cost'])
+        base = fixtures.EnergyAnalysisTest().builder(None)
+        no_price = analysis.EnergyAnalysisAccumulator(None, base._period, base._context,
+            generated_at=base._generated, consumers=CONSUMERS, membership=MEMBERSHIP)
+        self.add(no_price, START, MID, 130, (100, 40, 10))
+        self.add(no_price, MID, END, 130, (100, 40, 10))
+        self.assertEqual('120', no_price.finish()['groups']['areas']['kitchen']['kwh'])
+        self.assertIsNone(no_price.finish()['groups']['areas']['kitchen']['usage_cost'])
+        with self.assertRaisesRegex(ValueError, 'invalid_consumer_configuration'):
+            analysis.EnergyAnalysisAccumulator(None, base._period, base._context,
+                generated_at=base._generated, consumers=[{'stat_consumption': 'sensor.cycle',
+                'included_in_stat': 'sensor.cycle'}], membership=MEMBERSHIP)
 
     def test_legacy_combined_and_unknown_variable_preserve_named_unknowns(self):
         for semantics in ('legacy_combined', 'components'):

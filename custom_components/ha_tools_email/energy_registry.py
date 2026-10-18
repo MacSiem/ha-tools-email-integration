@@ -97,15 +97,20 @@ def _interval_breakdown(grid_kwh, consumers, membership, domain):
         nodes[sid] = {"parent": parent, "value": _energy(row.get("kwh"))}
         children.setdefault(parent, []).append(sid)
     # Bounded iterative walks avoid recursion depth and reject ambiguous trees.
+    verified_paths = set()
     for sid, node in nodes.items():
         if node["parent"] is not None and node["parent"] not in nodes:
             return {**empty, "issues": [{"reason": "missing_parent", "source_id": sid}]}
         seen, current = set(), sid
-        while current is not None:
+        while current is not None and current not in verified_paths:
             if current in seen:
                 return {**empty, "issues": [{"reason": "hierarchy_cycle", "source_id": sid}]}
             seen.add(current)
+            # A missing ancestor may not have reached its outer-loop check yet.
+            if current not in nodes:
+                return {**empty, "issues": [{"reason": "missing_parent", "source_id": sid}]}
             current = nodes[current]["parent"]
+        verified_paths.update(seen)
     issues, devices, area_values, floor_values, unassigned = [], {}, {}, {}, []
     memberships = _mapping(membership.get("sources"))
     for sid, node in nodes.items():
