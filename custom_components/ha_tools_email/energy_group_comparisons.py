@@ -5,6 +5,7 @@ evidence. That case is explicit, independent of household comparison readiness.
 """
 from copy import deepcopy
 from decimal import Decimal, localcontext
+from math import isfinite
 
 from .tariff_history import _money
 
@@ -43,8 +44,9 @@ def compare_period_groups(current, baseline, household_comparison):
                 return row
             actual, prior = Decimal(a['kwh']), Decimal(b['kwh'])
             value = actual-prior
+            percent = float(value/prior*100) if prior else None
             row.update(status='ready', reason=None, comparison_scope='per_group_calendar_totals',
-                       delta_kwh=str(value), percent=float(value/prior*100) if prior else None)
+                       delta_kwh=str(value), percent=percent if percent is not None and isfinite(percent) else None)
             if cost_compatible:
                 for key in ('energy_cost', 'variable_cost', 'legacy_combined_cost', 'usage_cost'):
                     if a.get(key) is not None and b.get(key) is not None:
