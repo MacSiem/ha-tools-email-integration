@@ -53,7 +53,7 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual('EUR', result['currency'])
         self.assertEqual(1.2, result['current']['usage_rate'])
         self.assertEqual('expensive', result['current']['zone_class'])
-        self.assertEqual(6 * .4 + 6 * 1.2, result['today']['usage_cost'])
+        self.assertAlmostEqual(6 * .4 + 6 * 1.2, result['today']['usage_cost'])
         self.assertEqual(7, result['today']['fixed_monthly'])
         self.assertEqual(7, result['tariff_revision'])
         self.assertEqual('2026-10-18T22:00:00+00:00', result['next_cheap']['start'])
@@ -183,3 +183,215 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(RuntimeError):
                 await task
             self.assertIsNone(c.data)
+
+    async def test_source_change_during_io_discards_answer(self):
+        reads = iter([[{'entity_id': 'sensor.a'}], [{'entity_id': 'sensor.b'}]])
+        class Storage:
+            async def async_get_tariff(self):
+                return {'profile': classified(), 'revision': 1}
+        async def provider(hass, start, end):
+            return usage()
+        c = energy.EnergySnapshotCoordinator(types.SimpleNamespace(
+            config=types.SimpleNamespace(time_zone='UTC')), Storage(), provider=provider)
+        with patch.object(energy, 'async_grid_sensors', side_effect=lambda _: next(reads)):
+            with self.assertRaisesRegex(RuntimeError, 'sources_changed'):
+                await c.async_refresh(now=at('2026-10-18T12:34Z'))
+        self.assertIsNone(c.data)
+
+    async def test_revision_confirmed_after_measurement_wait_is_used(self):
+        state = {'profile': classified(), 'revision': 1}
+        class Storage:
+            async def async_get_tariff(self):
+                return copy.deepcopy(state)
+        async def provider(hass, start, end):
+            state['revision'] = 2
+            state['profile']['currency'] = 'PLN'
+            return usage()
+        c = energy.EnergySnapshotCoordinator(types.SimpleNamespace(
+            config=types.SimpleNamespace(time_zone='UTC')), Storage(), provider=provider)
+        with patch.object(energy, 'async_grid_sensors', return_value=[]):
+            result = await c.async_refresh(now=at('2026-10-18T12:34Z'))
+        self.assertEqual((2, 'PLN'), (result['tariff_revision'], result['currency']))
+
+    async def test_listener_and_second_boundary_callbacks_are_removed_on_stop(self):
+        cancelled, points = [], []
+        events = types.ModuleType('homeassistant.helpers.event')
+        def interval(hass, callback, duration):
+            return lambda: cancelled.append('interval')
+        def point(hass, callback, instant):
+            points.append(instant)
+            return lambda: cancelled.append('point')
+        events.async_track_time_interval = interval
+        events.async_track_point_in_utc_time = point
+        class Storage:
+            async def async_get_tariff(self):
+                return {'profile': classified(), 'revision': 1}
+        async def provider(hass, start, end):
+            return usage()
+        c = energy.EnergySnapshotCoordinator(types.SimpleNamespace(
+            config=types.SimpleNamespace(time_zone='UTC')), Storage(), provider=provider)
+        with patch.dict(sys.modules, {events.__name__: events}), \
+             patch.object(energy, 'async_grid_sensors', return_value=[]):
+            await c.async_start()
+            now = at('2026-10-18T12:34:56Z')
+            c._model_boundaries = [int(at('2026-10-18T12:34:57Z').timestamp() * 1000)]
+            c._schedule_boundary(now)
+            self.assertEqual(at('2026-10-18T12:34:57Z'), points[-1])
+            hits = []
+            remove = c.async_add_listener(lambda: hits.append(1))
+            await c.async_refresh(now=now)
+            self.assertEqual([1], hits)
+            remove()
+            await c.async_refresh(now=now)
+            self.assertEqual([1], hits)
+            c.async_stop()
+        self.assertEqual(1, cancelled.count('interval'))
+        self.assertEqual(len(points), cancelled.count('point'))
+        self.assertFalse(c._listeners)
+
+
+class SnapshotAdditionalTests(unittest.TestCase):
+    def test_complete_zero_and_negative_cost_no_monthly_proration(self):
+        for kwh, rate, expected in [(0, 1, 0), (1, -.5, -6)]:
+            p = classified()
+            p.update(allowNegativeEnergy=True, rules=[])
+            p['zones'][0].update(energyRate=rate, variableRate=0)
+            measured = usage()
+            for row in measured['hourly_buckets']:
+                row['kwh'] = kwh
+            result = energy.build_snapshot({'profile': p, 'revision': 1}, measured,
+                now=at('2026-10-18T12:34Z'), measurement_timezone='UTC')
+            self.assertEqual(expected, result['today']['usage_cost'])
+            self.assertEqual(7, result['today']['fixed_monthly'])
+
+    def test_current_price_overflow_is_unknown_and_ratebucket_mixing_rejected(self):
+        p = classified()
+        p['zones'][0].update(energyRate=1e308, variableRate=1e308)
+        snapshot = energy.build_snapshot({'profile': p}, usage(), now=at('2026-10-18T12:34Z'), measurement_timezone='UTC')
+        self.assertIsNone(snapshot['current']['usage_rate'])
+        p = classified()
+        p['rules'] = [{'zone': 'night', 'intervals': [{'from': '00:30', 'to': '01:00'}]}]
+        snapshot = energy.build_snapshot({'profile': p}, usage(), now=at('2026-10-18T12:34Z'), measurement_timezone='UTC')
+        self.assertIsNone(snapshot['today']['usage_cost'])
+        self.assertIn({'reason': 'mixed_rate_bucket'}, snapshot['today']['issues'])
+
+
+def entity_modules():
+    """Exercise actual entity properties with only HA's base classes doubled."""
+    class Entity:
+        async def async_added_to_hass(self):
+            pass
+        def async_on_remove(self, callback):
+            self.remove = callback
+        def async_write_ha_state(self):
+            pass
+    class SensorEntity(Entity):
+        pass
+    class BinarySensorEntity(Entity):
+        pass
+    entity = types.ModuleType('homeassistant.helpers.entity')
+    entity.Entity = Entity
+    registry = types.ModuleType('homeassistant.helpers.device_registry')
+    registry.DeviceInfo = dict
+    sensor = types.ModuleType('homeassistant.components.sensor')
+    sensor.SensorEntity = SensorEntity
+    sensor.SensorDeviceClass = types.SimpleNamespace(ENUM='enum', TIMESTAMP='timestamp', MONETARY='monetary')
+    sensor.SensorStateClass = types.SimpleNamespace(MEASUREMENT='measurement')
+    binary = types.ModuleType('homeassistant.components.binary_sensor')
+    binary.BinarySensorEntity = BinarySensorEntity
+    modules = [entity, registry, sensor, binary]
+    with patch.dict(sys.modules, {m.__name__: m for m in modules}):
+        loaded = []
+        for name in ('energy_entity', 'sensor', 'binary_sensor'):
+            spec = importlib.util.spec_from_file_location(PACKAGE + '.' + name, ROOT / (name + '.py'))
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+            loaded.append(module)
+    return loaded[1:]
+
+
+class EntityContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_five_entities_share_exact_snapshot_units_ids_and_unload_listeners(self):
+        sensor, binary = entity_modules()
+        c = energy.EnergySnapshotCoordinator(types.SimpleNamespace(config=types.SimpleNamespace(time_zone='UTC')), None)
+        c.data = energy.build_snapshot({'profile': classified(), 'revision': 42}, usage(),
+            now=at('2026-10-18T12:34Z'), measurement_timezone='UTC')
+        hass = types.SimpleNamespace(data={'ha_tools_email': {'energy_snapshot': c}})
+        entry = types.SimpleNamespace(entry_id='stable-entry')
+        entities = []
+        await sensor.async_setup_entry(hass, entry, entities.extend)
+        await binary.async_setup_entry(hass, entry, entities.extend)
+        self.assertEqual(5, len(entities))
+        self.assertEqual(5, len({e._attr_unique_id for e in entities}))
+        self.assertEqual(1, len({str(e._attr_device_info) for e in entities}))
+        self.assertEqual(['expensive', 1, at('2026-10-18T22:00Z'), 8.4],
+            [entities[0].native_value, entities[1].native_value, entities[2].native_value,
+             round(entities[3].native_value, 4)])
+        self.assertFalse(entities[4].is_on)
+        self.assertEqual('EUR/kWh', entities[1].native_unit_of_measurement)
+        self.assertEqual('EUR', entities[3].native_unit_of_measurement)
+        for e in entities:
+            self.assertTrue(e.available)
+            self.assertEqual(42, e.extra_state_attributes['tariff_revision'])
+            await e.async_added_to_hass()
+        self.assertEqual(5, len(c._listeners))
+        for e in entities:
+            e.remove()
+        self.assertFalse(c._listeners)
+        repeat = []
+        await sensor.async_setup_entry(hass, entry, repeat.extend)
+        await binary.async_setup_entry(hass, entry, repeat.extend)
+        self.assertEqual([e._attr_unique_id for e in entities], [e._attr_unique_id for e in repeat])
+        c.data = None
+        self.assertTrue(all(not e.available for e in entities))
+
+
+class WebsocketSnapshotTests(unittest.IsolatedAsyncioTestCase):
+    async def test_revoked_during_io_never_receives_result_and_override_is_forwarded(self):
+        from tests.test_tariff_profile import load_websocket
+        ws, _ = load_websocket()
+        user = types.SimpleNamespace(id='user-id', is_active=True)
+        class Auth:
+            async def async_get_user(self, uid):
+                return user
+        calls, results, errors = [], [], []
+        class Coordinator:
+            async def async_snapshot(self, **kwargs):
+                calls.append(kwargs)
+                user.is_active = False
+                return {'safe': True}
+        hass = types.SimpleNamespace(auth=Auth(), data={'ha_tools_email': {'energy_snapshot': Coordinator()}})
+        connection = types.SimpleNamespace(user=user, send_result=lambda *args: results.append(args),
+                                           send_error=lambda *args: errors.append(args))
+        await ws._ws_energy_snapshot(hass, connection, {'id': 1, 'profile': None})
+        self.assertEqual([{'profile': None}], calls)
+        self.assertFalse(results)
+        self.assertEqual('unauthorized', errors[-1][1])
+        await ws._ws_energy_snapshot(hass, connection, {'id': 2})
+        self.assertEqual(1, len(calls))
+
+    async def test_safe_read_and_bounded_failure(self):
+        from tests.test_tariff_profile import load_websocket
+        ws, _ = load_websocket()
+        user = types.SimpleNamespace(id='user-id', is_active=True)
+        class Auth:
+            async def async_get_user(self, uid):
+                return user
+        class Coordinator:
+            fail = False
+            async def async_snapshot(self, **kwargs):
+                if self.fail:
+                    raise OSError('SMTP PRIVATE PATH')
+                return {'safe': True}
+        coordinator = Coordinator()
+        results, errors = [], []
+        hass = types.SimpleNamespace(auth=Auth(), data={'ha_tools_email': {'energy_snapshot': coordinator}})
+        connection = types.SimpleNamespace(user=user, send_result=lambda *args: results.append(args),
+                                           send_error=lambda *args: errors.append(args))
+        await ws._ws_energy_snapshot(hass, connection, {'id': 1})
+        self.assertEqual({'safe': True}, results[-1][1])
+        coordinator.fail = True
+        await ws._ws_energy_snapshot(hass, connection, {'id': 2})
+        self.assertEqual('energy_unavailable', errors[-1][1])
+        self.assertNotIn('PRIVATE', str(errors))

@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+from math import isfinite
 from zoneinfo import ZoneInfo
 
 from .composer import async_grid_sensors, async_get_energy_usage
@@ -76,11 +77,14 @@ def build_snapshot(state, measurement, *, now, measurement_timezone, profile_sou
     variable = current_rate.get('variableRate') if available else None
     start, end, aligned = measurement_window(now, measurement_timezone)
     costs = price_measurements(profile, measurement, start, end, aligned)
+    usage_rate = energy + variable if energy is not None and variable is not None else None
+    if usage_rate is not None and not isfinite(usage_rate):
+        usage_rate = None
     current = {'at': now.astimezone(timezone.utc).isoformat(), 'available': available,
         'reason': current_rate.get('reason', None), 'zone_id': current_rate.get('zone') if available else None,
         'zone_class': classification, 'cheap': None if classification is None else classification == 'cheap',
         'energy_rate': energy, 'variable_rate': variable,
-        'usage_rate': energy + variable if energy is not None and variable is not None else None}
+        'usage_rate': usage_rate}
     issues = [{'reason': row['reason']} for row in costs['issues'][:32]]
     if not aligned:
         issues.insert(0, {'reason': 'calendar_boundary_not_recorder_hour'})
@@ -118,6 +122,7 @@ class EnergySnapshotCoordinator:
         self._listeners = set()
         self._stopped = False
         self._unsub = None
+        self._boundary_unsub = None
 
     def async_add_listener(self, listener):
         self._listeners.add(listener)
@@ -127,15 +132,41 @@ class EnergySnapshotCoordinator:
         from homeassistant.helpers.event import async_track_time_interval
         await self.async_refresh()
         self._unsub = async_track_time_interval(self.hass, self._async_tick, timedelta(seconds=30))
+        self._schedule_boundary(datetime.now(timezone.utc))
 
     async def _async_tick(self, now):
-        await self.async_refresh(now=now)
+        try:
+            await self.async_refresh()
+        except Exception:
+            # The background reader cannot leave old monetary values available.
+            self._invalidate()
+
+    def _invalidate(self):
+        self.data = None
+        for listener in tuple(self._listeners):
+            listener()
+
+    def _schedule_boundary(self, now):
+        if self._boundary_unsub:
+            self._boundary_unsub()
+            self._boundary_unsub = None
+        if not self._unsub:
+            return
+        from homeassistant.helpers.event import async_track_point_in_utc_time
+        model_boundaries = self._model_boundaries
+        future = [value for value in model_boundaries if value > now.timestamp() * 1000]
+        minute = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
+        boundary = min(minute, datetime.fromtimestamp(min(future) / 1000, timezone.utc)) if future else minute
+        self._boundary_unsub = async_track_point_in_utc_time(self.hass, self._async_tick, boundary)
 
     def async_stop(self):
         self._stopped = True
         if self._unsub:
             self._unsub()
             self._unsub = None
+        if self._boundary_unsub:
+            self._boundary_unsub()
+            self._boundary_unsub = None
         self._listeners.clear()
         self.data = None
         self._measurement = None
@@ -143,6 +174,7 @@ class EnergySnapshotCoordinator:
     async def async_refresh(self, *, now=None):
         async with self._lock:
             self._check_running()
+            real_time = now is None
             now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
             tz = self.hass.config.time_zone
             start, end, aligned = measurement_window(now, tz)
@@ -164,12 +196,20 @@ class EnergySnapshotCoordinator:
                 self._check_running()
                 if tz != self.hass.config.time_zone or tuple(row['entity_id'] for row in latest) != key[3]:
                     self._measurement_key = None
-                    self.data = None
+                    self._invalidate()
                     raise RuntimeError('energy_sources_changed')
                 self._measurement, self._measurement_key, self._measurement_at = measured, key, now
             state = await self.storage.async_get_tariff()
             self._check_running()
+            if real_time:
+                finished = datetime.now(timezone.utc)
+                if measurement_window(finished, self.hass.config.time_zone)[:2] != (start, end):
+                    self._invalidate()
+                    raise RuntimeError('energy_calendar_changed')
+                now = finished
+            self._model_boundaries = EnergyTariff(state.get('profile'))._boundaries
             self.data = build_snapshot(state, self._measurement, now=now, measurement_timezone=tz)
+            self._schedule_boundary(now)
             for listener in tuple(self._listeners):
                 listener()
             return deepcopy(self.data)
