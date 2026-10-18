@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.4.0 (Unreleased)
+
+- Add one shared Energy snapshot and five stable entities: tariff classification, current usage price, cheap-zone binary state, next cheap start and cost today. Prices use tariff currency; missing data or variable fees stay unavailable and fixed monthly fees remain separate.
+- Price Energy Optimizer 4.0 card histories through the same EnergyTariff engine, including ephemeral card overrides. Bound batch size, CPU work and pending jobs; do not read Recorder or change settings for supplied-history pricing.
+- Refresh shared measurements by exact source/unit/day context and completed absolute hours. Reprice tariff boundaries without redundant Recorder work, stop listeners/timers on unload, and reject late results after reload, authorization or revision changes.
+- Preserve optional explicit cheap/expensive/mixed classification on zones and dynamic intervals. Never infer classification from names, minimum prices or legacy tariff mode.
+- Keep monetary daily cost without a statistics state class; current price remains a measurement in currency/kWh. Add native coverage across the actual minimum, stable and beta Home Assistant versions.
+
 ## 2.3.1 (2026-10-16)
 
 - Keep valid Energy Recorder measurements when another source has a gap, invalid interval or unsupported metadata. Show recorded usage, per-source measured hours, overall coverage, the available hourly profile and a source ranking; incomplete full-period totals and comparisons remain unavailable.

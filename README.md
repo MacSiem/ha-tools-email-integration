@@ -104,6 +104,8 @@ action:
 
 ## Shared Energy snapshot and entities
 
+From **2.4.0**, install/update the integration in HACS, then add **HA Tools Email** under **Settings → Devices & services**. Configure Energy Dashboard grid import and save a shared tariff from Energy Optimizer **4.0+ → Tariff settings**. Select an optional zone classification for cheap-zone and next-cheap values. Open the Energy device under this integration to use the five entities. SMTP is not needed for these read-only energy values; notifications require a separate Home Assistant automation.
+
 The integration exposes a shared Energy device with current tariff zone, current
 usage price, cheap-period status, next cheap start and today's measured usage
 cost. All five entities and `ha_tools_email/energy_snapshot` use the same tariff
