@@ -358,6 +358,99 @@ def _decimal(value):
     return Decimal(str(value))
 
 
+def _usage_decimal(value, *, nullable=False, negative=False):
+    """Bound internal normalized arithmetic, separately from JSON settings."""
+    if value is None and nullable:
+        return None
+    if isinstance(value, str):
+        if len(value) > 128 or not re.fullmatch(r'-?[0-9]+(?:\.[0-9]+)?', value):
+            raise ValueError('invalid_usage_number')
+    elif isinstance(value, Decimal):
+        if not value.is_finite() or len(value.as_tuple().digits) > 128 or abs(value.as_tuple().exponent) > 128:
+            raise ValueError('invalid_usage_number')
+    elif not _finite(value):
+        raise ValueError('invalid_usage_number')
+    result = Decimal(str(value))
+    if not result.is_finite() or result.copy_abs() > Decimal('1e12') or (not negative and result < 0):
+        raise ValueError('invalid_usage_number')
+    return result
+
+
+def calculate_energy_amounts(kwh, energy_rate, variable_rate, rate_semantics):
+    """Unrounded internal amounts, with one local Decimal precision of 40.
+
+    Rates must already have been selected by a validated tariff engine. In
+    particular, a negative energy rate is accepted here without granting an
+    external profile permission to use it. Normalized consumer residuals may
+    be Decimal or bounded plain decimal strings; settings remain JSON numbers.
+    Unknown components stay unknown even for a measured zero.
+    """
+    if rate_semantics not in ('components', 'legacy_combined'):
+        raise ValueError('invalid_rate_semantics')
+    quantity = _usage_decimal(kwh)
+    energy_rate = _usage_decimal(energy_rate, nullable=True, negative=True)
+    variable_rate = _usage_decimal(variable_rate, nullable=True)
+    with localcontext() as context:
+        context.prec = 40
+        energy = None if energy_rate is None else quantity * energy_rate
+        if rate_semantics == 'legacy_combined':
+            return {'energy_cost': None, 'variable_cost': None,
+                    'legacy_combined_cost': energy, 'usage_cost': energy}
+        variable = None if variable_rate is None else quantity * variable_rate
+        return {'energy_cost': energy, 'variable_cost': variable,
+                'legacy_combined_cost': Decimal(0),
+                'usage_cost': None if energy is None or variable is None else energy + variable}
+
+
+class HistoricalTariffRates:
+    """Compile one detached tariff for repeated uniform interval rate lookup.
+
+    Construction performs the schema-2 validation proof once. Lookups do no
+    fee computation or tariff activation and return no measured energy/costs.
+    Boundary arguments follow EnergyTariff's aware ISO/epoch millisecond API.
+    """
+
+    def __init__(self, tariff):
+        clean = validate_tariff_book({'schema': 2, 'tariffs': [tariff]})['tariffs'][0]
+        self._tariff_id = clean['id']
+        self._compiled = tuple((*_bounds(v), v, EnergyTariff(v['profile'])) for v in clean['versions'])
+
+    def resolve_interval(self, start, end):
+        a, b = _stamp(start), _stamp(end)
+        if (a is None or b is None or not 0 < b - a <= 86400000
+                or any(not 1900 <= datetime.fromtimestamp(s / 1000, timezone.utc).year <= 2200
+                       for s in (a, b))):
+            return {'available': False, 'reason': 'invalid_interval'}
+
+        def version_at(stamp):
+            return next((item for item in self._compiled
+                         if item[0] is not None and item[0] <= stamp
+                         and (item[1] is None or stamp < item[1])), None)
+
+        first, last = version_at(a), version_at(b - 1)
+        if first is None:
+            return {'available': False, 'reason': 'unknown_historical_version'}
+        if last is None or first is not last:
+            return {'available': False, 'reason': 'mixed_version_bucket'}
+        _, _, version, model = first
+        # Zero is only an engine uniformity probe, never observed consumption.
+        probe = model.price_bucket({'from': a, 'to': b, 'kwh': 0})
+        profile = version['profile']
+        result = {'available': probe['available'], 'reason': probe.get('reason'),
+                  'tariff_id': self._tariff_id, 'version_id': version['id'],
+                  'rate_semantics': version['rate_semantics'],
+                  'currency': profile['currency'], 'price_basis': profile['priceBasis'],
+                  'timezone': profile['timezone'], 'clock': deepcopy(profile['clock']),
+                  'valid_from': version.get('valid_from'), 'valid_to': version.get('valid_to'),
+                  'validity_clock': version.get('validity_clock', 'civil'),
+                  'provenance': deepcopy(version.get('provenance', 'configured_valid_from'))}
+        if probe['available']:
+            result.update(energy_rate=probe['energyRate'], variable_rate=probe['variableRate'],
+                          zone=probe['zone'], zones=list(probe['zones']),
+                          zone_attribution=probe['zoneAttribution'])
+        return result
+
+
 def _fees(versions, start, end):
     zone = ZoneInfo(versions[0]['profile']['timezone'])
     day = datetime.fromtimestamp(start / 1000, timezone.utc).astimezone(zone).date()
@@ -432,12 +525,10 @@ def _price(tariff, rows, coverage, fingerprint):
                               provenance=v.get('provenance', 'configured_valid_from'))
                 identities.add((v['profile']['currency'], v['profile']['priceBasis']))
                 if result['available']:
-                    energy = _decimal(row['kwh']) * _decimal(result['energyRate'])
-                    variable = None if result['variableRate'] is None else _decimal(row['kwh']) * _decimal(result['variableRate'])
-                    amounts = {'energy_cost': energy, 'variable_cost': variable, 'legacy_combined_cost': Decimal(0)}
-                    if v['rate_semantics'] == 'legacy_combined':
-                        amounts = {'energy_cost': None, 'variable_cost': None, 'legacy_combined_cost': energy}
-                    if v['rate_semantics'] != 'legacy_combined' and variable is None:
+                    calculated = calculate_energy_amounts(row['kwh'], result['energyRate'],
+                                                          result['variableRate'], v['rate_semantics'])
+                    amounts = {key: calculated[key] for key in sums}
+                    if calculated['usage_cost'] is None:
                         usage_known = False
                     result['costs'] = {k: None if value is None else str(value) for k, value in amounts.items()}
                     # Engine floats are compatibility diagnostics, never the bill.
