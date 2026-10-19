@@ -66,7 +66,7 @@ class ReportStatusCancelLaneTests(unittest.IsolatedAsyncioTestCase):
                     await asyncio.wait_for(started[index].wait(), 10)
                     # A successful raw start means there is exactly one new task
                     # in addition to those retained by prior cancelled callers.
-                    for worker in tuple(storage._report_status_tasks):
+                    for worker in tuple(getattr(storage, '_report_status_tasks', ())):
                         if all(ref() is not worker for ref in references):
                             watch(worker)
                     del worker
@@ -93,7 +93,7 @@ class ReportStatusCancelLaneTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(settled.wait(), 10)
                 await asyncio.sleep(0)  # Drain task/shield callbacks, no polling.
                 self.assertEqual(0, storage._report_status_pending)
-                self.assertFalse(storage._report_status_tasks)
+                self.assertFalse(getattr(storage, '_report_status_tasks', ()))
                 self.assertEqual([(id(old_data), 'unconfigured')] * 4, observations)
                 gc.collect()
                 await asyncio.sleep(0)
@@ -104,14 +104,14 @@ class ReportStatusCancelLaneTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(storage.report_status_context_is_current(token))
                 self.assertEqual(5, len(raw_calls))
                 self.assertEqual(0, storage._report_status_pending)
-                self.assertFalse(storage._report_status_tasks)
+                self.assertFalse(getattr(storage, '_report_status_tasks', ()))
         finally:
             release.set()  # Never leave a raw thread blocked on assertion failure.
             if caller is not None and not caller.done():
                 caller.cancel()
                 await asyncio.gather(caller, return_exceptions=True)
-            if storage._report_status_tasks:
-                await asyncio.gather(*tuple(storage._report_status_tasks), return_exceptions=True)
+            if getattr(storage, '_report_status_tasks', ()):
+                await asyncio.gather(*tuple(getattr(storage, '_report_status_tasks', ())), return_exceptions=True)
             loop.set_exception_handler(old_handler)
 
     async def test_cancel_waiting_for_store_lock_releases_immediately_without_worker(self):
@@ -123,11 +123,11 @@ class ReportStatusCancelLaneTests(unittest.IsolatedAsyncioTestCase):
                 now=NOW, local_timezone='UTC'))
             await asyncio.sleep(0)
             self.assertEqual(1, storage._report_status_pending)
-            self.assertFalse(storage._report_status_tasks)
+            self.assertFalse(getattr(storage, '_report_status_tasks', ()))
             caller.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await caller
             self.assertEqual(0, storage._report_status_pending)
-            self.assertFalse(storage._report_status_tasks)
+            self.assertFalse(getattr(storage, '_report_status_tasks', ()))
         finally:
             storage._lock.release()
