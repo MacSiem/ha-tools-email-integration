@@ -60,7 +60,7 @@ async def test_real_hour_compile_after_boundary_or_next_hour_is_automatically_re
         'device_consumption':[{'stat_consumption':consumer.entity_id}]}
     freezer.move_to(END)
     # A fixture token minted before the >1h frozen-clock jump has expired.
-    refresh_token=await hass.auth.async_create_refresh_token(hass_admin_user)
+    refresh_token=await hass.auth.async_create_refresh_token(hass_admin_user,client_id='http://localhost/')
     client=await hass_ws_client(hass,hass.auth.async_create_access_token(refresh_token))
     prepared=await command(client,'prepare');assert prepared['success'],prepared
     enabled=await command(client,'enable',proposal=prepared['result']['proposal'],expected_revision=prepared['result']['revision'],
