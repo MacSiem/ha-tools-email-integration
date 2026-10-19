@@ -16,8 +16,8 @@ ROOT = Path(__file__).resolve().parents[1] / 'custom_components/ha_tools_email'
 
 class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
     def fixture(self, *, fail=None, unload=True):
-        created = {'coordinator': [], 'registry': [], 'service': [], 'association': [],
-                   'platforms': {'sensor': False, 'binary_sensor': False}, 'unload_calls': []}
+        created = {'coordinator': [], 'registry': [], 'service': [], 'association': [], 'native': [],
+                   'platforms': {name: False for name in ('sensor', 'binary_sensor', 'button', 'event', 'calendar')}, 'unload_calls': []}
         events = []
         class Coordinator:
             def __init__(self, hass, storage):
@@ -64,6 +64,20 @@ class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
                 for unsubscribe in self._unsubscribers:
                     unsubscribe()
                 self._unsubscribers.clear()
+        class Native:
+            def __init__(self, hass, entry, storage):
+                self.running, self._unsubscribers = False, []
+                created['native'].append(self)
+            async def async_start(self):
+                self.running = True
+                self._unsubscribers = [object(), object()]
+                if fail == 'native_start':
+                    raise RuntimeError('synthetic native metadata start failure')
+                if fail == 'native_cancel':
+                    raise asyncio.CancelledError
+            def async_stop(self):
+                self.running = False
+                self._unsubscribers.clear()
         async def ensure(hass):
             pass
         async def reload_schedules(hass):
@@ -98,7 +112,8 @@ class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
         for filename, name, cls in [('energy', 'EnergySnapshotCoordinator', Coordinator),
                                     ('registry_adapter', 'RegistryMembership', Registry),
                                     ('analysis_service', 'EnergyAnalysisService', Service),
-                                    ('energy_source_device', 'EnergySourceDeviceAssociation', Association)]:
+                                    ('energy_source_device', 'EnergySourceDeviceAssociation', Association),
+                                    ('email_native', 'EmailNativeCoordinator', Native)]:
             mod = types.ModuleType('lifecycle_fixture.' + filename); setattr(mod, name, cls); mods[mod.__name__] = mod
         return namespace, hass, types.SimpleNamespace(entry_id='synthetic'), created, events, mods
 
@@ -158,13 +173,15 @@ class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(made['service'][0].stopped)
         self.assertTrue(made['registry'][0].active)
         self.assertTrue(made['coordinator'][0].running)
+        self.assertTrue(made['native'][0].running)
+        self.assertEqual(2, len(made['native'][0]._unsubscribers))
         association = made['association'][0]
         self.assertTrue(association.running)
         self.assertEqual(3, len(association._unsubscribers))
         self.assertEqual(0, association.stop_calls)
         self.assertEqual(0, association.unsubscribe_calls)
         self.assertTrue(all(made['platforms'].values()))
-        self.assertEqual([('sensor', 'binary_sensor')], made['unload_calls'])
+        self.assertEqual([('sensor', 'binary_sensor', 'button', 'event', 'calendar')], made['unload_calls'])
 
 
     async def test_association_start_failure_or_cancel_releases_helpers_and_forwarded_platforms(self):
@@ -184,10 +201,24 @@ class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(made['registry'][0].active)
                 self.assertFalse(made['coordinator'][0].running)
                 self.assertFalse(any(made['platforms'].values()))
-                self.assertEqual([('sensor', 'binary_sensor')], made['unload_calls'])
+                self.assertEqual([('sensor', 'binary_sensor', 'button', 'event', 'calendar')], made['unload_calls'])
                 self.assertFalse(any(key in hass.data['ha_tools_email'] for key in
                     ('energy_source_device', 'energy_analysis', 'energy_membership', 'energy_snapshot')))
                 self.assertNotIn(('scheduler_reloaded', {}), events)
+
+
+    async def test_native_metadata_start_failure_or_cancel_cleans_before_forwarding(self):
+        for boundary in ('native_start', 'native_cancel'):
+            ns, hass, entry, made, events, mods = self.fixture(fail=boundary)
+            with patch.dict(sys.modules, mods):
+                with self.assertRaises(asyncio.CancelledError if boundary == 'native_cancel' else RuntimeError):
+                    await ns['async_setup_entry'](hass, entry)
+            self.assertFalse(made['native'][0].running)
+            self.assertFalse(made['native'][0]._unsubscribers)
+            self.assertFalse(made['coordinator'][0].running)
+            self.assertFalse(made['registry'][0].active)
+            self.assertFalse(any(made['platforms'].values()))
+            self.assertNotIn('email_native', hass.data['ha_tools_email'])
 
 
 if __name__ == '__main__':
