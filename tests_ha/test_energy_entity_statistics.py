@@ -131,7 +131,10 @@ async def test_native_registry_source_change_and_preferences_poll_without_manage
     freezer.tick(timedelta(seconds=31))
     async_fire_time_changed(hass, datetime.now(timezone.utc))
     await hass.async_block_till_done()
-    fallback = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, f'{entry.entry_id}_energy')})
+    fallbacks = [device for device in dr.async_get(hass).devices.values()
+                 if (DOMAIN, f'{entry.entry_id}_energy') in device.identifiers]
+    assert len(fallbacks) == 1
+    fallback = fallbacks[0]
     assert {row.device_id for row in records(hass, entry).values()} == {fallback.id}
     assert len(manager._update_listeners) == listener_count
     assert await hass.config_entries.async_unload(entry.entry_id)
@@ -155,6 +158,16 @@ async def test_native_daily_total_statistics_metadata_reset_and_signed_sum(hass,
     await storage.async_save_tariff(profile(), expected_revision=0)
     coordinator = hass.data[DOMAIN]['energy_snapshot']
     await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    # This case supplies actual published snapshots to real entities/Recorder.
+    # Stop the independent source timer so freezer jumps cannot race synthetic
+    # publication with a new no-source refresh. Runtime timer behavior is covered
+    # separately in test_energy_runtime.py.
+    for handle in ('_unsub', '_boundary_unsub'):
+        unsubscribe = getattr(coordinator, handle)
+        if unsubscribe is not None:
+            unsubscribe()
+            setattr(coordinator, handle, None)
     ids = records(hass, entry)
     cost_id, price_id = ids['today_cost'].entity_id, ids['price'].entity_id
     baseline = deepcopy(coordinator.data)
