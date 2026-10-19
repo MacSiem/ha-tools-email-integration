@@ -175,3 +175,70 @@ async def test_native_disabled_restart_and_author_revocation_do_not_enqueue(
     await hass.auth.async_update_user(user, is_active=False)
     with pytest.raises(PermissionError): await replacement.async_refresh(share_author)
     assert replacement.recorder is None
+
+
+@pytest.mark.freeze_time('2026-10-18T12:30:00+00:00')
+async def test_native_pending_policy_change_disable_archives_and_new_consent_never_replays_old_ids(
+        hass, hass_storage, recorder_mock, hass_ws_client, monkeypatch):
+    entry, storage, client, area_id = await setup_dataset(hass, recorder_mock, hass_ws_client)
+    initial = await publish(client, hass, recorder_mock)
+    subject = hass.data[DOMAIN]['energy_statistics']
+    old_series = deepcopy(subject._state['series'])
+    old_ids = set(old_series)
+    before = await recorder_mock.async_add_executor_job(partial(statistics_during_period,
+        hass, START, END, old_ids, 'hour', None, {'sum', 'change'}))
+    # Only the target ACK is interrupted. Source measurements, pricing, real
+    # Recorder enqueue and SQL remain the native implementations.
+    async def unconfirmed(plan):
+        return False
+    with monkeypatch.context() as context:
+        context.setattr(subject.recorder, 'async_verify', unconfirmed)
+        attempted = await command(client, 'refresh', backfill=True, acknowledge_current_membership=True)
+    assert not attempted['success']
+    assert subject._state['pending'] is not None
+    intent = deepcopy(subject._state['pending'])
+    old_share = deepcopy(subject._state['share'])
+    await _async_recorder_barrier(hass, recorder_mock)
+    await storage.async_save_feature_access({'schema': 1, 'features': {}}, expected_revision=0)
+    prepared = await command(client, 'prepare'); assert prepared['success'], prepared
+    blocked = await command(client, 'enable', proposal=prepared['result']['proposal'],
+        expected_revision=initial['revision'], acknowledge_global=True,
+        acknowledge_current_membership=True)
+    assert not blocked['success']
+    assert subject._state['pending'] == intent
+    def unexpected_io(*args, **kwargs):
+        raise AssertionError('Disable must not access sources or Recorder')
+    with monkeypatch.context() as context:
+        context.setattr(subject.service, 'async_get_statistics_hours', unexpected_io)
+        context.setattr(subject.recorder, 'async_metadata', unexpected_io)
+        context.setattr(subject.recorder, 'enqueue', unexpected_io)
+        context.setattr(subject.recorder, 'async_verify', unexpected_io)
+        disabled = await command(client, 'disable', expected_revision=initial['revision'])
+    assert disabled['success'], disabled
+    assert not disabled['result']['enabled'] and not disabled['result']['pending']
+    assert disabled['result']['unconfirmed_history'] == 1
+    archive = deepcopy(subject._state['archived_intents'])
+    assert {key: archive[0][key] for key in ('epoch', 'series', 'clear')} == intent
+    assert archive[0]['binding'] == old_share['binding']
+    assert archive[0]['author'] == old_share['author']
+    assert subject._state['series'] == old_series
+    from custom_components.ha_tools_email.energy_statistics_publisher import EnergyStatisticsPublisher
+    restored = EnergyStatisticsPublisher(hass, subject.service)
+    assert (await restored.async_status(old_share['author']))['unconfirmed_history'] == 1
+    assert restored._state['archived_intents'] == archive
+    prepared = await command(client, 'prepare'); assert prepared['success'], prepared
+    enabled = await command(client, 'enable', proposal=prepared['result']['proposal'],
+        expected_revision=disabled['result']['revision'], acknowledge_global=True,
+        acknowledge_current_membership=True)
+    assert enabled['success'], enabled
+    assert enabled['result']['active_epoch'] != old_share['epoch']
+    current = await publish(client, hass, recorder_mock)
+    current_ids = {row['statistic_id'] for row in current['catalog'] if row['current_dataset']}
+    assert current_ids and not old_ids & current_ids
+    assert subject._state['archived_intents'] == archive
+    assert {sid: subject._state['series'][sid] for sid in old_ids} == old_series
+    after = await recorder_mock.async_add_executor_job(partial(statistics_during_period,
+        hass, START, END, old_ids, 'hour', None, {'sum', 'change'}))
+    assert after == before
+    await client.close()
+    assert await hass.config_entries.async_unload(entry.entry_id)
