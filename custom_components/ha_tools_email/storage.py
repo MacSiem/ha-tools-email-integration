@@ -387,10 +387,20 @@ class EmailStorage:
                     project_report_status, data, purpose,
                     now=now, local_timezone=local_timezone, consumed=consumed))
                 self._report_status_tasks.add(worker)
-                worker.add_done_callback(release)
-                # Caller cancellation releases the Store lock, never the raw
-                # queued/running worker's slot. COW data stays immutable.
-                result = await asyncio.shield(worker)
+                completed = asyncio.get_running_loop().create_future()
+
+                def finished(done):
+                    release(done)
+                    if not completed.done():
+                        completed.set_result(None)
+
+                worker.add_done_callback(finished)
+                # Await a completion signal, not the worker itself. Cancelling
+                # this waiter cannot cancel queued/running work. Python 3.14's
+                # shield logs late failures even when another callback consumes
+                # them, so keep private worker errors on this owned lane only.
+                await completed
+                result = worker.result()  # Propagate errors to active callers.
                 return result, data
         finally:
             if worker is None:
