@@ -7,7 +7,7 @@ meaning of partial/common-measurement values and metadata in exported reports.
 from collections.abc import Mapping
 import csv
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 from html import escape
 from io import StringIO
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -309,9 +309,19 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         'incomparable_currency_or_basis': tr('Różna waluta lub podstawa cen', 'Different currency or price basis'),
         'currency_mismatch': tr('Różne waluty', 'Different currencies'),
         'missing_measurement': tr('Brak pomiaru', 'Missing measurement'),
+        'incomplete_household_measurements': tr('Niekompletne pomiary domu', 'Incomplete household measurements'),
+        'incomplete_classification': tr('Niepełna klasyfikacja stref', 'Incomplete zone classification'),
+        'classification_unavailable': tr('Brak klasyfikacji stref', 'Zone classification unavailable'),
+        'zero_total_kwh': tr('Zerowe zużycie okresu', 'Zero period consumption'),
+        'no_recorded_hours': tr('Brak zapisanych godzin', 'No recorded hours'),
+        'tariff_unavailable': tr('Taryfa niedostępna', 'Tariff unavailable'),
         'currency_or_basis_mismatch': tr('Niezgodna waluta lub podstawa cen', 'Currency or price basis mismatch'),
     }
     numeric_titles = {
+        'known_cheap_kwh': tr('Znana energia w taniej strefie', 'Known cheap-zone energy'),
+        'classified_kwh': tr('Energia ze znaną klasyfikacją', 'Energy with known classification'),
+        'total_kwh': tr('Energia całego okresu', 'Full period energy'),
+        'ratio': tr('Udział (0–1)', 'Share (0–1)'),
         'current_kwh': tr('Energia bieżąca w porównaniu', 'Current comparison energy'),
         'baseline_kwh': tr('Energia bazowa w porównaniu', 'Baseline comparison energy'),
         'full_current_kwh': tr('Energia całego bieżącego okresu', 'Full current period energy'),
@@ -427,6 +437,67 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         row = fact(parts)
         return row[3] if row else ''
 
+    def compact_number(value, fallback):
+        """Main-layer typography only; exact facts stay in details/text/CSV."""
+        try:
+            if isinstance(value, bool):
+                return fallback
+            number = Decimal(str(value))
+            if not number.is_finite():
+                return fallback
+            if number == 0:
+                return '0'
+            result = format(number, '.1f')
+            # A small known nonzero must not become a measured zero.
+            if Decimal(result) == 0 and number != 0:
+                result = format(number, 'f')
+            if '.' in result:
+                result = result.rstrip('0').rstrip('.')
+            return result.replace('.', ',') if pl else result
+        except (InvalidOperation, ValueError, TypeError):
+            return fallback
+
+    def ready_period_share():
+        """Match the captured producer window and explicit complete-hour proof.
+
+        Never infer a classification/share from zone names, prices or chart bins.
+        The ratio is a producer fact, not known_cheap_kwh / total_kwh here.
+        """
+        summary = snapshot.get('period_summary')
+        period = snapshot.get('period')
+        totals = snapshot.get('totals')
+        if not all(isinstance(item, Mapping) for item in (summary, period, totals)):
+            return None
+        window, share = summary.get('window'), summary.get('cheap_zone_share')
+        if (not isinstance(window, Mapping) or not isinstance(share, Mapping)
+                or any(window.get(key) != period.get(key) for key in ('start', 'end', 'timezone'))
+                or not all(isinstance(period.get(key), str) for key in ('start', 'end', 'timezone'))
+                or share.get('status') != 'ready' or 'reason' not in share or share.get('reason') is not None
+                or share.get('scope') != 'complete_household_hours'
+                or share.get('classification_source') != 'explicit_tariff_classification'
+                or totals.get('measurement_complete') is not True
+                or not isinstance(snapshot.get('coverage'), Mapping)
+                or snapshot['coverage'].get('complete') is not True):
+            return None
+        try:
+            ZoneInfo(period['timezone'])
+            start = datetime.fromisoformat(period['start'].replace('Z', '+00:00'))
+            end = datetime.fromisoformat(period['end'].replace('Z', '+00:00'))
+            if start.utcoffset() is None or end.utcoffset() is None or end <= start:
+                return None
+            values = [share.get(key) for key in ('known_cheap_kwh', 'classified_kwh', 'total_kwh', 'ratio')]
+            values.append(totals.get('kwh'))
+            if any(value is None or isinstance(value, bool) for value in values):
+                return None
+            cheap, classified, total, ratio, household = map(lambda value: Decimal(str(value)), values)
+            if (not all(value.is_finite() for value in (cheap, classified, total, ratio, household))
+                    or not 0 <= cheap <= classified or classified != total or total != household
+                    or total <= 0 or not 0 <= ratio <= 1):
+                return None
+        except (InvalidOperation, ValueError, TypeError, ZoneInfoNotFoundError):
+            return None
+        return share
+
     def matrix(caption, headers, rows, *, section, row_role=None):
         text_parts.append('\n' + caption)
         html_parts.append('<table data-section="' + section + '"><caption>' + escape(caption)
@@ -449,14 +520,28 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     text_parts.append(period_caption + ': ' + period_value)
     html_parts.append('<table data-section="period" class="period"><tr><td>'
                       + escape(period_value) + '</td></tr></table>')
+    share = ready_period_share()
     html_parts.append('<table data-section="kpis" role="presentation" class="kpis"><tr>')
     for metric, caption in (('kwh', tr('Zmierzona energia', 'Measured energy')),
                             ('total_cost', tr('Koszt okresu', 'Period cost')),
                             (None, tr('Udział taniej strefy', 'Cheap-zone share'))):
         value = exact(('totals', metric)) if metric else unknown
         units = unit(('totals', metric)) if metric else ''
-        context = (tr('Brak opublikowanego udziału za okres', 'No published period share')
-                   if metric is None else '')
+        context = ''
+        if metric is None:
+            if share is not None:
+                ratio = Decimal(str(share['ratio']))
+                with localcontext() as precision:
+                    precision.prec = max(40, len(ratio.as_tuple().digits) + 2)
+                    value = compact_number(ratio.scaleb(2), unknown)
+                units = '%'
+                context = amount(('period_summary', 'cheap_zone_share', 'known_cheap_kwh'))
+            else:
+                raw_summary = snapshot.get('period_summary')
+                raw_share = raw_summary.get('cheap_zone_share') if isinstance(raw_summary, Mapping) else None
+                state = raw_share.get('status') if isinstance(raw_share, Mapping) else None
+                context = ((words['partial'] + ' · ') if state == 'partial' else '')
+                context += tr('Brak opublikowanego udziału za okres', 'No published period share')
         text_parts.extend([caption + ': ' + value + (' ' + units if units else ''), context])
         html_parts.append('<td class="kpi-card" width="33%"><table role="presentation">'
             + '<tr><td data-role="kpi-label" class="kpi-label">' + escape(caption) + '</td></tr>'
@@ -527,6 +612,8 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         except (InvalidOperation, ValueError, TypeError):
             return (1, Decimal(0), str(pair[0]))
 
+    ranking_values = []
+
     def ranking(caption, entries, *, section):
         # One semantic table for the complete ranking, not one table per device.
         text_parts.append('\n' + caption)
@@ -539,7 +626,10 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
             money = exact((*parts, 'usage_cost'))
             money_unit = unit((*parts, 'usage_cost'))
             text_parts.append(name + ': ' + energy + ' kWh; ' + money + ' ' + money_unit)
-            html_parts.append('<tr><th scope="row">' + escape(name) + '</th><td>' + escape(energy)
+            ranking_values.append([caption + ' · ' + name, energy,
+                exact((*parts, 'recorded_kwh')), money + (' ' + money_unit if money_unit else '')])
+            brief = compact_number(item.get('kwh'), energy)
+            html_parts.append('<tr><th scope="row">' + escape(name) + '</th><td>' + escape(brief)
                 + '</td><td>' + escape(money) + ' ' + escape(money_unit) + '</td></tr>')
             width = geometry(item.get('kwh'), ceiling)
             if width is not None:
@@ -560,8 +650,10 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                       + '</th><td>' + escape(amount(('totals', 'recorded_household_kwh'))) + '</td></tr></table>')
     for index, (identity, item) in enumerate(sorted((groups.get('devices') or {}).items(), key=rank)):
         device_entries.append((friendly_name('devices', identity, index, item), ('groups', 'devices', identity), item))
-    for kind in ('unassigned', 'unmeasured'):
-        device_entries.append((label(kind), ('groups', kind), groups.get(kind) or {}))
+    # unassigned is an area aggregate of these same device rows, not another
+    # exclusive device. Consumer kwh already contains any parent residual.
+    if isinstance(groups.get('unmeasured'), Mapping):
+        device_entries.append((label('unmeasured'), ('groups', 'unmeasured'), groups['unmeasured']))
     ranking(tr('Z sieci do urządzeń', 'From the grid to devices'), device_entries, section='device-ranking')
 
     comparisons = snapshot.get('comparisons') or {}
@@ -649,6 +741,10 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     for kind, caption in (('areas', tr('Pokoje', 'Rooms')), ('floors', tr('Piętra', 'Floors'))):
         entries = [(friendly_name(kind, identity, index), ('groups', kind, identity), item)
                    for index, (identity, item) in enumerate(sorted((groups.get(kind) or {}).items(), key=rank))]
+        if kind == 'areas' and isinstance(groups.get('unassigned'), Mapping):
+            entries.append((label('unassigned'), ('groups', 'unassigned'), groups['unassigned']))
+        if isinstance(groups.get('unmeasured'), Mapping):
+            entries.append((label('unmeasured'), ('groups', 'unmeasured'), groups['unmeasured']))
         ranking(caption, entries, section=kind)
     table(tr('Koszt i stawki', 'Cost and rates'), selected(('totals',),
         ('energy_cost', 'variable_cost', 'legacy_combined_cost', 'usage_cost', 'fixed_cost',
@@ -689,6 +785,13 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     table(tr('Szczegóły · Jakość pomiarów i wyceny', 'Details · Measurement and pricing quality'),
           selected(('totals',), ('measurement_complete', 'pricing_complete', 'components_complete'))
           + selected(('coverage',), ('complete', 'ratio')), section='report-status')
+    table(tr('Szczegóły · Udział taniej strefy', 'Details · Cheap-zone share'),
+          selected(('period_summary', 'cheap_zone_share'),
+              ('status', 'reason', 'known_cheap_kwh', 'classified_kwh', 'total_kwh', 'ratio')),
+          section='period-share-details')
+    matrix(tr('Szczegóły · Energia odbiorników', 'Details · Consumer energy'),
+        [tr('Widok i odbiornik', 'View and consumer'), 'kWh', tr('Zapisane kWh', 'Recorded kWh'),
+         label('usage_cost')], ranking_values, section='ranking-values')
     table(tr('Szczegóły · Porównania', 'Details · Comparisons'), comparison_details,
           section='comparison-details')
     matrix(tr('Szczegóły · Porównanie odbiorników (kWh)', 'Details · Consumer comparison (kWh)'),
