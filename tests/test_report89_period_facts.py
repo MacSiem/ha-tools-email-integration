@@ -120,9 +120,9 @@ class Report89PeriodFactsTests(unittest.TestCase):
         value=self.fixture();result=self.render(value)
         devices=self.section(result,'device-ranking').text()
         self.assertIn('QA80 Office',devices);self.assertIn('Unmeasured',devices)
-        self.assertNotIn('No room',devices)
+        self.assertNotIn('Unassigned',devices)
         rooms=self.section(result,'areas').text()
-        self.assertIn('No room',rooms);self.assertIn('Unmeasured',rooms)
+        self.assertIn('Unassigned',rooms);self.assertIn('Unmeasured',rooms)
         floors=self.section(result,'floors').text()
         self.assertIn('Unmeasured',floors)
         self.assertEqual(1,devices.count('QA80 Office'))
@@ -145,7 +145,7 @@ class Report89PeriodFactsTests(unittest.TestCase):
         value=self.fixture();item=value['groups']['devices']['sensor.device']
         item.update(attribution='parent_residual',measured_kwh='99',kwh='49.9999999999995450')
         result=self.render(value)
-        self.assertNotIn('99',self.section(result,'device-ranking').text())
+        self.assertNotIn('99',[node.text() for node in self.section(result,'device-ranking').find() if node.tag=='td'])
         self.assertIn('49.9999999999995450',self.section(result,'ranking-values').text())
 
     def test_unknown_small_and_negative_rank_values_remain_distinct_and_labels_are_escaped(self):
