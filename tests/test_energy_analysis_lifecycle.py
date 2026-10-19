@@ -16,7 +16,8 @@ ROOT = Path(__file__).resolve().parents[1] / 'custom_components/ha_tools_email'
 
 class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
     def fixture(self, *, fail=None, unload=True):
-        created = {'coordinator': [], 'registry': [], 'service': []}
+        created = {'coordinator': [], 'registry': [], 'service': [], 'association': [],
+                   'platforms': {'sensor': False, 'binary_sensor': False}, 'unload_calls': []}
         events = []
         class Coordinator:
             def __init__(self, hass, storage):
@@ -43,6 +44,26 @@ class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
                 created['service'].append(self)
             def async_stop(self):
                 self.stopped = True
+        class Association:
+            def __init__(self, hass, entry):
+                self.running, self.stop_calls, self.unsubscribe_calls = False, 0, 0
+                self._unsubscribers = []
+                created['association'].append(self)
+            async def async_start(self):
+                self.running = True
+                def unsubscribe():
+                    self.unsubscribe_calls += 1
+                self._unsubscribers = [unsubscribe, unsubscribe, unsubscribe]
+                if fail == 'association_start':
+                    raise RuntimeError('synthetic association start failure')
+                if fail == 'association_cancel':
+                    raise asyncio.CancelledError
+            def async_stop(self):
+                self.running = False
+                self.stop_calls += 1
+                for unsubscribe in self._unsubscribers:
+                    unsubscribe()
+                self._unsubscribers.clear()
         async def ensure(hass):
             pass
         async def reload_schedules(hass):
@@ -53,7 +74,13 @@ class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
         async def forward(entry, platforms):
             if fail == 'platforms':
                 raise RuntimeError('synthetic platform failure')
+            for platform in platforms:
+                created['platforms'][platform] = True
         async def unload_platforms(entry, platforms):
+            created['unload_calls'].append(tuple(platforms))
+            if unload:
+                for platform in platforms:
+                    created['platforms'][platform] = False
             return unload
         hass = types.SimpleNamespace(data={'ha_tools_email': {}},
             bus=types.SimpleNamespace(async_fire=lambda event, data: events.append((event, data))),
@@ -70,7 +97,8 @@ class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
         mods = {}
         for filename, name, cls in [('energy', 'EnergySnapshotCoordinator', Coordinator),
                                     ('registry_adapter', 'RegistryMembership', Registry),
-                                    ('analysis_service', 'EnergyAnalysisService', Service)]:
+                                    ('analysis_service', 'EnergyAnalysisService', Service),
+                                    ('energy_source_device', 'EnergySourceDeviceAssociation', Association)]:
             mod = types.ModuleType('lifecycle_fixture.' + filename); setattr(mod, name, cls); mods[mod.__name__] = mod
         return namespace, hass, types.SimpleNamespace(entry_id='synthetic'), created, events, mods
 
@@ -82,6 +110,10 @@ class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
             service = bucket['energy_analysis']; registry = bucket['energy_membership']
             self.assertIs(service.registry, registry)
             self.assertTrue(registry.active)
+            association = bucket['energy_source_device']
+            self.assertTrue(association.running)
+            self.assertEqual(3, len(association._unsubscribers))
+            self.assertTrue(all(made['platforms'].values()))
             self.assertEqual([('scheduler_reloaded', {})], events)
             events.clear()
             registry.on_change(7)
@@ -92,6 +124,12 @@ class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(made['coordinator'][0].running)
             self.assertNotIn('energy_analysis', bucket)
             self.assertNotIn('energy_membership', bucket)
+            self.assertNotIn('energy_source_device', bucket)
+            self.assertFalse(association.running)
+            self.assertFalse(association._unsubscribers)
+            self.assertEqual(3, association.unsubscribe_calls)
+            self.assertEqual(1, association.stop_calls)
+            self.assertFalse(any(made['platforms'].values()))
 
     async def test_failed_start_or_platform_setup_leaves_no_live_analysis_or_listener(self):
         for boundary in ('start', 'platforms', 'cancel'):
@@ -105,6 +143,10 @@ class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(made['coordinator'][0].running)
             self.assertNotIn('energy_analysis', hass.data['ha_tools_email'])
             self.assertNotIn('energy_membership', hass.data['ha_tools_email'])
+            self.assertEqual(1, len(made['association']))
+            self.assertFalse(made['association'][0].running)
+            self.assertFalse(made['association'][0]._unsubscribers)
+            self.assertNotIn('energy_source_device', hass.data['ha_tools_email'])
 
     async def test_failed_platform_unload_preserves_running_service_and_registry(self):
         ns, hass, entry, made, events, mods = self.fixture(unload=False)
@@ -116,6 +158,36 @@ class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(made['service'][0].stopped)
         self.assertTrue(made['registry'][0].active)
         self.assertTrue(made['coordinator'][0].running)
+        association = made['association'][0]
+        self.assertTrue(association.running)
+        self.assertEqual(3, len(association._unsubscribers))
+        self.assertEqual(0, association.stop_calls)
+        self.assertEqual(0, association.unsubscribe_calls)
+        self.assertTrue(all(made['platforms'].values()))
+        self.assertEqual([('sensor', 'binary_sensor')], made['unload_calls'])
+
+
+    async def test_association_start_failure_or_cancel_releases_helpers_and_forwarded_platforms(self):
+        for boundary in ('association_start', 'association_cancel'):
+            with self.subTest(boundary=boundary):
+                ns, hass, entry, made, events, mods = self.fixture(fail=boundary)
+                with patch.dict(sys.modules, mods):
+                    error = asyncio.CancelledError if boundary == 'association_cancel' else RuntimeError
+                    with self.assertRaises(error):
+                        await ns['async_setup_entry'](hass, entry)
+                association = made['association'][0]
+                self.assertFalse(association.running)
+                self.assertFalse(association._unsubscribers)
+                self.assertEqual(1, association.stop_calls)
+                self.assertEqual(3, association.unsubscribe_calls)
+                self.assertTrue(made['service'][0].stopped)
+                self.assertFalse(made['registry'][0].active)
+                self.assertFalse(made['coordinator'][0].running)
+                self.assertFalse(any(made['platforms'].values()))
+                self.assertEqual([('sensor', 'binary_sensor')], made['unload_calls'])
+                self.assertFalse(any(key in hass.data['ha_tools_email'] for key in
+                    ('energy_source_device', 'energy_analysis', 'energy_membership', 'energy_snapshot')))
+                self.assertNotIn(('scheduler_reloaded', {}), events)
 
 
 if __name__ == '__main__':

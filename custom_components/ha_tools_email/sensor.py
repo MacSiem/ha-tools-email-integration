@@ -34,9 +34,24 @@ class EnergySensor(EnergySnapshotEntity, SensorEntity):
 
     @property
     def state_class(self):
-        # Daily monetary costs can fall and reset at HA-local midnight. Without
-        # explicit last_reset semantics they must not claim long-term totals.
+        if self.key == 'today_cost':
+            return SensorStateClass.TOTAL
         return SensorStateClass.MEASUREMENT if self.key == 'price' else None
+
+    @property
+    def last_reset(self):
+        # Use the published measurement calendar, never the tariff timezone or
+        # the wall clock at property-read time (including a stale snapshot).
+        if self.key != 'today_cost' or not self.coordinator.data:
+            return None
+        value = self.coordinator.data['today'].get('from')
+        if not isinstance(value, str):
+            return None
+        try:
+            reset = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        return reset if reset.tzinfo is not None and reset.utcoffset() is not None else None
 
     @property
     def native_unit_of_measurement(self):

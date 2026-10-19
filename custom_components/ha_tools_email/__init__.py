@@ -192,6 +192,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up HA Tools Email from a config entry."""
     await _async_ensure_setup(hass)
     from .energy import EnergySnapshotCoordinator
+    from .energy_source_device import EnergySourceDeviceAssociation
     from .registry_adapter import RegistryMembership
     from .analysis_service import EnergyAnalysisService
 
@@ -202,6 +203,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         previous_service.async_stop()
     bucket['energy_snapshot'] = coordinator
     registry, service = None, None
+    association = EnergySourceDeviceAssociation(hass, entry)
     try:
         registry = RegistryMembership(hass, lambda revision: hass.bus.async_fire(
             f'{DOMAIN}_energy_analysis_updated', {'registry_revision': revision}))
@@ -210,17 +212,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         registry.start()
         await coordinator.async_start()
         await hass.config_entries.async_forward_entry_setups(entry, ['sensor', 'binary_sensor'])
+        bucket['energy_source_device'] = association
+        await association.async_start()
         await async_reload_schedules(hass)
     except BaseException:
         # Cancellation is also a setup failure: remove listeners and prevent an
         # in-flight analysis from publishing through a half-initialized entry.
+        association.async_stop()
         if service is not None:
             service.async_stop()
         if registry is not None:
             registry.stop()
         coordinator.async_stop()
         current = hass.data.get(DOMAIN, {})
-        for key, owned in (('energy_analysis', service), ('energy_membership', registry),
+        for key, owned in (('energy_source_device', association),
+                           ('energy_analysis', service), ('energy_membership', registry),
                            ('energy_snapshot', coordinator)):
             if current.get(key) is owned:
                 current.pop(key, None)
@@ -233,6 +239,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unloaded = await hass.config_entries.async_unload_platforms(entry, ['sensor', 'binary_sensor'])
     if unloaded:
         bucket = hass.data[DOMAIN]
+        association = bucket.pop('energy_source_device', None)
+        if association:
+            association.async_stop()
         service = bucket.pop('energy_analysis', None)
         if service:
             service.async_stop()
