@@ -66,6 +66,7 @@ class Source:
             source_signature='source', measurement_timezone='UTC', service_generation='live',
             request_kind='statistics', actor_signature='server')
         self.facts['publication_policy_signature'] = 'policy'
+        self.facts['measurement_ready'] = True
         self.facts['area_labels'] = {'kitchen': 'Kitchen', 'office': 'Office'}
         self.entry_id = 'synthetic'
         self.user = SimpleNamespace(is_admin=True, is_active=True)
@@ -77,9 +78,14 @@ class Source:
         self.coordinator = SimpleNamespace(_async_run_cpu=cpu)
     def _check_running(self):
         if not self.running: raise RuntimeError('unloaded')
-    async def async_get_statistics_hours(self, user_id, *, hours=1):
+    async def async_get_statistics_hours(self, user_id, *, hours=1, end=None):
         self._check_running(); self.reads += 1
-        return copy.deepcopy(self.facts)
+        facts = copy.deepcopy(self.facts)
+        if end is not None:
+            offset = int(end.timestamp()*1000)-facts['hours'][-1]['to']
+            for hour in facts['hours']:
+                hour['from'] += offset; hour['to'] += offset
+        return facts
     async def async_validate_statistics_hours(self, facts, user_id):
         return self.valid and self.running
 

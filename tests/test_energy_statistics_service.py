@@ -73,3 +73,37 @@ class StatisticsServiceTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(ValueError, 'aware_statistics_clock_required'):
                 await h.subject.async_get_statistics_hours('admin')
         self.assertEqual([], h.queries)
+
+    async def test_internal_frozen_end_remains_same_after_next_utc_hour(self):
+        from datetime import datetime, timedelta, timezone
+        h=Harness(); h.user.is_admin=True
+        now=datetime(2026,10,19,13,0,15,tzinfo=timezone.utc)
+        h.subject._clock=lambda:now
+        end=datetime(2026,10,19,12,tzinfo=timezone.utc)
+        with h.patches():
+            facts=await h.subject.async_get_statistics_hours('admin',end=end)
+            self.assertEqual(int(end.timestamp()*1000),facts['hours'][-1]['to'])
+            self.assertEqual(int((end-timedelta(hours=1)).timestamp()*1000),facts['hours'][0]['from'])
+            self.assertIn('measurement_ready',facts)
+            self.assertTrue(await h.subject.async_validate_statistics_hours(facts,'admin'))
+            for invalid in (end.replace(tzinfo=None),now+timedelta(hours=1),end.replace(minute=1),end-timedelta(hours=168)):
+                with self.assertRaises(ValueError):await h.subject.async_get_statistics_hours('admin',end=invalid)
+
+    async def test_price_missing_is_distinct_from_source_readiness(self):
+        from unittest.mock import patch
+        from tests.test_energy_analysis_service import provider
+        h=Harness(); h.user.is_admin=True; h.book=None
+        with h.patches():
+            facts=await h.subject.async_get_statistics_hours('admin')
+            self.assertTrue(facts['measurement_ready'])
+            self.assertIsNone(facts['hours'][0]['household']['usage_cost'])
+        h=Harness(); h.user.is_admin=True
+        original=h.usage
+        async def missing(hass,sensors,start,end,cadence,*,metadata):
+            result=await original(hass,sensors,start,end,cadence,metadata=metadata)
+            for rows in result.get('source_buckets',{}).values():rows[0]['kwh']=None
+            # Keep the fixture's misleading status/coverage counts unchanged.
+            return result
+        with h.patches(),patch.object(provider,'async_get_energy_usage',missing):
+            facts=await h.subject.async_get_statistics_hours('admin')
+            self.assertFalse(facts['measurement_ready'])

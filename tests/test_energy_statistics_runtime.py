@@ -158,7 +158,8 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
         runtime._tick(self.now)
         await self.drain(runtime)
         self.assertIsNone(publisher._state['pending'])
-        self.assertEqual(self.now, runtime._lane['completed'][1])
+        # The unconfirmed older hour is retried before moving to this new hour.
+        self.assertEqual(self.now-timedelta(hours=1), runtime._lane['completed'][1])
         self.assertEqual('admin', runtime._consent[0])
         runtime.async_stop()
 
@@ -167,14 +168,14 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
         await self.enable(publisher)
         entered, release = Event(), Event()
         original = source.async_get_statistics_hours
-        async def blocked(actor, *, hours=1):
+        async def blocked(actor, *, hours=1, end=None):
             self.assertEqual('admin', actor)
             self.assertEqual(1, hours)  # Never automatic seven-day backfill.
             def raw():
                 entered.set()
                 release.wait(5)
             await asyncio.to_thread(raw)
-            return await original(actor, hours=hours)
+            return await original(actor, hours=hours, end=end)
         source.async_get_statistics_hours = blocked
         runtime.async_start()
         try:
