@@ -17,6 +17,7 @@ DATA_STORAGE = "storage"
 DATA_WS_REGISTERED = "ws_registered"
 
 EVENT_SCHEDULES_CHANGED = f"{DOMAIN}_schedules_changed"
+EVENT_REPORT_STATUS_UPDATED = f"{DOMAIN}_report_status_updated"
 
 KIND_LOG_DIGEST = "log_digest"
 KIND_ENERGY_REPORT = "energy_report"

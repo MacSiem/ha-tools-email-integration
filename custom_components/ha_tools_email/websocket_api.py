@@ -11,7 +11,7 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
-from .const import DOMAIN, EVENT_SCHEDULES_CHANGED, VALID_CADENCES, VALID_KINDS
+from .const import DOMAIN, EVENT_SCHEDULES_CHANGED, EVENT_REPORT_STATUS_UPDATED, VALID_CADENCES, VALID_KINDS
 from .composer import (async_build_energy_report_payload, async_build_report_payload,
                        async_get_system_log_entries, build_log_digest_payload)
 from .scheduler import (async_reload_schedules, async_send_now, calculate_next_fire,
@@ -19,6 +19,7 @@ from .scheduler import (async_reload_schedules, async_send_now, calculate_next_f
                         normalize_schedule_calendar, async_resolve_manual_period)
 from .storage import EmailStorage, TariffRevisionConflict, FeatureAccessRevisionConflict
 from .feature_access import default_feature_access, effective_feature_capabilities, feature_access_allowed
+from .report_status import MAX_STATUS_SCHEDULES, PURPOSE_FEATURES
 from .tariff import TariffValidationError
 from .analysis_provider import async_require_energy_source_access
 
@@ -169,7 +170,8 @@ async def _ws_subscribe_analysis_updates(hass, connection, msg):
         connection.send_event(msg['id'], {})
 
     try:
-        for event in (f'{DOMAIN}_energy_analysis_updated', f'{DOMAIN}_feature_access_updated'):
+        for event in (f'{DOMAIN}_energy_analysis_updated', f'{DOMAIN}_feature_access_updated',
+                      EVENT_REPORT_STATUS_UPDATED, EVENT_SCHEDULES_CHANGED):
             removers.append(hass.bus.async_listen(event, changed))
         service._update_subscriptions.add(unsubscribe)
         connection.subscriptions[msg['id']] = unsubscribe
@@ -660,6 +662,56 @@ async def _ws_set_tariff(hass, connection, msg) -> None:
     connection.send_result(msg['id'], result)
 
 
+@websocket_api.websocket_command({
+    vol.Required('type'): f'{DOMAIN}/get_report_status',
+    vol.Required('purpose'): vol.In(sorted(PURPOSE_FEATURES)),
+})
+@websocket_api.async_response
+async def _ws_get_report_status(hass, connection, msg):
+    """Read only this purpose's compact facts, under independent feature policy."""
+    purpose = msg.get('purpose')
+    feature = PURPOSE_FEATURES.get(purpose) if isinstance(purpose, str) else None
+    if feature is None:
+        connection.send_error(msg['id'], 'invalid_report_status', 'Unsupported report purpose.')
+        return
+    access = await _feature_authorized(hass, connection, feature, 'read')
+    if access is None:
+        connection.send_error(msg['id'], 'unauthorized', 'Report status access denied.')
+        return
+    storage, policy = access
+    bucket = hass.data.get(DOMAIN, {})
+    coordinator = bucket.get('energy_snapshot')
+    zone = getattr(getattr(hass, 'config', None), 'time_zone', 'UTC')
+    generation = bucket.get('schedule_generation')
+    consumed = bucket.get('schedule_consumed_periods', {})
+    if (not _book_context_current(hass, storage, coordinator)
+            or not isinstance(consumed, dict) or len(consumed) > MAX_STATUS_SCHEDULES):
+        connection.send_error(msg['id'], 'report_status_unavailable', 'Report status unavailable.')
+        return
+    consumed = dict(consumed)
+    try:
+        result, token = await storage.async_get_report_status(purpose,
+            now=_utcnow(), local_timezone=zone, consumed=consumed)
+    except Exception:
+        connection.send_error(msg['id'], 'report_status_unavailable', 'Report status unavailable.')
+        return
+    if not await _feature_authorized(hass, connection, feature, 'read', token=access):
+        connection.send_error(msg['id'], 'unauthorized', 'Report status access denied.')
+        return
+    # No await between these context/revision/calendar guards and send_result.
+    next_at = result['next_report_at']
+    if (not _book_context_current(hass, storage, coordinator)
+            or not storage.report_status_context_is_current(token)
+            or bucket is not hass.data.get(DOMAIN)
+            or generation != bucket.get('schedule_generation')
+            or consumed != bucket.get('schedule_consumed_periods', {})
+            or zone != getattr(getattr(hass, 'config', None), 'time_zone', 'UTC')
+            or (next_at is not None and datetime.fromisoformat(next_at) <= _utcnow())):
+        connection.send_error(msg['id'], 'report_status_unavailable', 'Report status changed. Refresh before continuing.')
+        return
+    connection.send_result(msg['id'], result)
+
+
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/get_attempt_history"})
 @websocket_api.require_admin
 @websocket_api.async_response
@@ -998,6 +1050,7 @@ def async_register_commands(hass: HomeAssistant) -> None:
         _ws_set_tariff,
         _ws_get_config,
         _ws_get_attempt_history,
+        _ws_get_report_status,
         _ws_list_schedules,
         _ws_set_schedule,
         _ws_send_now,

@@ -25,10 +25,12 @@ from .feature_access import default_feature_access, validate_feature_access
 from .tariff import TariffValidationError, validate_tariff_profile
 from .tariff_history import prepare_tariff_book_edit, validate_tariff_book
 from .scheduler import normalize_schedule_calendar
+from .report_status import project_report_status
 from .history import HISTORY_SCHEMA, HISTORY_LIMIT, HISTORY_DAYS, clean_attempt, retained_attempts
 
 from .const import (
     DEFAULT_SCHEDULE_TIME,
+    EVENT_REPORT_STATUS_UPDATED,
     DOMAIN,
     KIND_LOG_DIGEST,
     SMTP_DEFAULTS,
@@ -136,6 +138,7 @@ class EmailStorage:
         self._book_pending = 0
         self._smtp_revision = 0
         self._schedule_revision = 0
+        self._report_status_pending = 0
 
     async def async_load(self) -> dict[str, Any]:
         """Load storage, creating defaults when absent."""
@@ -349,6 +352,35 @@ class EmailStorage:
         return {"profile": profile, "revision": revision,
                 "updated_at": stamp if isinstance(stamp, str) and len(stamp) <= 64 else None}
 
+    async def async_get_report_status(self, purpose, *, now, local_timezone, consumed=None):
+        """One atomic bounded projection; no SMTP migration or Store write.
+
+        The opaque COW state token never leaves the server. Every confirmed
+        schedule/attempt/last-fired write publishes a replacement _data object.
+        Hold the Store lock during the single worker so input state stays fixed.
+        """
+        if self._report_status_pending >= 4:
+            raise RuntimeError('report_status_busy')
+        self._report_status_pending += 1
+        try:
+            async with self._lock:
+                data = await self._async_tariff_data_locked()
+                result = await asyncio.to_thread(project_report_status, data, purpose,
+                    now=now, local_timezone=local_timezone, consumed=consumed)
+                return result, data
+        finally:
+            self._report_status_pending -= 1
+
+    def report_status_context_is_current(self, token):
+        """No-await generation fence; token is an internal object, never JSON."""
+        return token is not None and self._data is token
+
+    def _report_status_changed(self):
+        """Control-only invalidation after confirmed state publication."""
+        fire = getattr(getattr(self.hass, 'bus', None), 'async_fire', None)
+        if callable(fire):
+            fire(EVENT_REPORT_STATUS_UPDATED, {})
+
     async def async_get_attempt_history(self, *, now: datetime | None = None) -> dict[str, Any]:
         """Admin metadata read, with age/count filtering and no SMTP migration."""
         async with self._lock:
@@ -380,6 +412,7 @@ class EmailStorage:
             candidate["attempt_history"] = section
             await self._store.async_save_confirmed(candidate)
             self._data = candidate
+            self._report_status_changed()
 
     async def async_get_state(self) -> dict[str, Any]:
         """Return the full persisted state."""
@@ -506,6 +539,7 @@ class EmailStorage:
             await self._store.async_save_confirmed(candidate)
             self._data = candidate
             self._schedule_revision += 1
+            self._report_status_changed()
             return deepcopy(clean)
 
     async def async_delete_schedule(self, schedule_id: str) -> bool:
@@ -524,6 +558,7 @@ class EmailStorage:
                 await self._store.async_save_confirmed(data)
                 self._data = data
                 self._schedule_revision += 1
+                self._report_status_changed()
             return removed
 
     async def async_get_digest_state(self, kind: str, cadence: str) -> dict[str, Any]:
@@ -564,6 +599,7 @@ class EmailStorage:
             }
             await self._store.async_save_confirmed(data)
             self._data = data
+            self._report_status_changed()
 
     async def _ensure_loaded_locked(self) -> dict[str, Any]:
         """Load data while the caller holds the lock."""
