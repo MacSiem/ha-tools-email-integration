@@ -368,7 +368,7 @@ class EnergyReportTest(unittest.TestCase):
         self.assertEqual('PLN', self.rows(result)['chart.bins.0.zone_breakdown.zones.0.usage_cost']['unit'])
         self.assertIn('No published period share', result['text'])
         self.assertNotIn('class="bar-fill cheap"', result['html'])
-        self.assertIn('class="bar-fill zone-0"', result['html'])
+        self.assertIn('class="bar-fill zone-unknown"', result['html'])
 
     def test_unknown_price_basis_does_not_give_comparison_delta_a_currency(self):
         costs = self.snapshot['comparisons']['previous']['costs']
