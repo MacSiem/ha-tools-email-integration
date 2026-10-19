@@ -69,7 +69,8 @@ class ReportStatusCancelLaneTests(unittest.IsolatedAsyncioTestCase):
                     for worker in tuple(getattr(storage, '_report_status_tasks', ())):
                         if all(ref() is not worker for ref in references):
                             watch(worker)
-                    del worker
+                    if getattr(storage, '_report_status_tasks', ()):
+                        del worker
                     caller.cancel()
                     with self.assertRaises(asyncio.CancelledError):
                         await caller
