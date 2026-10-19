@@ -58,6 +58,14 @@
     }
   },
   "issues": {
+    "energy_missing_grid_import": {
+      "title": "Configure an electricity import meter",
+      "description": "No electricity import meter is configured in Home Assistant Energy. Open [Energy settings](/config/energy) and select your import meter. Then check [Energy](/energy). This notice clears after the current configuration is confirmed."
+    },
+    "energy_consumption_overlap": {
+      "title": "Device consumption overlaps grid import",
+      "description": "Current-day measurements show device consumption above grid import, or child meters above their parent. Open [Energy settings](/config/energy). Check duplicate meters and parent/child assignments. Compare sources that measure the same energy flow. Then check [Energy](/energy). Missing measurements do not confirm that the problem is fixed."
+    },
     "smtp_password_in_history": {
       "title": "Change your SMTP password",
       "description": "Before HA Tools Email 2.1.0 the SMTP password was saved through the `ha_tools_email.save_config` action. Home Assistant stores action data in its database, so that password may also be present in the database and in backups that include it.\n\nCreate a new app password with your email provider, enter it in Settings → Devices & services → HA Tools Email → Configure, and revoke the old one. This notice disappears once a password has been saved there."

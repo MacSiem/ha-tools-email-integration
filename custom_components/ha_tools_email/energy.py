@@ -218,6 +218,7 @@ class EnergySnapshotCoordinator:
         # This lane survives config-entry unload/reload. An old worker thread
         # must actually finish before the replacement coordinator starts one.
         self._cpu_lane = bucket.setdefault('energy_cpu_lane', {'lock': asyncio.Lock(), 'pending': 0})
+        self._energy_repairs_active = bool(getattr(bucket.get('energy_snapshot'), '_energy_repairs_active', False))
         self._cpu_lock = self._cpu_lane['lock']
         self._pricing_pending = 0
         self._snapshot_pending = 0
@@ -296,13 +297,19 @@ class EnergySnapshotCoordinator:
         if self._tick_running or self._stopped:
             return
         self._tick_running = True
+        result = None
         try:
-            await self.async_refresh()
+            result = await self.async_refresh()
         except Exception:
             # The background reader cannot leave old monetary values available.
             self._invalidate()
         finally:
             self._tick_running = False
+        if result is not None and result == self.data:
+            # Only this server-clock background path owns missing-import facts.
+            # Outside the refresh catch: Repair errors must remain observable.
+            from .energy_repairs import publish_missing_import
+            publish_missing_import(self)
 
     def _invalidate(self):
         self.data = None
@@ -323,6 +330,9 @@ class EnergySnapshotCoordinator:
         self._boundary_unsub = async_track_point_in_utc_time(self.hass, self._async_tick, boundary)
 
     def async_stop(self):
+        if self._energy_repairs_active:
+            from .energy_repairs import clear_owned_issues
+            clear_owned_issues(self)
         self._stopped = True
         if self._unsub:
             self._unsub()

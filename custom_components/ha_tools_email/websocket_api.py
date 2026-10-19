@@ -22,6 +22,7 @@ from .feature_access import default_feature_access, effective_feature_capabiliti
 from .report_status import MAX_STATUS_SCHEDULES, PURPOSE_FEATURES
 from .tariff import TariffValidationError
 from .analysis_provider import async_require_energy_source_access
+from .energy_statistics_api import async_register_statistics_commands
 
 
 def _bucket(hass: HomeAssistant) -> dict[str, Any]:
@@ -1033,6 +1034,7 @@ async def _async_preview_mail(hass, connection, msg, kind) -> None:
 
 def async_register_commands(hass: HomeAssistant) -> None:
     """Register all websocket commands."""
+    async_register_statistics_commands(hass)
     for handler in (
         _ws_get_feature_access,
         _ws_set_feature_access,

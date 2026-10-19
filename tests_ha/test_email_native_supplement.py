@@ -98,7 +98,7 @@ async def test_disabled_calendar_allows_manual_button_without_consuming_period(
     assert len(history['attempts']) == 1
     attempt = history['attempts'][0]
     assert (attempt['source'], attempt['schedule_ref'], attempt['outcome'], attempt['period']) == (
-        'manual', key, 'accepted_by_smtp', None)
+        'manual', key, 'accepted_by_smtp', 'daily:2026-10-19')
     assert await storage.async_get_schedule('stable-schedule') == before
     assert before['enabled'] is False
     assert await storage.async_get_last_fired('stable-schedule') is None

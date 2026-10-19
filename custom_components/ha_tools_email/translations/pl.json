@@ -58,6 +58,14 @@
     }
   },
   "issues": {
+    "energy_missing_grid_import": {
+      "title": "Skonfiguruj licznik importu energii",
+      "description": "W Energii Home Assistant nie skonfigurowano licznika importu energii elektrycznej. Otwórz [ustawienia Energii](/config/energy) i wybierz licznik importu. Następnie sprawdź [Energię](/energy). Komunikat zniknie po potwierdzeniu bieżącej konfiguracji."
+    },
+    "energy_consumption_overlap": {
+      "title": "Zużycie urządzeń nakłada się na import",
+      "description": "Pomiary bieżącego dnia wykazują zużycie urządzeń większe od importu lub sumę liczników podrzędnych większą od licznika nadrzędnego. Otwórz [ustawienia Energii](/config/energy). Sprawdź powtórzone liczniki i przypisanie liczników podrzędnych. Porównuj źródła mierzące ten sam przepływ energii. Następnie sprawdź [Energię](/energy). Brak pomiarów nie potwierdza usunięcia problemu."
+    },
     "smtp_password_in_history": {
       "title": "Zmień hasło SMTP",
       "description": "Przed HA Tools Email 2.1.0 hasło SMTP było zapisywane akcją `ha_tools_email.save_config`. Home Assistant przechowuje dane akcji w swojej bazie danych, więc to hasło może znajdować się także w bazie i w kopiach zapasowych, które ją zawierają.\n\nUtwórz nowe hasło aplikacji u dostawcy poczty, wpisz je w Ustawienia → Urządzenia i usługi → HA Tools Email → Konfiguruj, a stare unieważnij. Ten komunikat zniknie po zapisaniu hasła w tym miejscu."

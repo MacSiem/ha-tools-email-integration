@@ -116,6 +116,7 @@ def _project_comparison_day(period, context, consumers, membership, domain, grid
 
 _ACCESS_PURPOSES = {
     'analysis': ('energy_analysis', 'read'),
+    'statistics': ('energy_analysis', 'read'),
     'report_read': ('energy_reports', 'read'),
     'report_execute': ('energy_reports', 'execute'),
 }
@@ -129,6 +130,8 @@ class EnergyAnalysisService:
         self.storage = coordinator.storage
         self._manager = configuration_manager
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        # Explicit test clocks/managers are not global native Repair producers.
+        self._energy_repairs_realtime = clock is None and configuration_manager is None
         self._entry_lookup = getattr(getattr(hass, 'config_entries', None),
                                      'async_get_entry', None)
         self._entry = self._entry_lookup(entry_id) if callable(self._entry_lookup) else None
@@ -144,6 +147,11 @@ class EnergyAnalysisService:
         """Synchronous unload fence; running CPU jobs retain their existing lane."""
         self._stopped = True
         self._cache = None
+        bucket = self.hass.data.get(DOMAIN, {})
+        publisher = bucket.get('energy_statistics')
+        if getattr(publisher, 'service', None) is self:
+            bucket.pop('energy_statistics', None)
+            publisher.stop()
         for unsubscribe in tuple(self._update_subscriptions):
             unsubscribe()
 
@@ -276,7 +284,37 @@ class EnergyAnalysisService:
                 comparison_period_kind=comparison_period_kind, report_comparison_plan=plan)
         return configuration, period, context
 
+    def _capture_statistics(self, start, end, actor_signature):
+        """Frozen internal completed-hour request, never a browser purpose flag."""
+        self._check_running()
+        start, end = datetime.fromisoformat(start), datetime.fromisoformat(end)
+        now = self._clock()
+        if now.utcoffset() is None:
+            raise ValueError('aware_statistics_clock_required')
+        if (any(value.utcoffset() is None or value.timestamp() % 3600 for value in (start, end))
+                or not 0 < (end-start).total_seconds() <= 168*3600
+                or end > now.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)):
+            raise ValueError('invalid_statistics_window')
+        configuration = capture_energy_configuration(self._manager.data or {})
+        if not configuration['grid_sensors']:
+            raise ValueError('energy_analysis_unavailable')
+        period = {'kind': 'day', 'timezone': self.hass.config.time_zone,
+                  'start': start.isoformat(), 'end': end.isoformat()}
+        context = {'request_kind': 'statistics', 'access_purpose': 'statistics',
+            'statistics_start': start.isoformat(), 'statistics_end': end.isoformat(),
+            'actor_signature': actor_signature, 'entry_id': self.entry_id,
+            'service_generation': self._nonce, 'tariff_revision': self.storage.current_tariff_revision,
+            'feature_access_revision': self.storage.current_feature_access_revision,
+            'registry_revision': self.registry.revision, 'measurement_timezone': self.hass.config.time_zone,
+            'source_signature': configuration['source_signature'], 'period_signature': _digest(period)}
+        return configuration, period, context
+
     def _recapture(self, context):
+        if context.get('request_kind') == 'statistics':
+            if context.get('access_purpose') != 'statistics':
+                raise ValueError('invalid_statistics_purpose')
+            return self._capture_statistics(context['statistics_start'], context['statistics_end'],
+                                            context['actor_signature'])
         if context.get('request_kind') == 'report_window':
             return self._capture_report(ReportWindow(**context['report_request']),
                 context['access_purpose'],context['actor_signature'])
@@ -312,6 +350,13 @@ class EnergyAnalysisService:
             raise RuntimeError('energy_analysis_context_changed')
         if state['status'] != 'ready':
             raise PermissionError('energy_feature_unauthorized')
+        if context.get('request_kind') == 'statistics':
+            if type(user_id) is not str or context['actor_signature'] != self._actor_signature(user_id):
+                raise PermissionError('statistics_native_admin_required')
+            user = await self.hass.auth.async_get_user(user_id)
+            self._assert_current(context)
+            if user is None or not user.is_active or not user.is_admin:
+                raise PermissionError('statistics_native_admin_required')
         if context.get('request_kind') == 'report_window':
             if context['actor_signature'] != self._actor_signature(user_id):
                 raise PermissionError('energy_report_actor_mismatch')
@@ -369,7 +414,7 @@ class EnergyAnalysisService:
         return result
 
     async def async_get_analysis(self, kind, user_id, *, anchor=None, comparison=None, purpose='analysis', _report_window=None):
-        if not isinstance(purpose, str) or purpose not in _ACCESS_PURPOSES:
+        if not isinstance(purpose, str) or purpose not in ('analysis', 'report_read', 'report_execute'):
             raise ValueError('invalid_analysis_purpose')
         if _report_window is not None:
             if type(_report_window) is not ReportWindow or comparison is not None or anchor is not None:
@@ -523,14 +568,100 @@ class EnergyAnalysisService:
                                                'baseline_periods': deepcopy(plan['baseline_periods'])}
                 result = await self._cpu(partial(_finish, accumulator, deepcopy(context),
                                                 configuration['domain_provenance'], comparisons, baseline_accumulator, group_pair, mean_groups), guard)
-                # No await between this final check, detachment, caching and return.
+                # No await between this final check, Repair publication, caching and return.
                 self._assert_current(context)
+                if self._energy_repairs_realtime:
+                    from .energy_repairs import publish_analysis
+                    publish_analysis(self, result)
                 self._cache = (key, monotonic(), deepcopy(result))
                 return deepcopy(result)
         except BaseException:
             # Fail closed; a revoked request cannot leave a previous cached DTO.
             self._cache = None
             raise
+        finally:
+            self._pending -= 1
+
+    async def async_get_statistics_hours(self, user_id, *, hours=1):
+        """Native-admin internal producer; no cache, reports or background actor."""
+        if type(hours) is not int or hours not in (1, 168) or type(user_id) is not str:
+            raise ValueError('invalid_statistics_request')
+        self._check_running()
+        user = await self.hass.auth.async_get_user(user_id)
+        self._check_running()
+        if user is None or not user.is_active or not user.is_admin:
+            raise PermissionError('statistics_native_admin_required')
+        if self._pending >= MAX_PENDING_ANALYSES:
+            raise RuntimeError('energy_analysis_busy')
+        self._pending += 1
+        try:
+            async with self._lock:
+                self._check_running()
+                if self._manager is None:
+                    from homeassistant.components.energy.data import async_get_manager
+                    self._manager = await async_get_manager(self.hass)
+                    self._check_running()
+                policy = await self.storage.async_get_feature_access()
+                self._check_running()
+                now = self._clock()
+                if now.utcoffset() is None:
+                    raise ValueError('aware_statistics_clock_required')
+                end = now.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+                start = end-timedelta(hours=hours)
+                configuration, period, context = self._capture_statistics(start.isoformat(), end.isoformat(),
+                    self._actor_signature(user_id))
+                await self._require_access(context, configuration, user_id, policy_state=policy)
+                self._assert_current(context)
+                state = await self.storage.async_get_tariff_book()
+                self._check_running()
+                if context['tariff_revision'] is None:
+                    context['tariff_revision'] = state['revision']
+                self._assert_current(context)
+                if state['revision'] != context['tariff_revision']:
+                    raise RuntimeError('energy_analysis_context_changed')
+                guard = partial(self._guard, context, configuration, user_id)
+                await guard()
+                membership = deepcopy(self.registry.capture(
+                    [row['stat_consumption'] for row in configuration['consumers']]))
+                self._assert_current(context)
+                accumulator = await self._cpu(partial(EnergyAnalysisAccumulator,
+                    deepcopy(state['book']), deepcopy(period), deepcopy(context), generated_at=self._clock(),
+                    consumers=deepcopy(configuration['consumers']), membership=membership,
+                    consumer_domain=configuration['consumer_domain'], include_statistics_hours=True), guard)
+                chunk = await async_read_energy_chunk(self.hass, configuration, start, end, guard=guard)
+                await guard()
+                await self._cpu(partial(accumulator.add_chunk, chunk['grid'], start, end,
+                    consumer_snapshot=chunk['consumers']), guard)
+                del chunk
+                def finish():
+                    accumulator.finish()
+                    facts = accumulator.statistics_hours()
+                    facts['context'].update(deepcopy(context))
+                    facts['publication_policy_signature'] = _digest(policy['policy'])
+                    facts['active_tariff_id'] = state['book'].get('active_tariff_id') if state['book'] else None
+                    facts['area_labels'] = {row['area_id']: row['area_name']
+                        for row in membership.get('sources', {}).values()
+                        if isinstance(row.get('area_id'), str) and isinstance(row.get('area_name'), str)}
+                    return facts
+                facts = await self._cpu(finish, guard)
+                self._assert_current(context)
+                return facts
+        finally:
+            self._pending -= 1
+
+    async def async_validate_statistics_hours(self, facts, user_id):
+        """Repeat native author/source/purpose/context fences after caller awaits."""
+        if type(user_id) is not str or facts.get('context', {}).get('request_kind') != 'statistics':
+            raise PermissionError('invalid_statistics_actor')
+        if self._pending >= MAX_PENDING_ANALYSES:
+            raise RuntimeError('energy_analysis_busy')
+        self._pending += 1
+        try:
+            context = deepcopy(facts['context'])
+            configuration, _, _ = self._recapture(context)
+            await self._guard(context, configuration, user_id)
+            self._assert_current(context)
+            return True
         finally:
             self._pending -= 1
 
