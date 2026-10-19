@@ -49,6 +49,17 @@ For email delivery, open **Settings → Devices & services → HA Tools Email �
 
 The integration exposes services, a websocket API and the shared Energy device described below. Its five read-only entities provide current tariff zone, usage price, cheap-period status, next cheap start and today’s measured usage cost. They do not enable notifications.
 
+Each configured Email schedule also has its own status sensors, a Send now button, attempt event and read-only calendar. The next-report time follows the saved calendar; manually sending does not consume an automatic schedule period. A disabled calendar can still be sent manually by an authorized user. The mail-server-accepted outcome does not confirm delivery. Error and warning counts stay unknown until a complete 24-hour source is available. Existing entity names and customizations are preserved.
+
+Energy entities attach to the grid-import meter's device when that device is unambiguous; otherwise they use their own Energy device. Stable entity identifiers and personal names are retained when the source changes. Home Assistant Repairs can guide an administrator to configure a missing grid-import meter or investigate confirmed overlapping device measurements. Missing or partial readings do not count as a successful repair.
+
+## Native cost statistics
+
+Open a full Energy card as an administrator and choose **Cost statistics** in its footer. Review the exact sources, currency and gross/net basis, then explicitly enable sharing. The integration adds hourly usage costs from its existing server calculations. The feature is off by default; reading a card does not enable it. The dialog shows automatic-update status and gives an explicit seven-day backfill using current room assignments. Historical room membership is not reconstructed.
+
+Native Recorder statistics are readable by **all authenticated Home Assistant users**. Disabling sharing stops future writes; it does not remove or restrict previously published history or exported copies. Each source/currency dataset needs its own explicit consent. No notification or email is sent by this feature. Use the catalog's cost-series names in Home Assistant's Statistics graph card, with hourly changes and seven days. Keep currencies separate and avoid adding a household zone total to its room breakdown.
+
+
 ## Reading energy reports in Home Assistant
 
 1. Configure your grid import and any measured devices in Home Assistant’s **Energy Dashboard**.
