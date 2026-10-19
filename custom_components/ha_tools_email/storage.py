@@ -139,6 +139,7 @@ class EmailStorage:
         self._smtp_revision = 0
         self._schedule_revision = 0
         self._report_status_pending = 0
+        self._report_status_tasks = set()
 
     async def async_load(self) -> dict[str, Any]:
         """Load storage, creating defaults when absent."""
@@ -357,19 +358,45 @@ class EmailStorage:
 
         The opaque COW state token never leaves the server. Every confirmed
         schedule/attempt/last-fired write publishes a replacement _data object.
-        Hold the Store lock during the single worker so input state stays fixed.
+        A live caller holds the Store lock. A cancelled caller releases it, but
+        the retained worker keeps its immutable COW snapshot and admission slot.
         """
         if self._report_status_pending >= 4:
             raise RuntimeError('report_status_busy')
         self._report_status_pending += 1
+        worker = None
+        released = False
+
+        def release(done=None):
+            nonlocal released
+            if released:
+                return
+            released = True
+            self._report_status_pending -= 1
+            if done is not None:
+                self._report_status_tasks.discard(done)
+                if not done.cancelled():
+                    # A cancelled caller cannot retrieve the eventual worker
+                    # error. Consume it here without logging private details.
+                    done.exception()
+
         try:
             async with self._lock:
                 data = await self._async_tariff_data_locked()
-                result = await asyncio.to_thread(project_report_status, data, purpose,
-                    now=now, local_timezone=local_timezone, consumed=consumed)
+                worker = asyncio.create_task(asyncio.to_thread(
+                    project_report_status, data, purpose,
+                    now=now, local_timezone=local_timezone, consumed=consumed))
+                self._report_status_tasks.add(worker)
+                worker.add_done_callback(release)
+                # Caller cancellation releases the Store lock, never the raw
+                # queued/running worker's slot. COW data stays immutable.
+                result = await asyncio.shield(worker)
                 return result, data
         finally:
-            self._report_status_pending -= 1
+            if worker is None:
+                release()  # Cancelled while waiting for the lock/load: no job.
+            elif worker.done():
+                release(worker)  # Idempotent with the scheduled done callback.
 
     def report_status_context_is_current(self, token):
         """No-await generation fence; token is an internal object, never JSON."""
