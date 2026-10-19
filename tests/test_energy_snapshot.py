@@ -377,7 +377,7 @@ def entity_modules():
     sensor = types.ModuleType('homeassistant.components.sensor')
     sensor.SensorEntity = SensorEntity
     sensor.SensorDeviceClass = types.SimpleNamespace(ENUM='enum', TIMESTAMP='timestamp', MONETARY='monetary')
-    sensor.SensorStateClass = types.SimpleNamespace(MEASUREMENT='measurement')
+    sensor.SensorStateClass = types.SimpleNamespace(MEASUREMENT='measurement', TOTAL='total')
     binary = types.ModuleType('homeassistant.components.binary_sensor')
     binary.BinarySensorEntity = BinarySensorEntity
     modules = [entity, registry, sensor, binary]
