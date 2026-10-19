@@ -2,10 +2,7 @@
 
 ![Preview](banner.png)
 
-SMTP integration for Home Assistant. It sends email for HA Tools
-cards through simple service calls, and it can also compose and send
-scheduled server-side log digests and energy reports — no `notify:` platform
-or external mail relay required.
+Energy analysis, reports and optional email delivery for Home Assistant. Read energy reports inside HA without SMTP. Configure SMTP when you want to send mail or enable a mail schedule. Existing HA Tools service calls and server-side log digests remain supported.
 
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.7+-blue.svg?logo=homeassistant)](https://www.home-assistant.io/) [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Version](https://img.shields.io/github/v/release/MacSiem/ha-tools-email-integration)](https://github.com/MacSiem/ha-tools-email-integration/releases)
 
@@ -13,8 +10,9 @@ Part of the [HA Tools](https://github.com/MacSiem) ecosystem.
 
 ## How it works
 
-**Short version: add the integration, open Configure, enter your SMTP
-settings once, then send or schedule reports.**
+**Add the integration, then open your Energy card. To read a report, choose Preview → period/date → Read report. SMTP is optional.**
+
+For email delivery, open **Settings → Devices & services → HA Tools Email → Configure**, save your SMTP settings, then use the card’s **Send Now** or explicitly save a **Schedule**. Opening a card or reading a report never enables a schedule or sends a message.
 
 1. **Zero-input config flow.** Adding the integration creates a single config
    entry with no form fields.
@@ -49,9 +47,18 @@ settings once, then send or schedule reports.**
 
 ## Entities
 
-This integration does not create any entities. It is a `service`-type
-integration (`manifest.json` → `"integration_type": "service"`) that exposes
-services and a websocket API only.
+The integration exposes services, a websocket API and the shared Energy device described below. Its five read-only entities provide current tariff zone, usage price, cheap-period status, next cheap start and today’s measured usage cost. They do not enable notifications.
+
+## Reading energy reports in Home Assistant
+
+1. Configure your grid import and any measured devices in Home Assistant’s **Energy Dashboard**.
+2. Add an Energy Optimizer, Energy Insights or Energy Email card. With the current schema-2 API, the cards share the server’s calendar periods, recorded measurements and tariff calculations.
+3. In Energy Email, open **Preview**, select **Day / Week / Month / Year**, optionally choose a calendar date and comparison, then press **Read report**. Read it in HA or explicitly download HTML, text or CSV. No recipient or SMTP account is required.
+4. To show costs, an administrator saves an explicitly configured tariff under **Tariff settings**. Missing measurements or prices remain unavailable; measured zero remains zero. Fixed fees apply once to the household period.
+
+Report access follows the administrator’s saved feature policy and native HA resource permissions. Existing defaults are retained until an administrator saves a policy; energy reports default to administrator access. A policy may allow a household user to read reports without granting permission to send mail, edit SMTP, change tariffs or manage schedules. The card hides unavailable actions; the server also checks every request.
+
+The read-only `ha_tools_email/energy_report` endpoint returns HTML, text and CSV from the same prepared snapshot. Calendar comparisons use actual measured bounds, including daylight-saving changes. The browser supplies its display language, date language, timezone and 12/24-hour preference; this never changes the measurement calendar or tariff clock. Legacy preview/send endpoints described later retain their documented role and rolling-window behavior.
 
 ## Services
 
