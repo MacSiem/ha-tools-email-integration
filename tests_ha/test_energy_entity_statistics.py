@@ -34,7 +34,8 @@ def source(hass, suffix):
     entry.add_to_hass(hass)
     device = dr.async_get(hass).async_get_or_create(config_entry_id=entry.entry_id,
         identifiers={('test', suffix)}, name=f'Meter {suffix}', manufacturer='Meter Inc',
-        model='Grid', name_by_user=f'User {suffix}')
+        model='Grid')
+    device = dr.async_get(hass).async_update_device(device.id, name_by_user=f'User {suffix}')
     entity = er.async_get(hass).async_get_or_create('sensor', 'test', suffix,
         config_entry=entry, device_id=device.id, suggested_object_id=f'grid_{suffix}')
     return entry, device, entity
@@ -179,7 +180,7 @@ async def test_native_daily_total_statistics_metadata_reset_and_signed_sum(hass,
     assert price.attributes['state_class'] == 'measurement'
     assert price.attributes['unit_of_measurement'] == 'EUR/kWh'
     assert 'device_class' not in price.attributes and 'last_reset' not in price.attributes
-    metadata = list_statistic_ids(hass)
+    metadata = await instance.async_add_executor_job(list_statistic_ids, hass)
     assert metadata[cost_id]['has_sum'] is True
     assert metadata[cost_id]['unit_of_measurement'] == 'EUR'
     assert metadata[price_id]['has_sum'] is False
