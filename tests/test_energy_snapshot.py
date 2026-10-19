@@ -310,7 +310,7 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
         async def provider(hass, start, end):
             return usage()
         c = energy.EnergySnapshotCoordinator(types.SimpleNamespace(
-            config=types.SimpleNamespace(time_zone='UTC')), Storage(), provider=provider)
+            data={}, config=types.SimpleNamespace(time_zone='UTC')), Storage(), provider=provider)
         with patch.dict(sys.modules, {events.__name__: events}), \
              patch.object(energy, 'async_grid_sensors', return_value=[]):
             await c.async_start()
