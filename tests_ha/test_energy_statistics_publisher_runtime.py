@@ -1,4 +1,5 @@
 """Native Recorder/WS proof on each supported Core environment, no fake DB."""
+import asyncio
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from functools import partial
@@ -69,6 +70,7 @@ async def publish(client, hass, recorder_mock):
     runtime = hass.data[DOMAIN]['energy_statistics_runtime']
     while runtime._lane['task'] is not None:
         await runtime._lane['task']
+        await asyncio.sleep(0)  # Let the real task done callback release its lane.
     result = await command(client, 'refresh', backfill=True, acknowledge_current_membership=True)
     if not result['success']:
         # A supported Recorder barrier may return before an already-dequeued
