@@ -273,12 +273,12 @@ class FinalAuthGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(results)
         self.assertNotIn('PRIVATE', str(errors))
 
-    async def test_daily_monetary_sensor_does_not_claim_measurement_or_implicit_totals(self):
+    async def test_daily_monetary_sensor_has_total_and_price_remains_measurement(self):
         sensor, _ = entity_modules()
         c = coordinator()
         entity = sensor.EnergySensor(c, types.SimpleNamespace(entry_id='id'), 'today_cost', 'today', 'usage_cost')
         self.assertEqual('monetary', entity.device_class)
-        self.assertIsNone(entity.state_class)
+        self.assertEqual('total', entity.state_class)
         price = sensor.EnergySensor(c, types.SimpleNamespace(entry_id='id'), 'price', 'current', 'usage_rate')
         self.assertEqual('measurement', price.state_class)
         self.assertIsNone(price.device_class)
