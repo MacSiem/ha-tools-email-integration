@@ -63,6 +63,12 @@ async def setup_dataset(hass, recorder_mock, hass_ws_client):
 
 
 async def publish(client, hass, recorder_mock):
+    # Explicit enable now starts the real one-hour runtime. Its retained task
+    # must settle before this separate manual 168-hour gesture; a Recorder
+    # barrier alone cannot settle an active producer/Store coroutine.
+    runtime = hass.data[DOMAIN]['energy_statistics_runtime']
+    while runtime._lane['task'] is not None:
+        await runtime._lane['task']
     result = await command(client, 'refresh', backfill=True, acknowledge_current_membership=True)
     if not result['success']:
         # A supported Recorder barrier may return before an already-dequeued
