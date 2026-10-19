@@ -11,6 +11,7 @@ import hashlib
 import json
 
 from .energy_consumers import ConsumerPeriod
+from .energy_statistics_hours import household_cost_hours, require_statistics_projection
 from .energy_chart_bins import build_chart_bins
 from .energy_period_summary import build_period_summary
 from .energy_patterns_periods import resolve_patterns_window
@@ -143,11 +144,16 @@ class EnergyAnalysisAccumulator:
     """Append contiguous chunks and price the actual whole period exactly once."""
 
     def __init__(self, book, period, context, *, generated_at, consumers=None, membership=None,
-                 consumer_domain='grid_import', patterns_window=None):
+                 consumer_domain='grid_import', patterns_window=None, include_statistics_hours=False):
         _bounded(period, 65536)
         _bounded(context, 65536)
         self._start, self._end = _stamp(period['start']), _stamp(period['end'])
         self._hours = len(hour_grid(self._start, self._end))
+        require_statistics_projection(include_statistics_hours, self._hours)
+        if include_statistics_hours and (consumers is None or patterns_window is not None):
+            raise ValueError('statistics_projection_not_configured')
+        self._include_statistics_hours = include_statistics_hours
+        self._statistics_result = None
         self._generated = _stamp(generated_at)
         if self._generated < self._end:
             raise ValueError('future_analysis_measurement')
@@ -168,7 +174,8 @@ class EnergyAnalysisAccumulator:
         self._rows, self._issues = [], []
         self._ids, self._provenance, self._signature = None, None, None
         self._measured_seconds = 0
-        self._consumers = (ConsumerPeriod(consumers, membership, consumer_domain, self._book, self._hours)
+        self._consumers = (ConsumerPeriod(consumers, membership, consumer_domain, self._book, self._hours,
+                            include_statistics_hours=include_statistics_hours)
                            if consumers is not None else None)
         self._result = None
 
@@ -294,5 +301,28 @@ class EnergyAnalysisAccumulator:
         if self._consumers is not None:
             result['groups'] = self._consumers.finish(active)
         result['snapshot_id'] = _digest(result)
+        statistics = None
+        if self._include_statistics_hours:
+            statistics = self._consumers.statistics_hours()
+            household = household_cost_hours(self._rows, active)
+            if len(statistics['hours']) != len(household):
+                raise ValueError('statistics_projection_incomplete')
+            for group, priced in zip(statistics['hours'], household):
+                if (group['from'], group['to']) != (priced['from'], priced['to']):
+                    raise ValueError('statistics_projection_interval_mismatch')
+                group.update(household=priced['household'], zone=priced['zone'])
+            statistics.update(schema=1, cost_scope='usage_only',
+                rounding='unrounded_hourly_decimal', context=deepcopy(context),
+                measurement_fingerprint=fingerprint, grid_source_ids=list(self._ids),
+                grid_provenance=deepcopy(self._provenance))
+        self._statistics_result = statistics
         self._result = result
         return deepcopy(result)
+
+    def statistics_hours(self):
+        """Internal projection; never attach it to the public schema2 result."""
+        if not self._include_statistics_hours:
+            raise ValueError('statistics_projection_not_enabled')
+        if self._statistics_result is None:
+            raise ValueError('statistics_projection_incomplete')
+        return deepcopy(self._statistics_result)

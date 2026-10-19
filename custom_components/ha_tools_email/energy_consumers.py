@@ -8,6 +8,7 @@ from decimal import Decimal, ROUND_FLOOR, localcontext
 
 from .energy_measurements import measurement_evidence
 from .energy_registry import build_interval_breakdown
+from .energy_statistics_hours import group_cost_hour, require_statistics_projection, MAX_STATISTICS_HOURS
 from .tariff_history import HistoricalTariffRates, calculate_energy_amounts, _bounded, _money
 
 COMPONENTS = ('energy_cost', 'variable_cost', 'legacy_combined_cost')
@@ -38,7 +39,9 @@ def _reconcile(values, target):
 
 
 class ConsumerPeriod:
-    def __init__(self, consumers, membership, domain, book, hours):
+    def __init__(self, consumers, membership, domain, book, hours, *, include_statistics_hours=False):
+        require_statistics_projection(include_statistics_hours, hours)
+        self._statistics_hours = [] if include_statistics_hours else None
         _bounded({'consumers': consumers, 'membership': membership}, 262144)
         if domain not in ('grid_import', 'site_consumption') or not isinstance(membership, dict):
             raise ValueError('invalid_consumer_configuration')
@@ -98,12 +101,16 @@ class ConsumerPeriod:
         return self._prepare_chunk(snapshot, household_rows, start, end, include_hours=True)
 
     def _prepare_chunk(self, snapshot, household_rows, start, end, *, include_hours):
+        if (self._statistics_hours is not None
+                and len(self._statistics_hours) + len(household_rows) > min(self._hours, MAX_STATISTICS_HOURS)):
+            raise ValueError('statistics_projection_too_large')
         evidence = measurement_evidence(snapshot, start, end) if self._ids else None
         if evidence is not None and (set(evidence['source_ids']) != set(self._ids)
                 or self._provenance is not None and evidence['measurement_provenance'] != self._provenance):
             raise ValueError('consumer_sources_changed')
         states, issues, partition = deepcopy(self._states), set(self._issues), self._partition
         projected = [] if include_hours else None
+        statistics = [] if self._statistics_hours is not None else None
         with localcontext() as context:
             context.prec = 40
             for hour in household_rows:
@@ -121,6 +128,7 @@ class ConsumerPeriod:
                 partition = partition and breakdown['status'] == 'ready'
                 issues.update(issue['reason'] for issue in breakdown['issues'])
                 rate = self._rates.resolve_interval(stamp, hour['to']) if self._rates and self._domain == 'grid_import' else None
+                hour_amounts = {} if statistics is not None else None
                 for sid, cell in {**breakdown['devices'], REMAINDER: breakdown['unmeasured']}.items():
                     state = states[sid]
                     value, measured = cell['kwh_decimal'], cell.get('measured_kwh_decimal')
@@ -131,6 +139,8 @@ class ConsumerPeriod:
                     state['kwh'] += Decimal(value); state['observations'] += 1
                     if rate is not None and rate['available']:
                         amounts = calculate_energy_amounts(value, rate['energy_rate'], rate['variable_rate'], rate['rate_semantics'])
+                        if hour_amounts is not None:
+                            hour_amounts[sid] = amounts
                         if amounts['usage_cost'] is not None:
                             for key in COMPONENTS:
                                 if amounts[key] is not None:
@@ -140,8 +150,13 @@ class ConsumerPeriod:
                                 state['amounts'][key] += amount; state['priced'][key] += 1
                     elif rate is not None:
                         issues.add(rate['reason'])
+                if statistics is not None:
+                    statistics.append(group_cost_hour(hour, breakdown, hour_amounts, rate,
+                        self._group_membership, self._domain))
         provenance = deepcopy(evidence['measurement_provenance']) if evidence else None
         staged = states, issues, partition, provenance
+        if statistics is not None:
+            staged = (*staged, statistics)
         projection = ({'schema': 1, 'consumer_source_ids': sorted(self._ids),
             'consumer_provenance': deepcopy(provenance) if provenance is not None else {},
             'registry_revision': self._membership['revision'], 'membership_mode': 'current_snapshot',
@@ -150,7 +165,26 @@ class ConsumerPeriod:
         return staged, projection
 
     def commit_chunk(self, staged):
-        self._states, self._issues, self._partition, self._provenance = staged
+        if self._statistics_hours is not None:
+            states, issues, partition, provenance, statistics = staged
+            if len(self._statistics_hours) + len(statistics) > min(self._hours, MAX_STATISTICS_HOURS):
+                raise ValueError('statistics_projection_too_large')
+            self._statistics_hours.extend(statistics)
+            self._states, self._issues, self._partition, self._provenance = states, issues, partition, provenance
+        else:
+            self._states, self._issues, self._partition, self._provenance = staged
+
+    def statistics_hours(self):
+        """Detached accepted-chunk facts; membership remains a current snapshot."""
+        if self._statistics_hours is None:
+            raise ValueError('statistics_projection_not_enabled')
+        return deepcopy({'membership_mode': 'current_snapshot',
+            'membership_as_of': self._membership['captured_at'],
+            'registry_revision': self._membership['revision'],
+            'group_membership': self._group_membership,
+            'consumer_source_ids': sorted(self._ids),
+            'consumer_provenance': self._provenance, 'energy_domain': self._domain,
+            'hours': self._statistics_hours})
 
     def finish(self, active):
         with localcontext() as context:
