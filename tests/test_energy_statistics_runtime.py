@@ -8,7 +8,7 @@ import unittest
 import sys
 from unittest.mock import AsyncMock, patch
 
-from tests.test_energy_statistics_publisher import PublisherTest
+from tests import test_energy_statistics_publisher as publisher_fixture
 from tests.test_energy_analysis_service import service
 
 with patch.dict(sys.modules, {'homeassistant.core': SimpleNamespace(callback=lambda function: function)}):
@@ -30,7 +30,7 @@ class Bus:
 
 class RuntimeTest(unittest.IsolatedAsyncioTestCase):
     def fixture(self):
-        source, store, recorder, publisher = PublisherTest().fixture()
+        source, store, recorder, publisher = publisher_fixture.PublisherTest().fixture()
         source.hass.bus = Bus()
         recorder.async_metadata = AsyncMock(wraps=recorder.async_metadata)
         recorder.async_verify = AsyncMock(wraps=recorder.async_verify)
@@ -53,7 +53,7 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0)
 
     async def enable(self, publisher):
-        return await PublisherTest().enable(publisher)
+        return await publisher_fixture.PublisherTest().enable(publisher)
 
     async def test_default_zero_source_and_recorder_io_no_hour_timer(self):
         source, store, recorder, publisher, runtime = self.fixture()
@@ -200,3 +200,29 @@ class RuntimeTest(unittest.IsolatedAsyncioTestCase):
                 replacement.async_stop()
         self.assertEqual(0, recorder.enqueues)
         self.assertIsNone(runtime._lane['task'])
+
+    async def test_public_status_distinguishes_active_paused_and_disabled_automation(self):
+        source, store, recorder, publisher, runtime = self.fixture()
+        source.hass.data['ha_tools_email']['energy_statistics_runtime'] = runtime
+        self.assertEqual({'state': 'disabled', 'last_completed_hour': None},
+                         (await publisher.async_status('admin'))['automation'])
+        runtime.async_start()
+        await self.drain(runtime)
+        await self.enable(publisher)
+        await self.drain(runtime)
+        self.assertEqual({'state': 'active', 'last_completed_hour': self.now.isoformat()},
+                         (await publisher.async_status('admin'))['automation'])
+        source.user.is_active = False
+        self.now += timedelta(hours=1)
+        runtime._tick(self.now)
+        await self.drain(runtime)
+        self.assertEqual('paused', publisher._summary(publisher._state)['automation']['state'])
+        source.user.is_active = True
+        await self.enable(publisher)
+        await self.drain(runtime)
+        self.assertEqual('active', (await publisher.async_status('admin'))['automation']['state'])
+        await publisher.async_disable('admin', expected_revision=2)
+        await self.drain(runtime)
+        self.assertEqual({'state': 'disabled', 'last_completed_hour': None},
+                         (await publisher.async_status('admin'))['automation'])
+        runtime.async_stop()
