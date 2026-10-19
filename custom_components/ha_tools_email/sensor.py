@@ -15,6 +15,10 @@ async def async_setup_entry(hass, entry, async_add_entities):
         EnergySensor(coordinator, entry, 'next_cheap', 'next_cheap', 'start'),
         EnergySensor(coordinator, entry, 'today_cost', 'today', 'usage_cost'),
     ])
+    native = hass.data[DOMAIN].get("email_native")
+    if native is not None:
+        from .email_sensor import entities
+        native.register_platform(async_add_entities, lambda key: entities(native, key))
 
 
 class EnergySensor(EnergySnapshotEntity, SensorEntity):

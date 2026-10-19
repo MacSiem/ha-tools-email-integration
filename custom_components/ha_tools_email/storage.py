@@ -26,6 +26,7 @@ from .tariff import TariffValidationError, validate_tariff_profile
 from .tariff_history import prepare_tariff_book_edit, validate_tariff_book
 from .scheduler import normalize_schedule_calendar
 from .report_status import project_report_status
+from .native_report_projection import project_native_reports
 from .history import HISTORY_SCHEMA, HISTORY_LIMIT, HISTORY_DAYS, clean_attempt, retained_attempts
 
 from .const import (
@@ -353,7 +354,7 @@ class EmailStorage:
         return {"profile": profile, "revision": revision,
                 "updated_at": stamp if isinstance(stamp, str) and len(stamp) <= 64 else None}
 
-    async def async_get_report_status(self, purpose, *, now, local_timezone, consumed=None):
+    async def async_get_report_status(self, purpose, *, now, local_timezone, consumed=None, native=False):
         """One atomic bounded projection; no SMTP migration or Store write.
 
         The opaque COW state token never leaves the server. Every confirmed
@@ -383,9 +384,10 @@ class EmailStorage:
         try:
             async with self._lock:
                 data = await self._async_tariff_data_locked()
+                projector = project_native_reports if native else project_report_status
                 worker = asyncio.create_task(asyncio.to_thread(
-                    project_report_status, data, purpose,
-                    now=now, local_timezone=local_timezone, consumed=consumed))
+                    projector, data, purpose, now=now, local_timezone=local_timezone,
+                    consumed=consumed, **({'schedule_id_resolver': self._stored_schedule_id} if native else {})))
                 self._report_status_tasks.add(worker)
                 completed = asyncio.get_running_loop().create_future()
 

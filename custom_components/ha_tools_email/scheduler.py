@@ -364,6 +364,8 @@ async def async_send_now(
     max_entries: int | None = None,
     actor=None,
     report_preferences=None,
+    before_send=None,
+    attempt_schedule_id=None,
 ) -> dict[str, Any]:
     """Compose and send a report immediately."""
     bucket = hass.data[DOMAIN]
@@ -385,6 +387,8 @@ async def async_send_now(
         cadence=cadence,
         recipients=recipients or [],
         now=now,
+        **({'before_send': before_send} if before_send is not None else {}),
+        **({'attempt_schedule_id': attempt_schedule_id} if attempt_schedule_id is not None else {}),
         **({"actor":actor,"report_preferences":report_preferences} if kind == KIND_ENERGY_REPORT else {}),
         **options,
     )
@@ -406,6 +410,8 @@ async def async_send_report(
     max_entries: int | None = None,
     actor=None,
     report_preferences=None,
+    before_send=None,
+    attempt_schedule_id=None,
 ) -> dict[str, Any]:
     """Compose and send one report through the existing SMTP send path."""
     from .composer import async_build_report_payload
@@ -480,6 +486,8 @@ async def async_send_report(
             current = await storage.async_get_schedule(schedule_id)
             if current != expected_schedule or bucket.get("schedule_generation", 0) != schedule_generation:
                 raise ValueError("schedule_changed_before_dispatch")
+        if before_send is not None:
+            await before_send()
         if energy:
             # Schedule re-read above precedes the final native authorization await.
             if not await service.async_validate_result(payload,actor):
@@ -495,7 +503,7 @@ async def async_send_report(
         source="schedule" if schedule_id is not None else "manual",
         kind=kind, cadence=cadence,
         period=fire_period_key({"cadence": cadence}, now),
-        schedule_id=schedule_id, now=now,
+        schedule_id=attempt_schedule_id if attempt_schedule_id is not None else schedule_id, now=now,
     )
     if kind == KIND_LOG_DIGEST and period_semantics is None:
         # SMTP has already accepted this message. A metadata write failure must

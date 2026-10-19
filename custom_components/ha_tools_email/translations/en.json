@@ -61,6 +61,14 @@
     "smtp_password_in_history": {
       "title": "Change your SMTP password",
       "description": "Before HA Tools Email 2.1.0 the SMTP password was saved through the `ha_tools_email.save_config` action. Home Assistant stores action data in its database, so that password may also be present in the database and in backups that include it.\n\nCreate a new app password with your email provider, enter it in Settings → Devices & services → HA Tools Email → Configure, and revoke the old one. This notice disappears once a password has been saved there."
+    },
+    "email_native_auth": {
+      "title": "SMTP authentication failed",
+      "description": "A confirmed attempt reported an SMTP authentication failure. Check the account in integration settings. This issue clears after a later message is accepted by SMTP."
+    },
+    "email_native_failures": {
+      "title": "Three consecutive failed email attempts",
+      "description": "Confirmed history records three consecutive failures. Check integration settings. No automatic retry is performed. This issue clears after an SMTP-accepted attempt."
     }
   },
   "entity": {
@@ -81,11 +89,63 @@
       },
       "energy_today_cost": {
         "name": "Usage cost today"
+      },
+      "email_last_attempt": {
+        "name": "Last email attempt"
+      },
+      "email_next_report": {
+        "name": "Next report occurrence"
+      },
+      "email_result": {
+        "name": "Last attempt result",
+        "state": {
+          "accepted_by_smtp": "Accepted by SMTP",
+          "preparation_failed": "Preparation failed",
+          "authentication_failed": "SMTP authentication failed",
+          "recipients_refused": "Recipients refused",
+          "partial_acceptance": "Partial SMTP acceptance",
+          "tls_failed": "TLS failed",
+          "transport_outcome_unknown": "Transport outcome unknown",
+          "send_failed": "Send failed",
+          "cancelled_outcome_unknown": "Cancelled; outcome unknown",
+          "outcome_unknown": "Outcome unknown"
+        }
+      },
+      "email_errors_24h": {
+        "name": "Errors in 24 hours"
+      },
+      "email_warnings_24h": {
+        "name": "Warnings in 24 hours"
       }
     },
     "binary_sensor": {
       "energy_cheap": {
         "name": "Cheap tariff"
+      }
+    },
+    "button": {
+      "email_send": {
+        "name": "Send now"
+      }
+    },
+    "event": {
+      "email_attempt": {
+        "name": "Email attempt",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "smtp_accepted": "Accepted by SMTP",
+              "attempt_error": "Attempt ended with an error",
+              "outcome_unknown": "Outcome unknown",
+              "partial_acceptance": "Partial SMTP acceptance"
+            }
+          }
+        }
+      }
+    },
+    "calendar": {
+      "email_schedule": {
+        "name": "Report schedule"
       }
     }
   }

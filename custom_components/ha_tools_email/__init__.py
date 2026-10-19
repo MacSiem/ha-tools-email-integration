@@ -192,6 +192,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up HA Tools Email from a config entry."""
     await _async_ensure_setup(hass)
     from .energy import EnergySnapshotCoordinator
+    from .email_native import EmailNativeCoordinator
     from .energy_source_device import EnergySourceDeviceAssociation
     from .registry_adapter import RegistryMembership
     from .analysis_service import EnergyAnalysisService
@@ -204,6 +205,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     bucket['energy_snapshot'] = coordinator
     registry, service = None, None
     association = EnergySourceDeviceAssociation(hass, entry)
+    native = EmailNativeCoordinator(hass, entry, coordinator.storage)
+    bucket["email_native"] = native
+    platforms = ["sensor", "binary_sensor", "button", "event", "calendar"]
     platforms_forwarded = False
     try:
         registry = RegistryMembership(hass, lambda revision: hass.bus.async_fire(
@@ -212,7 +216,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         bucket['energy_membership'], bucket['energy_analysis'] = registry, service
         registry.start()
         await coordinator.async_start()
-        await hass.config_entries.async_forward_entry_setups(entry, ['sensor', 'binary_sensor'])
+        await native.async_start()
+        await hass.config_entries.async_forward_entry_setups(entry, platforms)
         platforms_forwarded = True
         bucket['energy_source_device'] = association
         await association.async_start()
@@ -220,6 +225,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except BaseException:
         # Cancellation is also a setup failure: remove listeners and prevent an
         # in-flight analysis from publishing through a half-initialized entry.
+        native.async_stop()
         association.async_stop()
         if service is not None:
             service.async_stop()
@@ -227,7 +233,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             registry.stop()
         coordinator.async_stop()
         current = hass.data.get(DOMAIN, {})
-        for key, owned in (('energy_source_device', association),
+        for key, owned in (('email_native', native), ('energy_source_device', association),
                            ('energy_analysis', service), ('energy_membership', registry),
                            ('energy_snapshot', coordinator)):
             if current.get(key) is owned:
@@ -235,16 +241,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if platforms_forwarded:
             # Core setup-error cleanup does not unload forwarded platforms.
             # A later association/scheduler failure must remove their entities.
-            await hass.config_entries.async_unload_platforms(entry, ['sensor', 'binary_sensor'])
+            await hass.config_entries.async_unload_platforms(entry, platforms)
         raise
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload the config entry."""
-    unloaded = await hass.config_entries.async_unload_platforms(entry, ['sensor', 'binary_sensor'])
+    unloaded = await hass.config_entries.async_unload_platforms(entry,
+        ['sensor', 'binary_sensor', 'button', 'event', 'calendar'])
     if unloaded:
         bucket = hass.data[DOMAIN]
+        native = bucket.pop("email_native", None)
+        if native:
+            native.async_stop()
         association = bucket.pop('energy_source_device', None)
         if association:
             association.async_stop()

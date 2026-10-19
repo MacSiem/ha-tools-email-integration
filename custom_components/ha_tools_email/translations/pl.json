@@ -61,6 +61,14 @@
     "smtp_password_in_history": {
       "title": "Zmień hasło SMTP",
       "description": "Przed HA Tools Email 2.1.0 hasło SMTP było zapisywane akcją `ha_tools_email.save_config`. Home Assistant przechowuje dane akcji w swojej bazie danych, więc to hasło może znajdować się także w bazie i w kopiach zapasowych, które ją zawierają.\n\nUtwórz nowe hasło aplikacji u dostawcy poczty, wpisz je w Ustawienia → Urządzenia i usługi → HA Tools Email → Konfiguruj, a stare unieważnij. Ten komunikat zniknie po zapisaniu hasła w tym miejscu."
+    },
+    "email_native_auth": {
+      "title": "Błąd logowania SMTP",
+      "description": "Ostatnia potwierdzona próba wykazała błąd logowania SMTP. Sprawdź konto w ustawieniach integracji. Problem znika po potwierdzonym przyjęciu kolejnej wiadomości przez SMTP."
+    },
+    "email_native_failures": {
+      "title": "Trzy nieudane próby wysyłki z rzędu",
+      "description": "Historia potwierdza trzy kolejne błędy. Sprawdź ustawienia integracji. Nie ponawiamy wysyłki automatycznie. Problem znika po potwierdzonym przyjęciu wiadomości przez SMTP."
     }
   },
   "entity": {
@@ -81,11 +89,63 @@
       },
       "energy_today_cost": {
         "name": "Koszt zużycia dziś"
+      },
+      "email_last_attempt": {
+        "name": "Ostatnia próba wysyłki"
+      },
+      "email_next_report": {
+        "name": "Następny termin raportu"
+      },
+      "email_result": {
+        "name": "Wynik ostatniej próby",
+        "state": {
+          "accepted_by_smtp": "Przyjęte przez SMTP",
+          "preparation_failed": "Nie udało się przygotować",
+          "authentication_failed": "Błąd logowania SMTP",
+          "recipients_refused": "Odbiorcy odrzuceni",
+          "partial_acceptance": "Częściowo przyjęte przez SMTP",
+          "tls_failed": "Błąd TLS",
+          "transport_outcome_unknown": "Nieznany wynik transportu",
+          "send_failed": "Błąd wysyłki",
+          "cancelled_outcome_unknown": "Anulowano; wynik nieznany",
+          "outcome_unknown": "Wynik nieznany"
+        }
+      },
+      "email_errors_24h": {
+        "name": "Błędy w 24 godziny"
+      },
+      "email_warnings_24h": {
+        "name": "Ostrzeżenia w 24 godziny"
       }
     },
     "binary_sensor": {
       "energy_cheap": {
         "name": "Tania strefa"
+      }
+    },
+    "button": {
+      "email_send": {
+        "name": "Wyślij teraz"
+      }
+    },
+    "event": {
+      "email_attempt": {
+        "name": "Próba wysyłki",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "smtp_accepted": "Przyjęte przez SMTP",
+              "attempt_error": "Błąd próby wysyłki",
+              "outcome_unknown": "Wynik nieznany",
+              "partial_acceptance": "Częściowo przyjęte przez SMTP"
+            }
+          }
+        }
+      }
+    },
+    "calendar": {
+      "email_schedule": {
+        "name": "Terminy raportu"
       }
     }
   }
