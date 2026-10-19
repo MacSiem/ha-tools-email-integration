@@ -57,6 +57,10 @@ Energy entities attach to the grid-import meter's device when that device is una
 
 Open a full Energy card as an administrator and choose **Cost statistics** in its footer. Review the exact sources, currency and gross/net basis, then explicitly enable sharing. The integration adds hourly usage costs from its existing server calculations. The feature is off by default; reading a card does not enable it. The dialog shows automatic-update status and gives an explicit seven-day backfill using current room assignments. Historical room membership is not reconstructed.
 
+The updater waits for the configured meters to produce a complete hour, including readings that arrive late. It remembers the waiting hour across restarts. Missing measurements stay unavailable; they are never published as measured zero. If automatic updates pause, review the configured sources and permissions before enabling them again.
+
+If a statistics import remains unconfirmed after a settings change, choose **Disable**, then **Read status**, review the new dataset and enable it explicitly. Disable stops future retries and keeps the old intent and history for reference. Work already queued in Recorder may still finish. A new consent after Disable creates separate series; it does not retry or confirm the old import. The dialog shows the count of unconfirmed historical imports.
+
 Native Recorder statistics are readable by **all authenticated Home Assistant users**. Disabling sharing stops future writes; it does not remove or restrict previously published history or exported copies. Each source/currency dataset needs its own explicit consent. No notification or email is sent by this feature. Use the catalog's cost-series names in Home Assistant's Statistics graph card, with hourly changes and seven days. Keep currencies separate and avoid adding a household zone total to its room breakdown.
 
 
