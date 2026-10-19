@@ -197,12 +197,15 @@ async def test_native_button_user_context_real_guard_and_stub_transport_only(has
         await runtime.async_send(key, None, eid)  # no automation/ScheduleActor fallback
 
 
-async def test_native_button_feature_execute_and_native_control_both_required(hass, hass_storage):
+async def test_native_button_feature_execute_and_native_control_both_required(hass, hass_storage, hass_admin_user):
     entry, storage = await _setup(hass, stored={'schedules': [schedule()]}, hass_storage=hass_storage)
     runtime = hass.data[DOMAIN]['email_native']
     key = hashlib.sha256(b'stable-schedule').hexdigest()
     eid = er.async_get(hass).async_get_entity_id('button', DOMAIN, f'{entry.entry_id}_email_{key}_send')
     user = await hass.auth.async_create_user('Native test', group_ids=['system-users'])
+    # HA promotes the first user to owner, regardless of group_ids.
+    assert not user.is_owner and not user.is_admin
+    assert user.permissions.check_entity(eid, 'control')
     with pytest.raises(HomeAssistantError):
         await runtime.async_send(key, user.id, eid)  # Native control alone does not grant execute.
     await storage.async_save_feature_access({'schema': 1, 'features': {
@@ -211,6 +214,7 @@ async def test_native_button_feature_execute_and_native_control_both_required(ha
     await storage.async_upsert_schedule(schedule(kind='energy_report'))
     await runtime.async_refresh()
     no_control = await hass.auth.async_create_user('No control', group_ids=[])
+    assert not no_control.is_owner and not no_control.permissions.check_entity(eid, 'control')
     with pytest.raises(HomeAssistantError):
         await runtime.async_send(key, no_control.id, eid)  # Feature grant cannot exceed native ACL.
     assert (await storage.async_get_attempt_history())['attempts'] == []

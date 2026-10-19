@@ -94,7 +94,8 @@ class EmailNativeCoordinator:
             return
         seen = set(result['history_ids']) if result['history_ids'] is not None else None
         fresh = {} if self._seen is None or seen is None else {
-            key: [row for row in rows if row['id'] not in self._seen]
+            key: sorted((row for row in rows if row['id'] not in self._seen),
+                key=lambda row: (datetime.fromisoformat(row['timestamp']), row['id']))
             for key, rows in result['attempts'].items()}
         # Track the complete bounded history, including currently unconfigured
         # schedules, so deletion/re-add never replays old attempts as new events.
@@ -143,7 +144,7 @@ class EmailNativeCoordinator:
                     or self.storage.current_smtp_revision != smtp_revision
                     or self.storage.current_schedule_revision != schedule_revision
                     or generation != bucket.get('schedule_generation')
-                    or row is None or not row['enabled'] or self.identities.get(key) != sid
+                    or row is None or self.identities.get(key) != sid
                     or current is None or current.is_active is not True
                     or (row['kind'] == 'log_digest' and current.is_admin is not True)
                     or not current.permissions.check_entity(entity_id, POLICY_CONTROL)
@@ -154,7 +155,7 @@ class EmailNativeCoordinator:
         await guard()
         selected = await self.storage.async_get_schedule(sid)
         await guard()
-        if selected is None or selected.get('enabled') is not True or selected.get('kind') != self.data[key]['kind']:
+        if selected is None or selected.get('kind') != self.data[key]['kind']:
             raise HomeAssistantError('Email schedule unavailable')
         async def before_send():
             current = await self.storage.async_get_schedule(sid)

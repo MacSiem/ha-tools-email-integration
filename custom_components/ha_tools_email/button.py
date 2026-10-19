@@ -11,9 +11,5 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
 
 class EmailSendButton(EmailScheduleEntity, ButtonEntity):
-    @property
-    def available(self):
-        return super().available and self.row['enabled']
-
     async def async_press(self):
         await self.coordinator.async_send(self.key, getattr(self._context, "user_id", None), self.entity_id)
