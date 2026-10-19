@@ -167,6 +167,10 @@ async def test_native_disabled_restart_and_author_revocation_do_not_enqueue(
     assert not (await replacement.async_refresh(share_author))['enabled']
     assert replacement.recorder is None
     assert replacement._state['series'] == before
+    # Close the real authenticated WS before revoking its user; aiohttp's
+    # heartbeat otherwise remains alive into modern HA fixture teardown.
+    await client.close()
+    await hass.async_block_till_done()
     user = await hass.auth.async_get_user(share_author)
     await hass.auth.async_update_user(user, is_active=False)
     with pytest.raises(PermissionError): await replacement.async_refresh(share_author)
