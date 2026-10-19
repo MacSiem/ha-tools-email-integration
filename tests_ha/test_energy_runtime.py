@@ -51,7 +51,7 @@ async def test_native_forwarded_entities_availability_metadata_unload_reload(has
     cost = hass.states.get(records['today_cost'].entity_id)
     assert cost.state == 'unavailable'  # no configured Energy imports, no invented zero
     assert cost.attributes['device_class'] == 'monetary'
-    assert 'state_class' not in cost.attributes
+    assert cost.attributes['state_class'] == 'total'
     ids = {k: (r.entity_id, r.id, r.unique_id) for k, r in records.items()}
     assert len(coordinator._listeners) == 5
     assert await hass.config_entries.async_reload(entry.entry_id)
@@ -189,7 +189,7 @@ async def test_native_recorder_external_import_without_state_prices_daily_moneta
     assert float(state.state) == pytest.approx(hours * 1.2)
     assert state.attributes['device_class'] == 'monetary'
     assert state.attributes['unit_of_measurement'] == 'EUR'
-    assert 'state_class' not in state.attributes
+    assert state.attributes['state_class'] == 'total'
 
 
 async def test_native_timestamp_and_cheap_transition_publish_aware_values(hass, hass_storage, freezer):
