@@ -5,6 +5,7 @@ source ACL/purpose guards stay in force; they cannot restrict published history.
 """
 import asyncio
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from functools import partial
 from uuid import uuid4
 
@@ -199,7 +200,7 @@ class EnergyStatisticsPublisher:
             share = {'enabled': True, 'author': actor, 'binding': binding,
                      'epoch': previous['epoch'] if same else uuid4().hex}
             await self._guard(facts, share)
-            candidate = deepcopy(state); candidate.update(share=share, revision=state['revision']+1)
+            candidate = deepcopy(state); candidate.update(share=share, revision=state['revision']+1, runtime=None)
             await self._save(candidate)
             self._state = candidate
             self._runtime_changed()
@@ -211,6 +212,7 @@ class EnergyStatisticsPublisher:
         async with self._lock:
             state = await self._load(); self._revision(state, expected_revision)
             candidate = deepcopy(state); candidate['revision'] += 1
+            candidate['runtime'] = None
             if candidate['share'] is not None:
                 candidate['share']['enabled'] = False
             await self._admin(actor)
@@ -228,7 +230,38 @@ class EnergyStatisticsPublisher:
                     or metadata_unit(meta) != row['record']['identity']['currency']):
                 raise PermissionError('statistics_foreign_metadata')
 
-    async def async_refresh(self, actor, *, backfill=False, acknowledge_current_membership=False, expected_share=None):
+    async def async_refresh_runtime(self, actor, *, expected_share, now):
+        """Trusted single-hour cursor caller; never exposed by the WS schema."""
+        if expected_share is None or type(now) is not datetime or now.utcoffset() is None:
+            raise ValueError('invalid_statistics_runtime_request')
+        return await self.async_refresh(actor, expected_share=expected_share, _runtime_now=now)
+
+    @staticmethod
+    def _runtime_result(state, status, now):
+        cursor = state['runtime']
+        def iso(stamp):
+            return datetime.fromtimestamp(stamp/1000, timezone.utc).isoformat() if stamp is not None else None
+        latest = int(now.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0).timestamp()*1000)
+        age = now.timestamp()-cursor['next_end']/1000
+        retry_after = 15 if age < 60 else 60 if age < 3600 else 300
+        return {'status': status, 'retry_after': retry_after, 'completed_end': iso(cursor['last_end']),
+                'pending_end': iso(cursor['next_end']),
+                'retry': status == 'source_pending' or status == 'completed' and cursor['next_end'] <= latest}
+
+    async def _complete_runtime(self, state, facts, share, now):
+        if now is None:
+            return self._summary(state)
+        completed = deepcopy(state)
+        cursor = completed['runtime']
+        cursor['last_end'] = cursor['next_end']
+        cursor['next_end'] += 3600000
+        await self._save(completed)
+        self._state = completed
+        await self._guard(facts, share)
+        return self._runtime_result(completed, 'completed', now)
+
+    async def async_refresh(self, actor, *, backfill=False, acknowledge_current_membership=False,
+                            expected_share=None, _runtime_now=None):
         await self._admin(actor)
         if type(backfill) is not bool or backfill and acknowledge_current_membership is not True:
             raise ValueError('statistics_backfill_current_snapshot_ack_required')
@@ -244,8 +277,40 @@ class EnergyStatisticsPublisher:
                 return self._summary(state)
             if actor != share['author']:
                 raise PermissionError('statistics_share_author_required')
-            facts = await self.service.async_get_statistics_hours(actor, hours=168 if backfill else 1)
+            end = None
+            if _runtime_now is not None:
+                if backfill or expected_share is None:
+                    raise ValueError('invalid_statistics_runtime_request')
+                latest = _runtime_now.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+                latest_ms = int(latest.timestamp()*1000)
+                cursor = state['runtime']
+                if cursor is None:
+                    candidate = deepcopy(state)
+                    candidate['runtime'] = {'consent': list(expected_share), 'next_end': latest_ms,
+                                            'last_end': None, 'paused': False}
+                    # Persist the exact hour before any source await, even if no
+                    # monetary facts can yet be written. No restart may skip it.
+                    await self._save(candidate)
+                    self._state = state = candidate
+                    await self._admin(actor)
+                    cursor = state['runtime']
+                if cursor['paused']:
+                    return self._runtime_result(state, 'paused', _runtime_now)
+                if latest_ms-cursor['next_end'] >= 168*3600000:
+                    candidate = deepcopy(state); candidate['runtime']['paused'] = True
+                    await self._save(candidate)
+                    self._state = candidate
+                    await self._admin(actor)
+                    return self._runtime_result(candidate, 'paused', _runtime_now)
+                if cursor['next_end'] > latest_ms:
+                    return self._runtime_result(state, 'waiting', _runtime_now)
+                end = datetime.fromtimestamp(cursor['next_end']/1000, timezone.utc)
+            facts = (await self.service.async_get_statistics_hours(actor, hours=1, end=end)
+                     if end is not None else
+                     await self.service.async_get_statistics_hours(actor, hours=168 if backfill else 1))
             await self._guard(facts, share)
+            if _runtime_now is not None and facts.get('measurement_ready') is not True:
+                return self._runtime_result(state, 'source_pending', _runtime_now)
             candidate, plan = await self.service.coordinator._async_run_cpu(partial(
                 merge_facts, state, facts, self.service.entry_id))
             await self._guard(facts, share)
@@ -254,7 +319,7 @@ class EnergyStatisticsPublisher:
                     verification_plan, state, facts))
                 await self._guard(facts, share)
                 if not view:
-                    return self._summary(state)
+                    return await self._complete_runtime(state, facts, share, _runtime_now)
                 if self.recorder is None:
                     self.recorder = NativeStatisticsRecorder(self.hass)
                 existing = await self.recorder.async_metadata([row['statistic_id'] for row in view])
@@ -263,7 +328,7 @@ class EnergyStatisticsPublisher:
                 matched = await self.recorder.async_verify(view)
                 await self._guard(facts, share)
                 if matched:
-                    return self._summary(state)
+                    return await self._complete_runtime(state, facts, share, _runtime_now)
                 # Explicit refresh also repairs removed/changed native rows,
                 # using only the durable owned ledger, not annual source IO.
                 candidate = probe
@@ -289,4 +354,4 @@ class EnergyStatisticsPublisher:
             await self._save(confirmed)
             self._state = confirmed
             await self._guard(facts, share)
-            return self._summary(confirmed)
+            return await self._complete_runtime(confirmed, facts, share, _runtime_now)

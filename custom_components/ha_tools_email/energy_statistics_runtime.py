@@ -20,6 +20,8 @@ class EnergyStatisticsRuntime:
         self._publisher = self._consent = None
         self._control = self._requested = False
         self._paused = False
+        self._retry = False
+        self._retry_after = 15
         lanes = hass.data.setdefault(DOMAIN, {}).setdefault('energy_statistics_runtime_lanes', {})
         self._lane = lanes.setdefault(entry_id, {'task': None, 'next': None, 'completed': None})
 
@@ -28,7 +30,15 @@ class EnergyStatisticsRuntime:
         if share is None or not share['enabled']:
             return {'state': 'disabled', 'last_completed_hour': None}
         expected = (share['author'], share['epoch'], state['revision'])
+        cursor = state.get('runtime')
         completed = self._lane['completed']
+        if cursor is not None and cursor['consent'] == list(expected):
+            if cursor['paused']:
+                return {'state': 'paused', 'last_completed_hour':
+                        datetime.fromtimestamp(cursor['last_end']/1000, timezone.utc).isoformat()
+                        if cursor['last_end'] is not None else None}
+            completed = ((expected, datetime.fromtimestamp(cursor['last_end']/1000, timezone.utc))
+                         if cursor['last_end'] is not None else None)
         return {'state': 'paused' if self._paused or not self.running else
                 'active' if self._consent == expected else 'starting',
                 'last_completed_hour': completed[1].isoformat()
@@ -82,7 +92,8 @@ class EnergyStatisticsRuntime:
         if not self.running or self._consent is None:
             return
         now = self._clock().astimezone(timezone.utc)
-        boundary = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        boundary = (now+timedelta(seconds=self._retry_after) if self._retry else
+                    now.replace(minute=0, second=0, microsecond=0)+timedelta(hours=1))
         schedule = self._schedule
         if schedule is None:
             from homeassistant.helpers.event import async_track_point_in_utc_time
@@ -116,19 +127,27 @@ class EnergyStatisticsRuntime:
                 hour = self._clock().astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
                 token = (consent, hour)
                 if self._lane['completed'] != token:
-                    # Kernel alone selects the last completed hour and repeats
-                    # fresh author/dataset/source/normalization/policy guards.
-                    await publisher.async_refresh(consent[0], backfill=False, expected_share=consent)
+                    # Durable kernel cursor selects one exact hour, including
+                    # delayed measurements across a UTC boundary or reload.
+                    result = await publisher.async_refresh_runtime(consent[0], expected_share=consent,
+                        now=self._clock())
                     if self.running:
-                        self._lane['completed'] = token
+                        self._retry = result['retry']
+                        self._retry_after = result['retry_after']
+                        if result['status'] == 'paused':
+                            self._paused, self._consent = True, None
+                        if result['completed_end'] is not None:
+                            self._lane['completed'] = (consent, datetime.fromisoformat(result['completed_end']))
             except asyncio.CancelledError:
                 # Owner never cancels this task: doing so could abandon raw I/O.
                 self._consent = None
                 raise
             except RuntimeError as error:
                 # A pending native import can settle after its first readback.
-                # Retry only at the next hour, using the same persisted author.
-                if str(error) not in ('statistics_readback_unconfirmed', 'energy_statistics_busy'):
+                # The same durable hour/author is retried with one short timer.
+                self._retry = str(error) in ('statistics_readback_unconfirmed', 'energy_statistics_busy',
+                                            'energy_analysis_busy', 'energy_pricing_busy')
+                if not self._retry:
                     self._paused = True
                     self._consent = None
                 self._requested = False

@@ -26,6 +26,7 @@ from .composer import async_get_energy_metadata
 from .const import DOMAIN
 from .energy import _source_signature
 from .energy_analysis import EnergyAnalysisAccumulator
+from .energy_measurements import measurement_evidence
 from .energy_comparison_stream import PairedComparisonAccumulator
 from .energy_comparison_chart import unknown_comparison_chart
 from .energy_comparisons import compare_daily_mean7
@@ -582,7 +583,7 @@ class EnergyAnalysisService:
         finally:
             self._pending -= 1
 
-    async def async_get_statistics_hours(self, user_id, *, hours=1):
+    async def async_get_statistics_hours(self, user_id, *, hours=1, end=None):
         """Native-admin internal producer; no cache, reports or background actor."""
         if type(hours) is not int or hours not in (1, 168) or type(user_id) is not str:
             raise ValueError('invalid_statistics_request')
@@ -606,7 +607,14 @@ class EnergyAnalysisService:
                 now = self._clock()
                 if now.utcoffset() is None:
                     raise ValueError('aware_statistics_clock_required')
-                end = now.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+                latest = now.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+                if end is None:
+                    end = latest
+                elif (type(end) is not datetime or end.utcoffset() is None
+                        or end.timestamp() % 3600 or end > latest
+                        or end-timedelta(hours=hours) < latest-timedelta(hours=168)):
+                    raise ValueError('invalid_statistics_window')
+                end = end.astimezone(timezone.utc)
                 start = end-timedelta(hours=hours)
                 configuration, period, context = self._capture_statistics(start.isoformat(), end.isoformat(),
                     self._actor_signature(user_id))
@@ -630,13 +638,21 @@ class EnergyAnalysisService:
                     consumer_domain=configuration['consumer_domain'], include_statistics_hours=True), guard)
                 chunk = await async_read_energy_chunk(self.hass, configuration, start, end, guard=guard)
                 await guard()
-                await self._cpu(partial(accumulator.add_chunk, chunk['grid'], start, end,
-                    consumer_snapshot=chunk['consumers']), guard)
+                def accept():
+                    accumulator.add_chunk(chunk['grid'], start, end, consumer_snapshot=chunk['consumers'])
+                    # Reuse verified interval evidence, never raw status/counts or prices.
+                    snapshots = [chunk['grid']]
+                    if configuration['consumers']:
+                        snapshots.append(chunk['consumers'])
+                    return all(measurement_evidence(snapshot, start, end)['coverage']['complete']
+                               for snapshot in snapshots)
+                measurement_ready = await self._cpu(accept, guard)
                 del chunk
                 def finish():
                     accumulator.finish()
                     facts = accumulator.statistics_hours()
                     facts['context'].update(deepcopy(context))
+                    facts['measurement_ready'] = measurement_ready
                     facts['publication_policy_signature'] = _digest(policy['policy'])
                     facts['active_tariff_id'] = state['book'].get('active_tariff_id') if state['book'] else None
                     facts['area_labels'] = {row['area_id']: row['area_name']

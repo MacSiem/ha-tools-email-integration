@@ -48,13 +48,16 @@ def statistic_id(identity):
 
 
 def empty_state():
-    return {'schema': 1, 'revision': 0, 'share': None, 'series': {}, 'pending': None}
+    return {'schema': 1, 'revision': 0, 'share': None, 'series': {}, 'pending': None, 'runtime': None}
 
 
 def validate_state(raw, entry_id):
     if raw is None:
         return empty_state()
-    if (type(raw) is not dict or set(raw) != {'schema', 'revision', 'share', 'series', 'pending'}
+    # Additive schema1 upgrade: legacy consent/history has no invented cursor.
+    if type(raw) is dict and set(raw) == {'schema', 'revision', 'share', 'series', 'pending'}:
+        raw = {**raw, 'runtime': None}
+    if (type(raw) is not dict or set(raw) != {'schema', 'revision', 'share', 'series', 'pending', 'runtime'}
             or type(raw['schema']) is not int or raw['schema'] != 1 or type(raw['revision']) is not int or raw['revision'] < 0
             or type(raw['series']) is not dict or len(raw['series']) > MAX_SERIES):
         raise ValueError('invalid_statistics_ledger')
@@ -92,6 +95,17 @@ def validate_state(raw, entry_id):
                 or not set(pending['series']) <= set(raw['series'])
                 or any(raw['series'][sid]['identity']['epoch'] != share['epoch'] for sid in pending['series'])):
             raise ValueError('invalid_statistics_intent')
+    cursor = raw['runtime']
+    if cursor is not None:
+        if (share is None or type(cursor) is not dict
+                or set(cursor) != {'consent', 'next_end', 'last_end', 'paused'}
+                or cursor['consent'] != [share['author'], share['epoch'], raw['revision']]
+                or type(cursor['paused']) is not bool
+                or type(cursor['next_end']) is not int or cursor['next_end'] <= 0 or cursor['next_end'] % 3600000
+                or cursor['last_end'] is not None and (type(cursor['last_end']) is not int
+                    or cursor['last_end'] <= 0 or cursor['last_end'] % 3600000
+                    or cursor['next_end'] != cursor['last_end']+3600000)):
+            raise ValueError('invalid_statistics_cursor')
     return deepcopy(raw)
 
 
