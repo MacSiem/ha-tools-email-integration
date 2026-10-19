@@ -11,6 +11,8 @@ from uuid import uuid4
 from .energy_statistics_ledger import digest, validate_state, merge_facts, make_plan, verification_plan
 from .energy_statistics_recorder import NativeStatisticsRecorder, metadata_unit
 
+EVENT_STATISTICS_SHARE_CHANGED = 'ha_tools_email_statistics_share_changed'
+
 GLOBAL_WARNING = ('Native Recorder statistics are readable by all authenticated HA users. '
     'Disabling sharing stops future writes; it does not remove or restrict published history.')
 
@@ -139,6 +141,23 @@ class EnergyStatisticsPublisher:
             'active_epoch': share['epoch'] if share else None,
             'dataset': deepcopy(share['binding']) if share else None, 'catalog': catalog}
 
+    @staticmethod
+    def _runtime_share(state):
+        share = state['share']
+        return ((share['author'], share['epoch'], state['revision'])
+                if share and share['enabled'] else None)
+
+    async def async_runtime_context(self):
+        """Internal consent only; no source/Recorder I/O and no invented actor."""
+        self._check()
+        async with self._lock:
+            state = await self._load()
+            self._check()
+            return self._runtime_share(state)
+
+    def _runtime_changed(self):
+        self.hass.bus.async_fire(EVENT_STATISTICS_SHARE_CHANGED, {})
+
     async def async_status(self, actor):
         await self._admin(actor)
         async with self._lock:
@@ -178,6 +197,7 @@ class EnergyStatisticsPublisher:
             candidate = deepcopy(state); candidate.update(share=share, revision=state['revision']+1)
             await self._save(candidate)
             self._state = candidate
+            self._runtime_changed()
             await self._guard(facts, share)
             return self._summary(candidate)
 
@@ -191,6 +211,7 @@ class EnergyStatisticsPublisher:
             await self._admin(actor)
             await self._save(candidate)
             self._state = candidate
+            self._runtime_changed()
             await self._admin(actor)
             return self._summary(candidate)
 
@@ -202,7 +223,7 @@ class EnergyStatisticsPublisher:
                     or metadata_unit(meta) != row['record']['identity']['currency']):
                 raise PermissionError('statistics_foreign_metadata')
 
-    async def async_refresh(self, actor, *, backfill=False, acknowledge_current_membership=False):
+    async def async_refresh(self, actor, *, backfill=False, acknowledge_current_membership=False, expected_share=None):
         await self._admin(actor)
         if type(backfill) is not bool or backfill and acknowledge_current_membership is not True:
             raise ValueError('statistics_backfill_current_snapshot_ack_required')
@@ -212,6 +233,8 @@ class EnergyStatisticsPublisher:
         async with self._lock:
             state = await self._load()
             share = state['share']
+            if expected_share is not None and self._runtime_share(state) != expected_share:
+                raise RuntimeError('statistics_consent_changed')
             if not share or not share['enabled']:
                 return self._summary(state)
             if actor != share['author']:
