@@ -134,7 +134,12 @@ class EnergyStatisticsPublisher:
                     'price_basis': row['identity']['price_basis'], 'epoch': row['identity']['epoch'],
                     'current_dataset': bool(share and row['identity']['epoch'] == share['epoch'])}
                    for sid, row in sorted(state['series'].items())]
-        return {'enabled': bool(share and share['enabled']), 'revision': state['revision'],
+        runtime = self.hass.data.get('ha_tools_email', {}).get('energy_statistics_runtime')
+        automation = (runtime.public_status(state)
+            if getattr(runtime, 'entry_id', None) == self.service.entry_id
+            else {'state': 'unavailable' if share and share['enabled'] else 'disabled',
+                  'last_completed_hour': None})
+        return {'automation': automation, 'enabled': bool(share and share['enabled']), 'revision': state['revision'],
             'reader_scope': 'all_authenticated_ha_users', 'warning': GLOBAL_WARNING,
             'membership_mode': 'current_snapshot', 'pending': state['pending'] is not None,
             'author_user_id': share['author'] if share else None,

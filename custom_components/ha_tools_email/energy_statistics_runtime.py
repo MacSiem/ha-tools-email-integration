@@ -19,8 +19,20 @@ class EnergyStatisticsRuntime:
         self._timer = self._unsubscribe = None
         self._publisher = self._consent = None
         self._control = self._requested = False
+        self._paused = False
         lanes = hass.data.setdefault(DOMAIN, {}).setdefault('energy_statistics_runtime_lanes', {})
         self._lane = lanes.setdefault(entry_id, {'task': None, 'next': None, 'completed': None})
+
+    def public_status(self, state):
+        share = state['share']
+        if share is None or not share['enabled']:
+            return {'state': 'disabled', 'last_completed_hour': None}
+        expected = (share['author'], share['epoch'], state['revision'])
+        completed = self._lane['completed']
+        return {'state': 'paused' if self._paused or not self.running else
+                'active' if self._consent == expected else 'starting',
+                'last_completed_hour': completed[1].isoformat()
+                if completed is not None and completed[0] == expected else None}
 
     def async_start(self):
         self.running = True
@@ -93,8 +105,10 @@ class EnergyStatisticsRuntime:
                 if not self.running:
                     return
                 if control:
+                    self._paused = False
                     self._consent = consent
                 elif consent != self._consent:
+                    self._paused = True
                     self._consent = None  # Never adopt another author from a tick.
                 if consent is None or self._consent is None:
                     self._disarm()
@@ -115,10 +129,12 @@ class EnergyStatisticsRuntime:
                 # A pending native import can settle after its first readback.
                 # Retry only at the next hour, using the same persisted author.
                 if str(error) not in ('statistics_readback_unconfirmed', 'energy_statistics_busy'):
+                    self._paused = True
                     self._consent = None
                 self._requested = False
             except Exception:
                 # Revoke/source/dataset errors require explicit reauthorization.
+                self._paused = True
                 self._consent = None
                 self._requested = False
             finally:
