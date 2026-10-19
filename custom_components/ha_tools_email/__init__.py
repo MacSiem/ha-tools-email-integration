@@ -204,6 +204,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     bucket['energy_snapshot'] = coordinator
     registry, service = None, None
     association = EnergySourceDeviceAssociation(hass, entry)
+    platforms_forwarded = False
     try:
         registry = RegistryMembership(hass, lambda revision: hass.bus.async_fire(
             f'{DOMAIN}_energy_analysis_updated', {'registry_revision': revision}))
@@ -212,6 +213,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         registry.start()
         await coordinator.async_start()
         await hass.config_entries.async_forward_entry_setups(entry, ['sensor', 'binary_sensor'])
+        platforms_forwarded = True
         bucket['energy_source_device'] = association
         await association.async_start()
         await async_reload_schedules(hass)
@@ -230,6 +232,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                            ('energy_snapshot', coordinator)):
             if current.get(key) is owned:
                 current.pop(key, None)
+        if platforms_forwarded:
+            # Core setup-error cleanup does not unload forwarded platforms.
+            # A later association/scheduler failure must remove their entities.
+            await hass.config_entries.async_unload_platforms(entry, ['sensor', 'binary_sensor'])
         raise
     return True
 
