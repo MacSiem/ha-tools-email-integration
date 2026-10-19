@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1] / 'custom_components/ha_tools_email'
 
 class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
     def fixture(self, *, fail=None, unload=True):
-        created = {'coordinator': [], 'registry': [], 'service': [], 'association': [], 'native': [],
+        created = {'coordinator': [], 'registry': [], 'service': [], 'association': [], 'native': [], 'statistics_runtime': [],
                    'platforms': {name: False for name in ('sensor', 'binary_sensor', 'button', 'event', 'calendar')}, 'unload_calls': []}
         events = []
         class Coordinator:
@@ -78,6 +78,14 @@ class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
             def async_stop(self):
                 self.running = False
                 self._unsubscribers.clear()
+        class StatisticsRuntime:
+            def __init__(self, hass, entry_id):
+                self.running, self.stopped = False, False
+                created['statistics_runtime'].append(self)
+            def async_start(self):
+                self.running = True
+            def async_stop(self):
+                self.running, self.stopped = False, True
         async def ensure(hass):
             pass
         async def reload_schedules(hass):
@@ -113,7 +121,8 @@ class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
                                     ('registry_adapter', 'RegistryMembership', Registry),
                                     ('analysis_service', 'EnergyAnalysisService', Service),
                                     ('energy_source_device', 'EnergySourceDeviceAssociation', Association),
-                                    ('email_native', 'EmailNativeCoordinator', Native)]:
+                                    ('email_native', 'EmailNativeCoordinator', Native),
+                                    ('energy_statistics_runtime', 'EnergyStatisticsRuntime', StatisticsRuntime)]:
             mod = types.ModuleType('lifecycle_fixture.' + filename); setattr(mod, name, cls); mods[mod.__name__] = mod
         return namespace, hass, types.SimpleNamespace(entry_id='synthetic'), created, events, mods
 
@@ -135,6 +144,7 @@ class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([('ha_tools_email_energy_analysis_updated', {'registry_revision': 7})], events)
             self.assertTrue(await ns['async_unload_entry'](hass, entry))
             self.assertTrue(service.stopped)
+            self.assertTrue(made['statistics_runtime'][0].stopped)
             self.assertFalse(registry.active)
             self.assertFalse(made['coordinator'][0].running)
             self.assertNotIn('energy_analysis', bucket)
@@ -174,6 +184,7 @@ class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(made['registry'][0].active)
         self.assertTrue(made['coordinator'][0].running)
         self.assertTrue(made['native'][0].running)
+        self.assertTrue(made['statistics_runtime'][0].running)
         self.assertEqual(2, len(made['native'][0]._unsubscribers))
         association = made['association'][0]
         self.assertTrue(association.running)

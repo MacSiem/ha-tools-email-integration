@@ -71,7 +71,9 @@ class Source:
         self.user = SimpleNamespace(is_admin=True, is_active=True)
         async def user(_): return self.user
         async def cpu(job): return job()
-        self.hass = SimpleNamespace(data={}, auth=SimpleNamespace(async_get_user=user))
+        self.events = []
+        self.hass = SimpleNamespace(data={}, auth=SimpleNamespace(async_get_user=user),
+            bus=SimpleNamespace(async_fire=lambda event, data: self.events.append((event, data))))
         self.coordinator = SimpleNamespace(_async_run_cpu=cpu)
     def _check_running(self):
         if not self.running: raise RuntimeError('unloaded')
