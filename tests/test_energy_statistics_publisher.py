@@ -277,27 +277,27 @@ class PublisherTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({'EUR'}, {rec.metadata[sid]['unit_of_measurement'] for sid in old_ids})
         self.assertEqual({'PLN'}, {rec.metadata[sid]['unit_of_measurement'] for sid in current})
 
-    async def test_disabled_pending_can_only_resume_same_authorized_dataset(self):
+    async def test_disabled_pending_is_archived_and_fresh_consent_uses_new_epoch(self):
         src, store, rec, p = self.fixture(); await self.enable(p)
         rec.fail_readback = True
         with self.assertRaises(RuntimeError): await p.async_refresh('admin')
+        old = copy.deepcopy(store.data); old_rows = copy.deepcopy(rec.rows)
         await p.async_disable('admin', expected_revision=1)
         count, reads = rec.enqueues, src.reads
         await p.async_refresh('admin')
         self.assertEqual(count, rec.enqueues); self.assertEqual(reads, src.reads)
+        self.assertIsNone(store.data['pending'])
+        archive = copy.deepcopy(store.data['archived_intents'])
+        self.assertEqual(old['pending'], {key: archive[0][key] for key in ('epoch', 'series', 'clear')})
         prepared = await p.async_prepare('admin')
-        original = src.facts['context']['source_signature']
-        src.facts['context']['source_signature'] = 'different'
-        different = await p.async_prepare('admin')
-        with self.assertRaises(RuntimeError):
-            await p.async_enable('admin', different['proposal'], expected_revision=2,
-                acknowledge_global=True, acknowledge_current_membership=True)
-        src.facts['context']['source_signature'] = original
-        await p.async_enable('admin', prepared['proposal'], expected_revision=2,
+        result = await p.async_enable('admin', prepared['proposal'], expected_revision=2,
             acknowledge_global=True, acknowledge_current_membership=True)
+        self.assertNotEqual(old['share']['epoch'], result['active_epoch'])
         rec.fail_readback = False
         await p.async_refresh('admin')
         self.assertIsNone(store.data['pending'])
+        self.assertEqual(archive, store.data['archived_intents'])
+        self.assertEqual(old_rows, {sid: rec.rows[sid] for sid in old_rows})
 
     async def test_cancelled_durable_write_keeps_shared_reload_lane_until_complete(self):
         src, store, rec, p = self.fixture(); await self.enable(p)
