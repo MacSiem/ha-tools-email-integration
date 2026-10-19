@@ -1,5 +1,7 @@
 """W28/D-T through real HA entity platforms, registries and Recorder statistics."""
+import asyncio
 from copy import deepcopy
+from dataclasses import fields
 from datetime import datetime, timedelta, timezone
 from functools import partial
 
@@ -13,6 +15,27 @@ from tests_ha.test_ha_runtime import _setup
 from tests_ha.test_energy_runtime import profile
 
 pytestmark = pytest.mark.asyncio
+
+
+async def _async_recorder_barrier(hass, instance):
+    """Unconditional FIFO commit marker, including a task already dequeued.
+
+    async_block_till_done's empty-queue fast path can return while Recorder is
+    executing a StatisticsTask. Wait behind that task without checking emptiness.
+    """
+    from homeassistant.components.recorder.tasks import SynchronizeTask
+
+    names = {field.name for field in fields(SynchronizeTask)}
+    if 'future' in names:  # Core 2026.10
+        marker = hass.loop.create_future()
+        instance.queue_task(SynchronizeTask(marker))
+        await marker
+    elif 'event' in names:  # Core 2024.7
+        marker = asyncio.Event()
+        instance.queue_task(SynchronizeTask(marker))
+        await marker.wait()
+    else:
+        raise AssertionError('Unsupported Recorder SynchronizeTask contract')
 
 
 def records(hass, entry):
@@ -131,7 +154,7 @@ async def test_native_registry_source_change_and_preferences_poll_without_manage
     freezer.tick(timedelta(seconds=31))
     async_fire_time_changed(hass, datetime.now(timezone.utc))
     await hass.async_block_till_done()
-    fallbacks = [device for device in dr.async_get(hass).devices.values()
+    fallbacks = [device for device in dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
                  if (DOMAIN, f'{entry.entry_id}_energy') in device.identifiers]
     assert len(fallbacks) == 1
     fallback = fallbacks[0]
@@ -181,7 +204,7 @@ async def test_native_daily_total_statistics_metadata_reset_and_signed_sum(hass,
         for listener in tuple(coordinator._listeners):
             listener()
         await hass.async_block_till_done()
-        await instance.async_block_till_done()
+        await _async_recorder_barrier(hass, instance)
         return hass.states.get(cost_id)
 
     first = await publish(beginning + timedelta(minutes=1), 10, beginning)
@@ -205,14 +228,18 @@ async def test_native_daily_total_statistics_metadata_reset_and_signed_sum(hass,
         (next_day + timedelta(minutes=1), -1, next_day),
     ]):
         state = await publish(instant, value, reset)
+        assert float(state.state) == value
+        assert state.attributes['last_reset'] == reset.isoformat()
         period = instant.replace(minute=instant.minute - instant.minute % 5, second=0, microsecond=0)
         freezer.move_to(period + timedelta(minutes=5, seconds=1))
         instance.queue_task(StatisticsTask(period, False))
-        await instance.async_block_till_done()
+        await _async_recorder_barrier(hass, instance)
     rows = await instance.async_add_executor_job(partial(statistics_during_period,
         hass, beginning, next_day + timedelta(minutes=5), {cost_id}, '5minute', None,
         {'sum', 'state', 'last_reset'}))
     assert [row['sum'] for row in rows[cost_id]] == pytest.approx([0, -12, -13])
+    assert [row['start'] for row in rows[cost_id]] == [beginning.timestamp(),
+        (beginning + timedelta(minutes=5)).timestamp(), next_day.timestamp()]
     unknown = await publish(next_day + timedelta(minutes=6), None, next_day)
     assert unknown.state == 'unavailable'
     zero = await publish(next_day + timedelta(minutes=7), 0, next_day)
