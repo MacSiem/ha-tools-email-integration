@@ -73,8 +73,8 @@ _CSS = ('body{margin:0;background:#eef2f7;color:#202a38;font:14px Arial,sans-ser
         '.axis td{padding:3px 0;border:0;font-size:12px;white-space:normal}'
         '.flow-source{margin-top:10px}.flow-source td,.flow-source th{padding:4px}'
         '.bar-track{background:#e4e9f0}.bar-track td{padding:0;border:0;height:7px;line-height:7px}'
-        '.bar-fill,.zone-0{background:#2877cb}.zone-1{background:#8553b9}'
-        '.zone-2{background:#c16a18}.zone-3{background:#167d73}.unmeasured{background:#7b8595}'
+        '.bar-fill,.zone-expensive{background:#2877cb}.zone-cheap{background:#25824b}'
+        '.zone-unknown,.unmeasured{background:#7b8595}'
         '[data-section="source-times"]{font-size:12px}'
         '@media(max-width:420px){.kpi-card{display:block;width:100%!important;box-sizing:border-box}'
         '.kpi-card table{table-layout:auto}.kpi-card .kpi-number{font-size:18px}'
@@ -83,9 +83,8 @@ _CSS = ('body{margin:0;background:#eef2f7;color:#202a38;font:14px Arial,sans-ser
         '.report{background:#1b1f26}.header,.period td{background:#284c80;color:#fff}'
         'th,.kpi-card table{background:#272f3d;color:#edf1f7}'
         '.kpi-card table,td{border-color:#485468}.note,.kpi-label{color:#bdc7d6}'
-        '.bar-track{background:#353d49}.bar-fill,.zone-0{background:#68aaff}'
-        '.zone-1{background:#ba8ee7}.zone-2{background:#edaa63}'
-        '.zone-3{background:#59c9b6}.unmeasured{background:#a6afbc}}')
+        '.bar-track{background:#353d49}.bar-fill,.zone-expensive{background:#68aaff}'
+        '.zone-cheap{background:#65ce8c}.zone-unknown,.unmeasured{background:#a6afbc}}')
 
 # Public producer metadata is useful in CSV; it is not the reading order of a mail.
 _PRIVATE = frozenset(('context', 'user_id', 'user_ids', 'auth', 'credentials',
@@ -554,11 +553,19 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     chart = snapshot.get('chart') or {}
     bins = chart.get('bins') or []
     high = maximum(bins)
+    # The public profile uses zone.id; measured rows use version_id + zone_id.
+    # Conflicting/missing classifications cannot establish a semantic colour.
     colors = {}
-    for item in bins:
-        for zone_row in (item.get('zone_breakdown') or {}).get('zones') or []:
-            identity = (zone_row.get('version_id'), zone_row.get('zone_id'))
-            colors.setdefault(identity, 'zone-' + str(len(colors) % 4))
+    for rate in snapshot.get('rates') or []:
+        profile = rate.get('profile') or {}
+        for zone_row in profile.get('zones') or []:
+            identity = (rate.get('version_id'), zone_row.get('id'))
+            if not all(isinstance(value, str) and value for value in identity):
+                continue
+            classification = zone_row.get('classification')
+            color = ('zone-' + classification if classification in ('cheap', 'expensive')
+                     and profile.get('dynamic') is None else 'zone-unknown')
+            colors[identity] = color if identity not in colors or colors[identity] == color else 'zone-unknown'
     timeline_title = tr('Pomiary w czasie', 'Measured timeline')
     text_parts.append('\n' + timeline_title)
     html_parts.append('<table data-section="timeline" class="timeline" role="presentation"><caption>'
@@ -568,9 +575,9 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         height = height if height is not None else 0
         proof = item.get('zone_breakdown') or {}
         zones = proof.get('zones') or []
-        color = ''
+        color = 'zone-unknown'
         if proof.get('status') == 'ready' and len(zones) == 1 and zones[0].get('complete') is True:
-            color = colors[(zones[0].get('version_id'), zones[0].get('zone_id'))]
+            color = colors.get((zones[0].get('version_id'), zones[0].get('zone_id')), 'zone-unknown')
         full_label = amount(('chart', 'bins', index, 'start'))
         point_value = amount(('chart', 'bins', index, 'kwh'))
         html_parts.append('<td class="chart-column" data-bin="' + str(index) + '" title="'
@@ -629,7 +636,14 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
             ranking_values.append([caption + ' · ' + name, energy,
                 exact((*parts, 'recorded_kwh')), money + (' ' + money_unit if money_unit else '')])
             brief = compact_number(item.get('kwh'), energy)
-            html_parts.append('<tr><th scope="row">' + escape(name) + '</th><td>' + escape(brief)
+            html_name = name
+            if parts[:2] == ('groups', 'floors'):
+                captured = item.get('name') or names['floors'].get(parts[-1])
+                if captured and captured != parts[-1]:
+                    html_name = str(captured)
+                elif parts[-1] == '__no_floor__':
+                    html_name = tr('Bez piętra', 'No floor')
+            html_parts.append('<tr><th scope="row">' + escape(html_name) + '</th><td>' + escape(brief)
                 + '</td><td>' + escape(money) + ' ' + escape(money_unit) + '</td></tr>')
             width = geometry(item.get('kwh'), ceiling)
             if width is not None:
