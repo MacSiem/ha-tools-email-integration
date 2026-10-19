@@ -48,7 +48,7 @@ def statistic_id(identity):
 
 
 def empty_state():
-    return {'schema': 1, 'revision': 0, 'share': None, 'series': {}, 'pending': None, 'runtime': None}
+    return {'schema': 1, 'revision': 0, 'share': None, 'series': {}, 'pending': None, 'runtime': None, 'archived_intents': []}
 
 
 def validate_state(raw, entry_id):
@@ -57,7 +57,13 @@ def validate_state(raw, entry_id):
     # Additive schema1 upgrade: legacy consent/history has no invented cursor.
     if type(raw) is dict and set(raw) == {'schema', 'revision', 'share', 'series', 'pending'}:
         raw = {**raw, 'runtime': None}
-    if (type(raw) is not dict or set(raw) != {'schema', 'revision', 'share', 'series', 'pending', 'runtime'}
+    # Read-only additive migration: old unknown intent stays active until an
+    # explicit Disable archives it. Loading never writes Store or Recorder.
+    if type(raw) is dict and set(raw) == {'schema', 'revision', 'share', 'series', 'pending', 'runtime'}:
+        raw = {**raw, 'archived_intents': []}
+    if type(raw) is dict and raw.get('archived_intents') is None:
+        raw = {**raw, 'archived_intents': []}
+    if (type(raw) is not dict or set(raw) != {'schema', 'revision', 'share', 'series', 'pending', 'runtime', 'archived_intents'}
             or type(raw['schema']) is not int or raw['schema'] != 1 or type(raw['revision']) is not int or raw['revision'] < 0
             or type(raw['series']) is not dict or len(raw['series']) > MAX_SERIES):
         raise ValueError('invalid_statistics_ledger')
@@ -95,6 +101,24 @@ def validate_state(raw, entry_id):
                 or not set(pending['series']) <= set(raw['series'])
                 or any(raw['series'][sid]['identity']['epoch'] != share['epoch'] for sid in pending['series'])):
             raise ValueError('invalid_statistics_intent')
+    archives = raw['archived_intents']
+    if type(archives) is not list or len(archives) > MAX_SERIES:
+        raise ValueError('invalid_statistics_archives')
+    epochs = set()
+    for archive in archives:
+        if (type(archive) is not dict or set(archive) != {'epoch', 'series', 'clear', 'binding', 'author'}
+                or type(archive['epoch']) is not str or not archive['epoch'] or archive['epoch'] in epochs
+                or type(archive['author']) is not str or not archive['author']
+                or type(archive['binding']) is not dict
+                or any(type(archive[k]) is not list for k in ('series', 'clear'))
+                or any(type(sid) is not str for k in ('series', 'clear') for sid in archive[k])
+                or len(set(archive['series'])) != len(archive['series'])
+                or not set(archive['clear']) <= set(archive['series'])
+                or not set(archive['series']) <= set(raw['series'])
+                or any(raw['series'][sid]['identity']['epoch'] != archive['epoch'] for sid in archive['series'])
+                or share is not None and share['enabled'] and share['epoch'] == archive['epoch']):
+            raise ValueError('invalid_statistics_archives')
+        epochs.add(archive['epoch'])
     cursor = raw['runtime']
     if cursor is not None:
         if (share is None or type(cursor) is not dict

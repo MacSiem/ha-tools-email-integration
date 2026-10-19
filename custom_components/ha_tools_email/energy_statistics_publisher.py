@@ -143,6 +143,7 @@ class EnergyStatisticsPublisher:
         return {'automation': automation, 'enabled': bool(share and share['enabled']), 'revision': state['revision'],
             'reader_scope': 'all_authenticated_ha_users', 'warning': GLOBAL_WARNING,
             'membership_mode': 'current_snapshot', 'pending': state['pending'] is not None,
+            'unconfirmed_history': len(state['archived_intents']),
             'author_user_id': share['author'] if share else None,
             'active_epoch': share['epoch'] if share else None,
             'dataset': deepcopy(share['binding']) if share else None, 'catalog': catalog}
@@ -194,8 +195,8 @@ class EnergyStatisticsPublisher:
             if binding != proposal:
                 raise ValueError('statistics_proposal_changed')
             previous = state['share']
-            same = previous is not None and previous['binding'] == binding
-            if state['pending'] is not None and not same:
+            same = previous is not None and previous['enabled'] and previous['binding'] == binding
+            if state['pending'] is not None and (not same or previous['author'] != actor):
                 raise RuntimeError('statistics_pending_dataset_requires_recovery')
             share = {'enabled': True, 'author': actor, 'binding': binding,
                      'epoch': previous['epoch'] if same else uuid4().hex}
@@ -213,8 +214,15 @@ class EnergyStatisticsPublisher:
             state = await self._load(); self._revision(state, expected_revision)
             candidate = deepcopy(state); candidate['revision'] += 1
             candidate['runtime'] = None
+            if candidate['pending'] is not None:
+                candidate['archived_intents'].append({**deepcopy(candidate['pending']),
+                    'binding': deepcopy(candidate['share']['binding']),
+                    'author': candidate['share']['author']})
+                candidate['pending'] = None
             if candidate['share'] is not None:
                 candidate['share']['enabled'] = False
+            candidate = await self.service.coordinator._async_run_cpu(partial(
+                validate_state, candidate, self.service.entry_id))
             await self._admin(actor)
             await self._save(candidate)
             self._state = candidate
