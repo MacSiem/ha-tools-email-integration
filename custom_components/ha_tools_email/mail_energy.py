@@ -18,7 +18,7 @@ _LABELS = {
     'comparison': ('Porównanie', 'Comparison'), 'hour_chart': ('Zużycie w ciągu doby', 'Consumption throughout the day'),
     'daily_chart': ('Zużycie w kolejnych dniach', 'Daily consumption'),
     'chart_note': ('kolor = strefa taryfy; kreska = poprzedni okres; luka = brak pomiaru', 'colour = tariff zone; tick = previous period; gap = missing reading'),
-    'comparison_note': ('ten sam zakres pomiaru; % przy wystarczającym pokryciu', 'matching measurement window; % requires sufficient coverage'),
+    'comparison_note': ('ten sam zakres godzin; % przy wystarczającym pokryciu', 'matching hours; % requires sufficient coverage'),
     'zones': ('Strefy taryfy', 'Tariff zones'), 'devices': ('Urządzenia', 'Devices'),
     'devices_note': ('4 największe, pozostałe zmierzone i niezmierzone (import − suma urządzeń)', 'Top 4, other measured and unmeasured (import − devices)'),
     'rooms': ('Pokoje', 'Rooms'), 'rooms_note': ('suma urządzeń w obszarach HA; bez rozdzielania niezmierzonej energii', 'Devices grouped by HA area; unmeasured energy is not allocated'),
@@ -250,7 +250,7 @@ class _View:
     def comparison_row(self, description, baseline, value, cls):
         # Keep the baseline quantity and unit together, while the description may
         # wrap independently. Do not change the cost rows' typography.
-        return (f'<tr><td class="tx bd" style="padding:8px 8px 8px 0;border-top:1px solid {L["bd"]};font:400 14px/20px {FONT};color:{L["tx"]}">{E(description)} · '
+        return (f'<tr><td class="tx bd" style="padding:8px 0;border-top:1px solid {L["bd"]};font:400 14px/20px {FONT};color:{L["tx"]}">{E(description)} '
                 f'<span class="tx2 comparison-baseline" style="font:400 12px/16px {FONT};color:{L["tx2"]};white-space:nowrap">{E(baseline)}</span></td>'
                 f'<td class="{cls} bd" align="right" valign="top" style="padding:8px 0;border-top:1px solid {L["bd"]};font:700 14px/20px {FONT};color:{L[cls]};white-space:nowrap">{E(value)}</td></tr>')
 
@@ -262,14 +262,25 @@ class _View:
             cls = 'warn' if known and delta > 0 else 'good' if known and delta < 0 else 'tx2'
             arrow = '▲ ' if known and delta > 0 else '▼ ' if known and delta < 0 else ''
             change = self.change(c)
-            change_text = f' ({change})' if change else f' · {self.tr("partial")}' if not c.get('coverage_ok') or not self.complete else ''
-            value = arrow + self.n(delta, 2 if self.kind == 'day' else 1, signed=True) + (' kWh' if known else '') + change_text
+            change_text = f' ({change})' if change else f' ({self.tr("partial")})' if not c.get('coverage_ok') or not self.complete else ' (—)'
+            quantity = self.n(delta, 2 if self.kind == 'day' else 1, signed=True) + ' kWh' if known else '—'
+            value = arrow + quantity + change_text
             description = f'vs {self.comparison_label(c)}'
             baseline = self.energy(c.get("kwh"), "tile")
             label = f'{description} · {baseline}'
             rows.append(self.comparison_row(description, baseline, value, cls))
             self.lines.append(f'- {label}: {value}')
         return self.table(rows) if rows else section(paragraph(self.tr('no_data')))
+
+    def chart_note(self):
+        daily = self.kind != 'day'
+        unit = ('kWh na dzień' if daily else 'kWh na godzinę') if self.lang == 'pl' else ('kWh per day' if daily else 'kWh per hour')
+        previous = self.comparison_label(self.comparisons[0]) if self.comparisons else self.tr('previous')
+        text = f'{unit}, kolor = strefa taryfy, kreska = {previous}' if self.lang == 'pl' else f'{unit}, colour = tariff zone, tick = {previous}'
+        points = _items(self.m.get('daily' if daily else 'hourly'))
+        if any(not _numeric(point.get(key)) for point in points for key in ('kwh', 'prev_kwh')):
+            text += '; luka = brak pomiaru' if self.lang == 'pl' else '; gap = missing reading'
+        return text
 
     def chart(self):
         daily = self.kind != 'day'
@@ -330,7 +341,8 @@ class _View:
             tip = f'{label}: {self.energy(current)}'
             cols.append(f'<td data-energy-bar="{idx}" title="{E(tip)}" valign="bottom" width="{100 / len(points):.4f}%" style="padding:0 1px"><table role="presentation" width="100%" style="table-layout:fixed">{"".join(segments)}</table></td>')
             visible = daily and (len(points) <= 7 or idx % 7 == 0) or not daily and date is not None and date.hour in (0, 6, 12, 18)
-            labels.append((idx, label)) if visible else None
+            axis_label = f'{date.hour:02d}' if not daily and date is not None and self.cycle not in ('12', 'h12', 12) and date_key not in repeated else label
+            labels.append((idx, axis_label)) if visible else None
             self.lines.append(f'- {tip}{"*" if p.get("zone") == "cheap" else ""} · {p.get("zone") or ""} · {self.tr("previous")}: {self.energy(previous)}')
         # Whitespace between inline groups remains a line-break opportunity;
         # each marker and its label/date travel together in mail clients.
@@ -338,7 +350,18 @@ class _View:
         for z in self.zones:
             color = self.color(z.get('id'))
             dot = f'<span class="{color}" style="display:inline-block;width:10px;height:10px;border-radius:3px;background-color:{L[color]}"></span>'
-            legend_groups.append(f'<span class="legend-group" style="display:inline-block;max-width:100%;white-space:normal;overflow-wrap:anywhere;margin-right:8px">{dot}&nbsp;{E(self.zone_label(z))} {E(z.get("hours_label"))}</span>')
+            label = self.zone_label(z)
+            hours = str(z.get('hours_label') or '')
+            # The standard cheap/expensive labels match the reference legend;
+            # custom/unknown labels retain their exact name and explicit hours.
+            standard_cheap = color == 'cheap' and label.casefold() in ('tania', 'cheap')
+            standard_expensive = color == 'exp' and label.casefold() in ('droga', 'expensive')
+            if standard_cheap or standard_expensive:
+                label += ' strefa' if self.lang == 'pl' else ' zone'
+                hours = f' ({hours})' if standard_cheap and hours else ''
+            elif hours:
+                hours = ' ' + hours
+            legend_groups.append(f'<span class="legend-group" style="display:inline-block;max-width:100%;white-space:normal;overflow-wrap:anywhere;margin-right:8px">{dot}&nbsp;{E(label)}{E(hours)}</span>')
         previous_label = self.comparison_label(self.comparisons[0]) if self.comparisons else self.tr('previous')
         legend_groups.append(f'<span class="legend-group" style="display:inline-block;max-width:100%;white-space:normal;overflow-wrap:anywhere;margin-right:8px">{_previous_tick(legend=True)}&nbsp;{E(previous_label)}</span>')
         legend = ' '.join(legend_groups)
@@ -357,7 +380,7 @@ class _View:
             finish = (found.astimezone(ZoneInfo('UTC')) + timedelta(hours=1)).astimezone(self.tz) if found else None
             label = f'{self.clock(found)}–{self.clock(finish, end=True)}' if found else str(peak)
             peak_text = f'{self.tr("peak")}: {label} · {self.energy(self.totals.get("peak_kwh"))}'
-            output += paragraph(peak_text)
+            output += paragraph(peak_text, line_height=16)
             self.lines.append(peak_text)
         return section(output, padding='4px 24px 0')
 
@@ -370,15 +393,18 @@ class _View:
                 width = min(100, max(0, share * 100))
                 segments.append(f'<td class="{cls}" width="{width:.4f}%" height="12" bgcolor="{L[cls]}" style="height:12px;background-color:{L[cls]};line-height:0;font-size:0">&nbsp;</td>')
             label = self.zone_label(z)
+            label = label[:1].upper() + label[1:]
             hours = str(z.get('hours_label') or '')
             values = (self.energy(z.get('kwh')), self.share(share), self.money(z.get('cost')))
             dot = f'<span class="{cls}" style="display:inline-block;width:10px;height:10px;border-radius:3px;background-color:{L[cls]}"></span>'
-            cells = f'<td class="tx bd" style="padding:8px 0;border-top:1px solid {L["bd"]};font:400 14px/20px {FONT};color:{L["tx"]}">{dot}&nbsp;{E(label)} <span class="tx2 zone-hours" style="font:400 12px/16px {FONT};color:{L["tx2"]}">{E(hours)}</span></td>'
+            cells = f'<td class="tx bd zone-label" style="padding:8px 0;border-top:1px solid {L["bd"]};font:400 14px/20px {FONT};color:{L["tx"]}">{dot}&nbsp;{E(label)} <span class="tx2 zone-hours" style="font:400 12px/16px {FONT};color:{L["tx2"]}">{E(hours)}</span></td>'
             for idx, value in enumerate(values):
-                cells += f'<td class="tx bd zone-value" align="right" style="padding:8px 0 8px 6px;border-top:1px solid {L["bd"]};font:{700 if idx == 0 else 400} 14px/20px {FONT};color:{L["tx"]}">{E(value)}</td>'
+                text_color = 'tx2' if idx == 1 else 'tx'
+                cells += f'<td class="{text_color} bd zone-value" align="right" style="padding:8px 0;border-top:1px solid {L["bd"]};font:{700 if idx == 0 else 400} 14px/20px {FONT};color:{L[text_color]}">{E(value)}</td>'
             rows.append('<tr>' + cells + '</tr>')
             self.lines.append(f'- {label} ({hours}): {" · ".join(values)}')
-        bar = f'<table role="presentation" width="100%" style="border-radius:6px"><tr>{"".join(segments)}</tr></table>' if segments else ''
+        gap = '<td width="4" style="width:4px;line-height:0;font-size:0">&nbsp;</td>'
+        bar = f'<table role="presentation" width="100%" style="border-radius:6px"><tr>{gap.join(segments)}</tr></table>' if segments else ''
         return section(bar + f'<table role="presentation" width="100%" style="margin-top:8px">{"".join(rows)}</table>' if rows else paragraph(self.tr('no_data')), padding='4px 24px 0')
 
     def rank_block(self, items, *, rooms=False):
@@ -387,39 +413,51 @@ class _View:
             items = [i for i in items if not _numeric(i.get('kwh')) or i['kwh'] > 0 or self.is_unmeasured(i) and self.double]
         maximum = max((i['kwh'] for i in items if _numeric(i.get('kwh')) and i['kwh'] > 0), default=1)
         rows = []
-        for i in items:
+        expanded = [(row, included) for parent in items for row, included in
+                    [(parent, False)] + [(child, True) for child in _items(parent.get('children'))]]
+        for i, included in expanded:
             blocked = self.double and self.is_unmeasured(i)
             cls = 'unm' if self.is_unmeasured(i) else 'room' if rooms else i.get('color') if i.get('color') in ('d1', 'd2', 'd3', 'd4', 'other') else 'other'
             value = i.get('kwh')
-            width = min(100, max(1.5, value / maximum * 100)) if _numeric(value) and value > 0 and not blocked else 0
+            width = min(100, max(1.5, value / maximum * 100)) if _numeric(value) and value > 0 and not blocked and not included else 0
             bar = (f'<table role="presentation" width="100%"><tr><td class="{cls}" width="{width:.4f}%" height="10" bgcolor="{L[cls]}" style="height:10px;background-color:{L[cls]};line-height:0;font-size:0">&nbsp;</td><td class="grid" style="background-color:{L["grid"]};line-height:0;font-size:0">&nbsp;</td></tr></table>') if width else ''
             name = self.item_name(i)
+            if included:
+                name = f'↳ {name} ({self.tr("included")})'
+            name_html = E(name)
             if i.get('count') is not None:
                 count = i['count']
                 unit = fmt.plural(count, 'urządzenie' if self.lang == 'pl' else 'device', 'urządzenia' if self.lang == 'pl' else 'devices', 'urządzeń' if self.lang == 'pl' else 'devices', language=self.lang)
-                name += f' ({self.n(count, 0)} {unit})'
+                count_label = f'({self.n(count, 0)} {unit})'
+                name += ' ' + count_label
+                name_html += f' <span class="tx2" style="font:400 12px/16px {FONT};color:{L["tx2"]}">{E(count_label)}</span>'
             values = [self.tr('double') if blocked else self.energy(value), '—' if blocked else self.share(i.get('share')), '—' if blocked else self.money(i.get('cost'))]
-            cells = f'<td class="tx bd rank-name" style="width:34%;padding:8px 8px 8px 0;border-top:1px solid {L["bd"]};font:400 14px/20px {FONT};color:{L["tx"]}">{E(name)}</td><td class="bd bar" style="width:24%;padding:8px 8px 8px 0;border-top:1px solid {L["bd"]}">{bar}</td>'
-            for value, width_, extra, weight in zip(values, (18, 9, 15), (' rank-value', ' hm', ' rank-cost'), (700, 400, 400)):
-                cells += f'<td class="tx bd{extra}" align="right" style="width:{width_}%;padding:8px 0 8px 8px;border-top:1px solid {L["bd"]};font:{weight} 14px/20px {FONT};color:{L["tx"]}">{E(value)}</td>'
-            rows.append('<tr>' + cells + '</tr>')
-            self.lines.append(f'- {name}: {" · ".join(values)}')
-            for child in _items(i.get('children')):
-                detail = f'↳ {self.item_name(child)} ({self.tr("included")}): {self.energy(child.get("kwh"))}'
-                rows.append(f'<tr><td colspan="5">{paragraph(detail)}</td></tr>')
-                self.lines.append('  ' + detail)
+            cells = f'<td class="tx bd rank-name" style="width:34%;padding:8px 8px 8px 0;border-top:1px solid {L["bd"]};font:400 14px/20px {FONT};color:{L["tx"]}">{name_html}</td><td class="bd bar" style="width:24%;padding:8px 8px 8px 0;border-top:1px solid {L["bd"]}">{bar}</td>'
+            for idx, (value, width_, extra, weight) in enumerate(zip(values, (18, 9, 15), (' rank-value', ' hm', ' rank-cost'), (700, 400, 400))):
+                text_color = 'tx2' if idx == 1 else 'tx'
+                padding = '8px 0' if idx == 0 else '8px 0 8px 8px'
+                size = 12 if idx == 1 else 14
+                nowrap = ';white-space:nowrap' if idx != 1 else ''
+                cells += f'<td class="{text_color} bd{extra}" align="right" style="width:{width_}%;padding:{padding};border-top:1px solid {L["bd"]};font:{weight} {size}px/20px {FONT};color:{L[text_color]}{nowrap}">{E(value)}</td>'
+            rows.append(('<tr data-energy-included="true">' if included else '<tr>') + cells + '</tr>')
+            if included:
+                self.lines.append(f'  {name}: {self.energy(i.get("kwh"))}')
+            else:
+                self.lines.append(f'- {name}: {" · ".join(values)}')
         return section('<table role="presentation" width="100%" style="table-layout:fixed">' + ''.join(rows) + '</table>') if rows else section(paragraph(self.tr('no_data')))
 
     def cost_block(self):
         rows = []
         for key, label, bold in (('energy_cost', 'active', False), ('variable_cost', 'variable', False), ('usage_cost', 'usage', True), ('fixed_share', 'fixed', False), ('total_with_fixed', 'total', True)):
             sub = ''
+            fixed_period_label = None
             if key == 'usage_cost':
                 sub = f'{self.tr("effective")} {self.rate(self.totals.get("effective_rate"))}'
             if key == 'fixed_share':
                 days = self.tariff.get('days_in_month')
                 if self.kind == 'day' and self.period.get('complete') is True and _numeric(days):
-                    sub = f'1/{self.n(days, 0)} ' + ('miesiąca' if self.lang == 'pl' else 'of month')
+                    fixed_period_label = f'1/{self.n(days, 0)} ' + ('miesiąca' if self.lang == 'pl' else 'of month')
+                    sub = fixed_period_label
                 else:
                     sub = self.tr('period_share') + ': ' + self.period_label()
                 sub += f' · {self.money(self.tariff.get("fixed_monthly"))} {self.tr("per_month")}'
@@ -427,11 +465,14 @@ class _View:
                 if details:
                     sub += ': ' + details
             value = self.money(self.totals.get(key))
-            rows.append(self.row(self.tr(label), value, bold=bold, sub=sub))
+            display_label = self.tr(label) + (f' — {fixed_period_label}' if fixed_period_label else '')
+            display_sub = sub.partition(' · ')[2] if fixed_period_label else sub
+            rows.append(self.row(display_label, value, bold=bold, sub=display_sub))
             self.lines.append(f'- {self.tr(label)}: {value}' + (f' · {sub}' if sub else ''))
         rate_rows = []
         for zone in _items(self.tariff.get('zones')):
-            label = f'{self.zone_label(zone)} ({zone.get("hours_label") or ""})'
+            zone_label = self.zone_label(zone)
+            label = f'{zone_label[:1].upper() + zone_label[1:]} ({zone.get("hours_label") or ""})'
             components = f'{self.n(zone.get("energy_rate"), 2)} + {self.n(zone.get("variable_rate"), 2)} = '
             total_rate = self.rate(zone.get('rate'))
             value = components + total_rate
@@ -439,12 +480,12 @@ class _View:
             self.lines.append(f'- {label}: {value}')
         basis = self.tariff.get('price_basis', self.m.get('price_basis'))
         basis_label = self.tr(basis) if basis in ('gross', 'net') else self.tr('basis_unknown')
-        rate_note = f'{basis_label}: {self.tr("active").lower()} + {self.tr("variable").lower()} · {self.tr("tariff")} {self.tariff.get("name") or self.tr("no_data")} {self.tr("from")} {self.tariff.get("valid_from") or self.tr("no_data")}'
-        extras = paragraph(rate_note)
+        rate_note = f'{basis_label}: {"energia + dystrybucja" if self.lang == "pl" else "energy + distribution"} · {self.tr("tariff")} {self.tariff.get("name") or self.tr("no_data")} {self.tr("from")} {self.tariff.get("valid_from") or self.tr("no_data")}'
+        extras = paragraph(rate_note, line_height=16)
         self.lines.append(rate_note)
         for alt in _items(self.m.get('alternatives')):
             delta = alt.get('delta')
-            difference = f' · {self.money(abs(delta))} {self.tr("more" if delta > 0 else "less")}' if _numeric(delta) and delta != 0 else ''
+            difference = f' — {"o " if self.lang == "pl" else ""}{self.money(abs(delta))} {self.tr("more" if delta > 0 else "less")}' if _numeric(delta) and delta != 0 else ''
             note = f'{self.tr("alternative")} {alt.get("tariff") or self.tr("no_data")} ({self.rate(alt.get("rate"))}): {self.money(alt.get("cost"))}{difference}. {self.tr("informational")}'
             extras += paragraph(note, margin='8px 0 0')
             self.lines.append(note)
@@ -499,14 +540,17 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
                 (9, 'costs', None, v.cost_block)]
     for index, heading, note, renderer in sections:
         v.lines += ['', v.tr(heading)]
-        blocks.append(f'<!-- block:{index} -->' + h2(v.tr(heading), v.tr(note) if note else '') + renderer())
+        note_text = v.chart_note() if note == 'chart_note' else v.tr(note) if note else ''
+        blocks.append(f'<!-- block:{index} -->' + h2(v.tr(heading), note_text) + renderer())
     explanation = f'{v.tr("explain")} {v.tr("timezone")}: {timezone_name}.'
     if v.double:
         explanation += ' ' + v.tr('double') + '.'
     safe_url = safe_external_url(external_url)
-    closing = '<!-- block:10 -->' + hr() + section(paragraph(v.tr('read') + ' ' + explanation, margin='12px 0 0'), padding='0 24px')
+    reading_note = (f'<p class="tx2" style="margin:12px 0 0;font:400 12px/18px {FONT};color:{L["tx2"]}">'
+                    f'<b>{E(v.tr("read"))}</b> {E(explanation)}</p>')
+    closing = '<!-- block:10 -->' + hr(padding='24px 24px 0') + section(reading_note, padding='0 24px')
     closing += '<!-- block:11 -->' + section(button(safe_url, v.tr('open')))
-    closing += '<!-- block:12 -->' + section(paragraph(v.tr('footer'), kind='tx3', margin='16px 0 0'), padding='0 24px 24px')
+    closing += '<!-- block:12 -->' + section(paragraph(v.tr('footer'), kind='tx3', margin='16px 0 0', line_height=16), padding='0 24px 24px')
     v.lines += ['', v.tr('read') + ' ' + explanation]
     if safe_url:
         v.lines.append(v.tr('open') + ': ' + safe_url)

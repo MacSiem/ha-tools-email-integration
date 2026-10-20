@@ -37,12 +37,16 @@ a {{ text-decoration:none; }}
   .kpigap {{ display:none !important; }}
   .h1 {{ font-size:20px !important; line-height:26px !important; }}
   .hm {{ display:none !important; }}
+  .bar {{ width:20% !important; }}
+  .rank-name, .zone-label {{ overflow-wrap:anywhere; }}
+}}
+/* Preserve the compact fallback for exceptionally narrow mail viewports. */
+@media screen and (max-width: 360px) {{
   .bar {{ width:14% !important; }}
   .rank-name {{ width:38% !important; }}
-  .zone-hours {{ display:block !important; }}
   .zone-value {{ font-size:12px !important; }}
-  .rank-value {{ width:24% !important; font-size:12px !important; padding-left:4px !important; }}
-  .rank-cost {{ width:24% !important; font-size:12px !important; padding-left:4px !important; }}
+  .rank-value {{ width:24% !important; font-size:12px !important; padding-left:4px !important; white-space:normal !important; }}
+  .rank-cost {{ width:24% !important; font-size:12px !important; padding-left:4px !important; white-space:normal !important; }}
 }}
 @media (prefers-color-scheme: dark) {{
 {dark}
@@ -59,8 +63,8 @@ def h2(t, sub=''):
     s = f'<p class="tx2" style="margin:2px 0 0;font:400 12px/16px {FONT};color:{L["tx2"]}">{E(sub)}</p>' if sub else ''
     return f'<tr><td class="pad" style="padding:24px 24px 8px"><p class="tx" style="margin:0;font:700 16px/22px {FONT};color:{L["tx"]}">{E(t)}</p>{s}</td></tr>'
 
-def hr():
-    return f'<tr><td class="pad" style="padding:0 24px"><table role="presentation" width="100%"><tr><td class="grid" height="1" style="height:1px;line-height:1px;font-size:0;background-color:{L["bd"]}">&nbsp;</td></tr></table></td></tr>'
+def hr(*, padding='0 24px'):
+    return f'<tr><td class="pad" style="padding:{padding}"><table role="presentation" width="100%"><tr><td class="grid" height="1" style="height:1px;line-height:1px;font-size:0;background-color:{L["bd"]}">&nbsp;</td></tr></table></td></tr>'
 
 def kpi_cell(label, value, unit, note, note_cls='tx2'):
     return (f'<td class="kpi chipbg" valign="top" style="width:32%;padding:12px 14px;background-color:{L["chip"]};border-radius:10px">'
@@ -84,8 +88,8 @@ def safe_external_url(value):
     return value
 
 
-def paragraph(text, *, kind='tx2', margin='4px 0 0'):
-    return (f'<p class="{kind}" style="margin:{margin};font:400 12px/18px {FONT};'
+def paragraph(text, *, kind='tx2', margin='4px 0 0', line_height=18):
+    return (f'<p class="{kind}" style="margin:{margin};font:400 12px/{line_height}px {FONT};'
             f'color:{L[kind]}">{E(text)}</p>')
 
 

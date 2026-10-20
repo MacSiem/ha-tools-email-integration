@@ -129,6 +129,9 @@ MAX_PRICE_MINUTES = 2048 * 60
 MAX_PRICE_WORK = 2_000_000
 MAX_PENDING_PRICE_JOBS = 4
 MAX_PENDING_CPU_JOBS = 8
+# Recorder compilation may settle after the cutoff tick. Recheck only missing
+# suffixes on the existing cadence; accepted prefixes stay cached.
+NATIVE_SHORT_RETRY_SECONDS = 30
 
 
 def _price_query_input(queries, profile):
@@ -444,12 +447,13 @@ class EnergySnapshotCoordinator:
             self._invalidate()
             raise RuntimeError('energy_sources_changed')
 
-    async def _async_native_short(self, sensors, metadata, start, end, cutoff, tz, signature, guard):
+    async def _async_native_short(self, sensors, metadata, start, end, cutoff, tz, signature, guard, *, now):
         """Read only newly completed real five-minute cells on this native lane.
 
         A successful prefix is reused, including across tariff edits. Missing
-        evidence is unknown and attempted once per cutoff; the next cutoff may
-        retry that missing suffix. No user actor or last report DTO is involved.
+        evidence stays unknown and can be read again after a bounded delay in
+        the same cutoff: Recorder may commit after its boundary tick. No new
+        timer, user actor, report DTO or fabricated measurement is involved.
         """
         from .energy_native_short import async_read_short_statistics, merge_raw, normalized_cells
         ids = list(dict.fromkeys(row['entity_id'] for row in sensors))
@@ -463,8 +467,8 @@ class EnergySnapshotCoordinator:
         cache = self._short_state
         if (cache is None or cache['key'] != key or cache['through'] > cutoff
                 or (cache['attempted'] is not None and cache['attempted'] > cutoff)):
-            cache = {'key': key, 'through': end, 'raw': {}, 'attempted': None, 'rows': []}
-        if cache['attempted'] == cutoff:
+            cache = {'key': key, 'through': end, 'raw': {}, 'attempted': None, 'retry_at': None, 'rows': []}
+        if cache['attempted'] == cutoff and (cache['through'] == cutoff or now < cache['retry_at']):
             self._short_measurement = deepcopy(cache['rows'])
             return
         await self._async_check_source_access(guard, sensors)
@@ -485,7 +489,8 @@ class EnergySnapshotCoordinator:
         await self._async_check_source_access(guard, sensors)
         accepted = len(rows) == (cutoff - end).total_seconds() // 300 and all(row['kwh'] is not None for row in rows)
         self._short_state = {'key': key, 'through': cutoff if accepted else cache['through'],
-            'raw': merged if accepted else cache['raw'], 'attempted': cutoff, 'rows': rows}
+            'raw': merged if accepted else cache['raw'], 'attempted': cutoff,
+            'retry_at': None if accepted else now + timedelta(seconds=NATIVE_SHORT_RETRY_SECONDS), 'rows': rows}
         self._short_measurement = deepcopy(rows)
 
     async def async_refresh(self, *, now=None, guard=None):
@@ -530,7 +535,7 @@ class EnergySnapshotCoordinator:
                 self._measurement, self._measurement_key, self._measurement_at = measured, key, now
             from .energy_native_short import cutoff_at
             tail_cutoff = cutoff_at(now)
-            await self._async_native_short(sensors, metadata, start, end, tail_cutoff, tz, key[3], guard)
+            await self._async_native_short(sensors, metadata, start, end, tail_cutoff, tz, key[3], guard, now=now)
             self._check_running()
             state = await self._async_snapshot_tariff()
             self._check_running()
