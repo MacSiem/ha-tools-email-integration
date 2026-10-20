@@ -17,6 +17,18 @@ class Mail136Test(unittest.TestCase):
         self.assertEqual(1, len(nodes), 'Missing report section: ' + name)
         return nodes[0]
 
+    def test_complete_mail_reads_as_a_report_and_keeps_audit_in_csv(self):
+        result = self.render()
+        visible = fixture.ReportDOM(result['html']).root.text()
+        for technical in ('Own current measurements', 'Full baseline period energy', 'Measurement 24',
+                          'Consumer calendar period', 'Details · Comparisons'):
+            self.assertNotIn(technical, visible)
+            self.assertNotIn(technical, result['text'])
+        for title in ('Measured timeline', 'From', 'To', 'Selected comparisons', 'Rooms', 'Cost and rates'):
+            self.assertIn(title, visible)
+        for path in ('comparisons.previous.full_baseline_kwh', 'chart.bins.23.start'):
+            self.assertIn(path, result['csv'])
+
     def test_mail136_kpi_uses_full_producer_comparison_and_effective_price(self):
         self.s = json.loads((fixture.ROOT / 'tests/fixtures/energy-report-schema2-v53.json').read_text())
         c = self.s['comparisons']['previous']
