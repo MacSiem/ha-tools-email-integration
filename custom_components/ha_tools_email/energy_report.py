@@ -86,6 +86,8 @@ _CSS = ('body{margin:0;background:#eef2f7;color:#202a38;font:14px Arial,sans-ser
         '.bar-track{background:#e4e9f0}.bar-track td{padding:0;border:0;height:7px;line-height:7px}'
         '.bar-fill,.zone-expensive{background:#2877cb}.zone-cheap{background:#25824b}'
         '.zone-unknown,.unmeasured{background:#7b8595}'
+        '.device-0{background:#eb6834}.device-1{background:#6250d6}.device-2{background:#e87ba4}'
+        '.device-3{background:#eda100}.device-4{background:#718096}'
         '[data-section="source-times"]{font-size:12px}'
         '@media(max-width:420px){.kpi-card{display:block;width:100%!important;box-sizing:border-box}'
         '.kpi-card table{table-layout:auto}.kpi-card .kpi-number{font-size:18px}'
@@ -95,7 +97,9 @@ _CSS = ('body{margin:0;background:#eef2f7;color:#202a38;font:14px Arial,sans-ser
         'th,.kpi-card table{background:#272f3d;color:#edf1f7}'
         '.kpi-card table,td{border-color:#485468}.note,.kpi-label{color:#bdc7d6}'
         '.bar-track{background:#353d49}.bar-fill,.zone-expensive{background:#68aaff}'
-        '.zone-cheap{background:#65ce8c}.zone-unknown,.unmeasured{background:#a6afbc}}')
+        '.zone-cheap{background:#65ce8c}.zone-unknown,.unmeasured{background:#a6afbc}'
+        '.device-0{background:#d95926}.device-1{background:#9085e9}.device-2{background:#d55181}'
+        '.device-3{background:#c98500}.device-4{background:#a6afbc}}')
 
 # Public producer metadata is useful in CSV; it is not the reading order of a mail.
 _PRIVATE = frozenset(('context', 'user_id', 'user_ids', 'auth', 'credentials',
@@ -571,8 +575,11 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                 if (None in (current, full, main, baseline, full_baseline) or current != full or full != main
                         or baseline != full_baseline or number(c.get('delta_kwh'), signed=True) is None):
                     continue
-                result = comparison_names[kind] + ': ' + amount(('comparisons', kind, 'delta_kwh'))
-                result += ' · ' + exact(('comparisons', kind, 'percent')) + '%'
+                delta = number(c['delta_kwh'], signed=True)
+                direction = tr('Spadek', 'Decrease') if delta < 0 else tr('Wzrost', 'Increase') if delta > 0 else tr('Bez zmian', 'No change')
+                result = comparison_names[kind] + ': ' + direction + ' ' + amount(('comparisons', kind, 'delta_kwh'))
+                if number(c.get('percent'), signed=True) is not None:
+                    result += ' · ' + exact(('comparisons', kind, 'percent')) + '%'
                 return result
         return tr('Brak porównywalnego pełnego okresu bazowego', 'No comparable full-period baseline')
 
@@ -702,6 +709,9 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
             return (1, Decimal(0), str(pair[0]))
 
     ranking_values = []
+    # Match shared-card identity order; changes in rank never recolor a device.
+    device_colors = {identity: 'device-' + str(min(index, 4))
+                     for index, identity in enumerate(sorted(groups.get('devices') or {}))}
 
     def ranking(caption, entries, *, section):
         # One semantic table for the complete ranking, not one table per device.
@@ -729,7 +739,8 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                 + '</td><td>' + escape(money) + ' ' + escape(money_unit) + '</td></tr>')
             width = geometry(item.get('kwh'), ceiling)
             if width is not None:
-                color = 'unmeasured' if parts[-1] == 'unmeasured' else ''
+                color = ('unmeasured' if parts[-1] == 'unmeasured' else device_colors.get(parts[-1], '')
+                         if parts[:2] == ('groups', 'devices') else '')
                 html_parts.append('<tr><td colspan="3"><table role="presentation" class="bar-track" width="100%"><tr>'
                     + '<td class="bar-fill ' + color + '" width="' + str(width) + '%" style="width:' + str(width)
                     + '%">&#160;</td><td width="' + str(100-width) + '%"></td></tr></table></td></tr>')
@@ -829,7 +840,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         html_parts.append('<table data-section="flow-' + side + '-composition"><caption>' + escape(caption) + '</caption>')
         if ready and total is not None and total > 0:
             positive = [(name, parts, item, color) for name, parts, item, color in entries if number(item.get('kwh')) > 0]
-            html_parts.append('<tr><td><table role="presentation" class="bar-track" aria-hidden="true"><tr>')
+            html_parts.append('<tr><td colspan="2"><table role="presentation" class="bar-track" width="100%" aria-hidden="true"><tr>')
             for name, parts, item, color in positive:
                 width = format(number(item['kwh']) / total * 100, '.6f').rstrip('0').rstrip('.')
                 html_parts.append('<td data-role="flow-segment" class="' + color + '" width="' + width
@@ -839,7 +850,8 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                 share = compact_number(number(item['kwh']) / total * 100, unknown) + '%'
                 value = name + ': ' + amount((*parts, 'kwh')) + ' · ' + share
                 text_parts.append(value)
-                html_parts.append('<tr><td>' + escape(value) + '</td></tr>')
+                html_parts.append('<tr><td data-role="flow-swatch" width="12" class="' + color
+                    + '" aria-hidden="true">&#160;</td><td>' + escape(value) + '</td></tr>')
         else:
             note = tr('Zerowe zużycie w okresie', 'No energy recorded in this period') if ready and total == 0 else unknown
             text_parts.append(note)
@@ -849,7 +861,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     composition('source', tr('Skąd', 'From'), [(row['label'], ('period_summary', 'zone_breakdown', 'zones', i), row,
         colors.get((row['version_id'], row['zone_id']), 'zone-unknown')) for i, row in enumerate(source_rows)], bool(source_rows))
     composition('destination', tr('Dokąd', 'To'), [(name, parts, item,
-        'unmeasured' if parts[-1] == 'unmeasured' else 'zone-expensive') for name, parts, item in device_entries], group_ready)
+        'unmeasured' if parts[-1] == 'unmeasured' else device_colors[parts[-1]]) for name, parts, item in device_entries], group_ready)
     ranking(tr('Z sieci do urządzeń', 'From the grid to devices'), device_entries, section='device-ranking')
 
     comparisons = snapshot.get('comparisons') or {}
