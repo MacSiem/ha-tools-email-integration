@@ -144,7 +144,8 @@ class EnergyAnalysisAccumulator:
     """Append contiguous chunks and price the actual whole period exactly once."""
 
     def __init__(self, book, period, context, *, generated_at, consumers=None, membership=None,
-                 consumer_domain='grid_import', patterns_window=None, include_statistics_hours=False):
+                 consumer_domain='grid_import', patterns_window=None, include_statistics_hours=False,
+                 include_report_hours=False):
         _bounded(period, 65536)
         _bounded(context, 65536)
         self._start, self._end = _stamp(period['start']), _stamp(period['end'])
@@ -154,6 +155,11 @@ class EnergyAnalysisAccumulator:
             raise ValueError('statistics_projection_not_configured')
         self._include_statistics_hours = include_statistics_hours
         self._statistics_result = None
+        if type(include_report_hours) is not bool or (include_report_hours and
+                (consumers is None or patterns_window is not None or consumer_domain != 'grid_import')):
+            raise ValueError('report_projection_not_configured')
+        self._include_report_hours = include_report_hours
+        self._report_pricing = None
         self._generated = _stamp(generated_at)
         if self._generated < self._end:
             raise ValueError('future_analysis_measurement')
@@ -175,7 +181,8 @@ class EnergyAnalysisAccumulator:
         self._ids, self._provenance, self._signature = None, None, None
         self._measured_seconds = 0
         self._consumers = (ConsumerPeriod(consumers, membership, consumer_domain, self._book, self._hours,
-                            include_statistics_hours=include_statistics_hours)
+                            include_statistics_hours=include_statistics_hours,
+                            include_report_hours=include_report_hours)
                            if consumers is not None else None)
         self._result = None
 
@@ -243,10 +250,13 @@ class EnergyAnalysisAccumulator:
         fingerprint = _digest({'rows': self._rows, 'coverage': price_coverage})
         pricing, active = None, None
         if self._book is not None:
-            pricing = price_book(self._book, self._rows, price_coverage)
+            pricing = price_book(self._book, self._rows, price_coverage,
+                                 include_report_projection=self._include_report_hours)
             fingerprint = pricing['measurement_fingerprint']
             active = next((row for row in pricing['tariffs']
                            if row['tariff_id'] == pricing['active_tariff_id']), None)
+        if self._include_report_hours:
+            self._report_pricing = deepcopy(active)
         cost_keys = ('energy_cost', 'variable_cost', 'legacy_combined_cost', 'usage_cost',
                      'fixed_cost', 'total_cost', 'effective_price', 'currency', 'price_basis')
         totals = {key: active.get(key) if active is not None else None for key in cost_keys}
@@ -326,3 +336,40 @@ class EnergyAnalysisAccumulator:
         if self._statistics_result is None:
             raise ValueError('statistics_projection_incomplete')
         return deepcopy(self._statistics_result)
+
+    def report_projection(self):
+        """Detached exact producer facts for model/1; no public schema2 change.
+
+        Opt in at construction. Call finish first. A collector may concatenate
+        accepted projections for a larger calendar period, preserving identity.
+        Native HA pricing can supply the same normalized contract independently;
+        missing fixed fees must remain None.
+        """
+        if not self._include_report_hours or self._result is None:
+            raise ValueError('report_projection_not_ready')
+        active = self._report_pricing
+        groups = self._consumers.report_hours()
+        prices = active['rows'] if active else []
+        result = []
+        for index, (row, group) in enumerate(zip(self._rows, groups)):
+            if (row['from'], row['to']) != (group['from'], group['to']):
+                raise ValueError('report_projection_interval_mismatch')
+            price = prices[index] if index < len(prices) else {}
+            known = active and active['compatible'] and price.get('available')
+            costs = deepcopy(price.get('costs', {})) if known else {}
+            parts = ([costs.get(key) for key in ('energy_cost', 'variable_cost')]
+                     if price.get('rate_semantics') == 'components' else [costs.get('legacy_combined_cost')])
+            costs['usage_cost'] = (str(sum((Decimal(value) for value in parts if value is not None), Decimal(0)))
+                                   if known and all(value is not None for value in parts) else None)
+            result.append({**deepcopy(row), 'devices': group['devices'], 'costs': costs,
+                'zone': price.get('zone') if price.get('zoneAttribution') == 'single' else None,
+                'currency': active.get('currency') if known else None,
+                'price_basis': active.get('price_basis') if known else None})
+        if len(result) != len(self._rows) or len(groups) != len(self._rows):
+            raise ValueError('report_projection_incomplete')
+        return {'hours': result, 'fixed_share': active.get('report_fixed_share') if active else None,
+                'currency': active.get('currency') if active else None,
+                'price_basis': active.get('price_basis') if active else None,
+                'fees': deepcopy(active['fees']) if active else None,
+                'rates': deepcopy(active['rates']) if active else [],
+                'measurement_fingerprint': self._result['measurement_fingerprint']}

@@ -512,7 +512,7 @@ def _fees(versions, start, end):
             'complete': named_complete, 'days': parts}, totals, known, identities
 
 
-def _price(tariff, rows, coverage, fingerprint):
+def _price(tariff, rows, coverage, fingerprint, *, include_report_projection=False):
     versions = tariff['versions']
     start, end = _stamp(coverage['from']), _stamp(coverage['to'])
     fee, fee_totals, fee_known, identities = _fees(versions, start, end)
@@ -597,6 +597,9 @@ def _price(tariff, rows, coverage, fingerprint):
             **rounded, 'usage_cost': _money(usage), 'fixed_cost': _money(fixed),
             'total_cost': _money(total), 'effective_price': _money(total / kwh) if total is not None and kwh > 0 else None,
             'known_costs': {k: _money(v) if compatible and not overlapping else None for k, v in sums.items()},
+            **({'report_fixed_share': str(sum(fee_totals.values(), Decimal(0)))
+                if compatible and all(fee_known.values()) else None}
+               if include_report_projection else {}),
             'fees': fee if compatible else None, 'rows': priced, 'issues': issues,
             'rates': [{'version_id': v['id'], 'valid_from': v.get('valid_from'), 'valid_to': v.get('valid_to'),
                        'validity_clock': v.get('validity_clock', 'civil'),
@@ -607,13 +610,15 @@ def _price(tariff, rows, coverage, fingerprint):
                        'provenance': v.get('provenance', 'configured_valid_from')} for v in versions]}
 
 
-def price_book(book, rows, coverage):
+def price_book(book, rows, coverage, *, include_report_projection=False):
     """Price identical household intervals under every tariff, without activation.
 
     coverage has from/to (aware ISO or epoch milliseconds), optional complete
     bool and arbitrary JSON source/revision provenance included in fingerprint.
     A service must supply verified measurements; this pure function proves no IO.
     """
+    if type(include_report_projection) is not bool:
+        _fail('invalid_report_projection')
     normalized = validate_tariff_book(book)
     encoded = _bounded({'rows': rows, 'coverage': coverage})
     if not isinstance(rows, list) or len(rows) > MAX_ROWS or any(not isinstance(r, dict) for r in rows):
@@ -634,7 +639,9 @@ def price_book(book, rows, coverage):
     fingerprint = hashlib.sha256(encoded.encode('utf-8')).hexdigest()
     with localcontext() as context:
         context.prec = 40
-        results = [_price(tariff, rows, coverage, fingerprint) for tariff in normalized['tariffs']]
+        results = [_price(tariff, rows, coverage, fingerprint,
+                          include_report_projection=include_report_projection)
+                   for tariff in normalized['tariffs']]
         active = next((r for r in results if r['tariff_id'] == normalized.get('active_tariff_id')), None)
         for result in results:
             comparable = (active is not None and active['total_cost'] is not None and result['total_cost'] is not None

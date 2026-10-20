@@ -39,8 +39,12 @@ def _reconcile(values, target):
 
 
 class ConsumerPeriod:
-    def __init__(self, consumers, membership, domain, book, hours, *, include_statistics_hours=False):
+    def __init__(self, consumers, membership, domain, book, hours, *, include_statistics_hours=False, include_report_hours=False):
         require_statistics_projection(include_statistics_hours, hours)
+        if type(include_report_hours) is not bool or (include_report_hours and
+                (not 0 < hours <= 8784 or len(consumers) * hours > 262144)):
+            raise ValueError('invalid_report_projection_size')
+        self._report_hours = [] if include_report_hours else None
         self._statistics_hours = [] if include_statistics_hours else None
         _bounded({'consumers': consumers, 'membership': membership}, 262144)
         if domain not in ('grid_import', 'site_consumption') or not isinstance(membership, dict):
@@ -111,6 +115,15 @@ class ConsumerPeriod:
         states, issues, partition = deepcopy(self._states), set(self._issues), self._partition
         projected = [] if include_hours else None
         statistics = [] if self._statistics_hours is not None else None
+        report = [] if self._report_hours is not None else None
+        report_members = {sid: [] for sid in self._ids} if report is not None else {}
+        parents = {row['stat_consumption']: row['included_in_stat'] for row in self._config}
+        if report is not None:
+            for candidate in self._ids:
+                ancestor = candidate
+                while ancestor is not None:
+                    report_members[ancestor].append(candidate)
+                    ancestor = parents[ancestor]
         with localcontext() as context:
             context.prec = 40
             for hour in household_rows:
@@ -128,7 +141,7 @@ class ConsumerPeriod:
                 partition = partition and breakdown['status'] == 'ready'
                 issues.update(issue['reason'] for issue in breakdown['issues'])
                 rate = self._rates.resolve_interval(stamp, hour['to']) if self._rates and self._domain == 'grid_import' else None
-                hour_amounts = {} if statistics is not None else None
+                hour_amounts = {} if statistics is not None or report is not None else None
                 for sid, cell in {**breakdown['devices'], REMAINDER: breakdown['unmeasured']}.items():
                     state = states[sid]
                     value, measured = cell['kwh_decimal'], cell.get('measured_kwh_decimal')
@@ -150,6 +163,20 @@ class ConsumerPeriod:
                                 state['amounts'][key] += amount; state['priced'][key] += 1
                     elif rate is not None:
                         issues.add(rate['reason'])
+                if report is not None:
+                    # Pricing above is the sole calculation. Reassemble inclusive
+                    # parent costs from the existing disjoint subtree amounts.
+                    cells = {}
+                    for sid in self._ids:
+                        members = report_members[sid]
+                        costs = {}
+                        for key in COSTS:
+                            parts = [hour_amounts.get(member, {}).get(key) for member in members]
+                            costs[key] = (_text(sum(parts, Decimal(0)))
+                                          if all(part is not None for part in parts) else None)
+                        cells[sid] = {'kwh': breakdown['devices'][sid]['measured_kwh_decimal'],
+                                      'costs': costs}
+                    report.append({'from': stamp, 'to': hour['to'], 'devices': cells})
                 if statistics is not None:
                     statistics.append(group_cost_hour(hour, breakdown, hour_amounts, rate,
                         self._group_membership, self._domain))
@@ -157,6 +184,8 @@ class ConsumerPeriod:
         staged = states, issues, partition, provenance
         if statistics is not None:
             staged = (*staged, statistics)
+        if report is not None:
+            staged = (*staged, report)
         projection = ({'schema': 1, 'consumer_source_ids': sorted(self._ids),
             'consumer_provenance': deepcopy(provenance) if provenance is not None else {},
             'registry_revision': self._membership['revision'], 'membership_mode': 'current_snapshot',
@@ -165,6 +194,11 @@ class ConsumerPeriod:
         return staged, projection
 
     def commit_chunk(self, staged):
+        if self._report_hours is not None:
+            staged, report = staged[:-1], staged[-1]
+            if len(self._report_hours) + len(report) > self._hours:
+                raise ValueError('report_projection_too_large')
+            self._report_hours.extend(report)
         if self._statistics_hours is not None:
             states, issues, partition, provenance, statistics = staged
             if len(self._statistics_hours) + len(statistics) > min(self._hours, MAX_STATISTICS_HOURS):
@@ -173,6 +207,12 @@ class ConsumerPeriod:
             self._states, self._issues, self._partition, self._provenance = states, issues, partition, provenance
         else:
             self._states, self._issues, self._partition, self._provenance = staged
+
+    def report_hours(self):
+        """Internal inclusive facts; default disjoint/cent contract is unchanged."""
+        if self._report_hours is None:
+            raise ValueError('report_projection_not_enabled')
+        return deepcopy(self._report_hours)
 
     def statistics_hours(self):
         """Detached accepted-chunk facts; membership remains a current snapshot."""
