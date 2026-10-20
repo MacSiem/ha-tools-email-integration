@@ -48,11 +48,17 @@ class PrivateActorTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(PermissionError):await h.subject.async_validate_result(result,actor)
         self.assertIsNone(h.subject._cache)
 
-    async def test_authored_schedule_does_not_bypass_feature_allowlist(self):
+    async def test_authored_schedule_rechecks_admin_before_io_with_explicit_allowlist(self):
+        # Canonical feature policy intentionally grants active administrators.
+        # A schedule must still lose access when its real author loses admin.
         h = harness();h.policy['features']={'energy_reports':{'execute':{'mode':'selected_users','user_ids':[]}}}
         actor=h.subject._schedule_actor({'id':'s','kind':'energy_report','author_user_id':'real-admin'},1)
-        with h.patches(),self.assertRaises(PermissionError):
-            await h.subject.async_get_analysis('report_window',actor,purpose='report_execute',_report_window=request(h),_report_model=True)
+        with h.patches():
+            result=await h.subject.async_get_analysis('report_window',actor,purpose='report_execute',_report_window=request(h),_report_model=True)
+            self.assertTrue(await h.subject.async_validate_result(result,actor))
+            h.user.is_admin=False;h.queries.clear()
+            with self.assertRaises(PermissionError):
+                await h.subject.async_get_analysis('report_window',actor,purpose='report_execute',_report_window=request(h),_report_model=True)
         self.assertEqual([],h.queries)
 
     async def test_trusted_automation_inherits_server_policy_without_user_or_fake_schedule(self):
