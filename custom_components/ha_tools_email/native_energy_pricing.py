@@ -4,7 +4,7 @@ No Recorder/HA imports or IO. Caller supplies authorized detached data. Historic
 money comes exclusively from explicitly configured statistic change samples.
 """
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, localcontext
 import re
 
@@ -136,13 +136,16 @@ class NativeCostAccumulator:
     permanently invalidate that source-hour within the current chunk. Structural
     boundary failures raise before updating the cursor or totals.
     """
-    def __init__(self, configuration, period):
+    def __init__(self, configuration, period, *, include_report_hours=False):
         self._configuration = deepcopy(configuration)
         self._start, self._end = _boundary(period['start']), _boundary(period['end'])
         hours = (self._end - self._start).total_seconds() / 3600
         if not 0 < hours <= MAX_PERIOD_HOURS:
             raise ValueError('invalid_period')
         self._hours = int(hours)
+        if type(include_report_hours) is not bool:
+            raise ValueError('invalid_report_projection')
+        self._report_hours = [] if include_report_hours else None
         self._cursor = self._start
         self._sources = self._configuration.get('sources', [])
         if not isinstance(self._sources, list) or len(self._sources) > MAX_SOURCES:
@@ -173,6 +176,7 @@ class NativeCostAccumulator:
         raw = raw if isinstance(raw, dict) else {}
         metadata = metadata if isinstance(metadata, dict) else {}
         subtotal, measured, reason = Decimal(0), 0, None
+        report_cells = {} if self._report_hours is not None else None
         if self._valid:
             for source in self._sources:
                 sid = source.get('cost_statistic_id')
@@ -213,6 +217,8 @@ class NativeCostAccumulator:
                 with localcontext() as context:
                     context.prec = 64
                     subtotal += sum(cells.values(), Decimal(0))
+                if report_cells is not None:
+                    report_cells[source['energy_id']] = cells
                 measured += len(cells)
                 if len(cells) != int(hours):
                     reason = reason or 'incomplete_cost_statistics'
@@ -222,6 +228,23 @@ class NativeCostAccumulator:
         self._measured += measured
         self._reason = self._reason or reason
         self._cursor = last
+        if report_cells is not None:
+            stamp = first
+            while stamp < last:
+                values = [report_cells.get(source['energy_id'], {}).get(stamp) for source in self._sources]
+                with localcontext() as decimal_context:
+                    decimal_context.prec = 64
+                    value = sum(values, Decimal(0)) if values and all(v is not None for v in values) else None
+                self._report_hours.append({'from': stamp.timestamp()*1000,
+                    'to': stamp.timestamp()*1000+3600000,
+                    'usage_cost': _canonical(value) if value is not None else None})
+                stamp += timedelta(hours=1)
+
+    def report_hours(self):
+        """Opt-in raw recorded facts; named components/fixed fees remain unknown."""
+        if self._report_hours is None or self._cursor != self._end:
+            raise ValueError('native_report_projection_not_ready')
+        return {'hours': deepcopy(self._report_hours), 'currency': self._currency}
 
     def finish(self):
         expected = self._hours * len(self._sources)

@@ -152,6 +152,7 @@ class EnergyAnalysisService:
         self._pending = 0
         self._stopped = False
         self._cache = None
+        self._report_colors = None
         self._normalization = None
         self._native_normalization = None
         self._native_metadata = {}
@@ -162,6 +163,7 @@ class EnergyAnalysisService:
         """Synchronous unload fence; running CPU jobs retain their existing lane."""
         self._stopped = True
         self._cache = None
+        self._report_colors = None
         bucket = self.hass.data.get(DOMAIN, {})
         publisher = bucket.get('energy_statistics')
         if getattr(publisher, 'service', None) is self:
@@ -187,7 +189,7 @@ class EnergyAnalysisService:
             currency=getattr(self.hass.config, 'currency', None),
             cost_sensors=self.hass.data.get('energy', {}).get('cost_sensors', {}))
 
-    def _capture(self, kind, anchor=None, comparison=None, *, purpose='analysis'):
+    def _capture(self, kind, anchor=None, comparison=None, *, purpose='analysis', report_model=False, report_mode='so_far', actor_signature=None):
         # Server-owned purpose; never accept a client-selected feature gate.
         if not isinstance(purpose, str) or purpose not in _ACCESS_PURPOSES:
             raise ValueError('invalid_analysis_purpose')
@@ -213,6 +215,12 @@ class EnergyAnalysisService:
         if comparison is not None:
             context.update(comparison_kind=comparison,
                            comparison_signature=_digest(resolved['comparisons'][comparison]))
+        if report_model:
+            from .energy_inputs import report_clock
+            timing = report_clock(self._clock(), zone)
+            context.update(report_model=True, report_mode=report_mode,
+                report_color_as_of=timing['as_of'], report_cutoff=timing['cutoff'],
+                actor_signature=actor_signature)
         return configuration, period, context
 
     def _capture_patterns(self, days):
@@ -345,7 +353,10 @@ class EnergyAnalysisService:
         if context.get('request_kind') is not None:
             raise ValueError('invalid_analysis_request_kind')
         return self._capture(context['period_kind'], context.get('period_anchor'),
-                             context.get('comparison_kind'), purpose=context['access_purpose'])
+                             context.get('comparison_kind'), purpose=context['access_purpose'],
+                             report_model=context.get('report_model', False),
+                             report_mode=context.get('report_mode', 'so_far'),
+                             actor_signature=context.get('actor_signature'))
 
     def _assert_current(self, context):
         _, _, current = self._recapture(context)
@@ -406,6 +417,8 @@ class EnergyAnalysisService:
                 if user is None or not user.is_active or not user.is_admin:
                     raise PermissionError('energy_report_admin_required')
                 self._assert_current(context)
+        if context.get('report_model') and context.get('actor_signature') != self._actor_signature(user_id):
+            raise PermissionError('energy_report_actor_mismatch')
         ids = [row['entity_id'] for row in self._sensors(configuration)]
         feature, operation = _ACCESS_PURPOSES[context['access_purpose']]
         extra = {}
@@ -513,9 +526,15 @@ class EnergyAnalysisService:
         await guard()
         return result
 
-    async def async_get_analysis(self, kind, user_id, *, anchor=None, comparison=None, purpose='analysis', _report_window=None):
+    async def async_get_analysis(self, kind, user_id, *, anchor=None, comparison=None, purpose='analysis', _report_window=None, _report_model=False, _report_mode='so_far'):
         if not isinstance(purpose, str) or purpose not in ('analysis', 'report_read', 'report_execute'):
             raise ValueError('invalid_analysis_purpose')
+        if type(_report_model) is not bool or _report_mode not in ('so_far', 'full'):
+            raise ValueError('invalid_report_model_request')
+        if _report_model and (_report_window is not None or comparison is not None or kind not in ('day', 'week', 'month', 'year')):
+            raise ValueError('invalid_report_model_request')
+        if _report_model:
+            self._actor_signature(user_id)
         if _report_window is not None:
             if type(_report_window) is not ReportWindow or comparison is not None or anchor is not None:
                 raise ValueError('invalid_report_request')
@@ -542,7 +561,9 @@ class EnergyAnalysisService:
                 configuration, period, context = (
                     self._capture_report(_report_window,purpose,self._actor_signature(user_id))
                     if _report_window is not None else
-                    self._capture(kind, anchor, comparison, purpose=purpose))
+                    self._capture(kind, anchor, comparison, purpose=purpose,
+                        report_model=_report_model, report_mode=_report_mode,
+                        actor_signature=self._actor_signature(user_id) if _report_model else None))
                 if _report_window is not None:
                     # Selection is owned by the validated frozen request, never
                     # by the public comparison argument (rejected above).
@@ -565,7 +586,7 @@ class EnergyAnalysisService:
                 key = _digest(context)
                 if self._cache is not None:
                     cached_key, at, cached = self._cache
-                    if cached_key == key and 0 <= monotonic() - at < CACHE_SECONDS:
+                    if cached_key == key and 0 <= monotonic() - at < (60 if _report_model else CACHE_SECONDS):
                         # guard already refreshed all source permissions and units.
                         result = deepcopy(cached)
                         self._assert_current(context)
@@ -577,7 +598,8 @@ class EnergyAnalysisService:
                 accumulator = await self._cpu(partial(EnergyAnalysisAccumulator,
                     deepcopy(state['book']), deepcopy(period), deepcopy(context),
                     generated_at=self._clock(), consumers=deepcopy(configuration['consumers']),
-                    membership=membership, consumer_domain=configuration['consumer_domain']), guard)
+                    membership=membership, consumer_domain=configuration['consumer_domain'],
+                    include_report_hours=_report_model), guard)
                 plan, pair, comparisons, current_day, baseline_accumulator = None, None, None, None, None
                 group_pair, mean_groups, mean_projections = None, None, []
                 active_tariff = (next((row for row in state['book']['tariffs']
@@ -672,7 +694,7 @@ class EnergyAnalysisService:
                                                 configuration['domain_provenance'], comparisons, baseline_accumulator, group_pair, mean_groups), guard)
                 if context.get('native_access'):
                     native = configuration['native_pricing']
-                    cost = await self._cpu(partial(NativeCostAccumulator, native, period), guard)
+                    cost = await self._cpu(partial(NativeCostAccumulator, native, period, include_report_hours=_report_model), guard)
                     ids = list(dict.fromkeys(row['cost_statistic_id'] for row in native['sources']
                                             if row['cost_statistic_id'] is not None))
                     cursor, end = (datetime.fromisoformat(period[k]) for k in ('start', 'end'))
@@ -685,6 +707,14 @@ class EnergyAnalysisService:
                         cursor = stop
                     result = await self._cpu(partial(_finish_native, result, cost, native,
                         deepcopy(self._native_states), self._clock()), guard)
+                if _report_model:
+                    from .energy_inputs import async_collect_inputs
+                    result['report_model'] = await async_collect_inputs(self, configuration,
+                        period, context, accumulator, membership, state['book'], guard,
+                        native=cost if context.get('native_access') else None)
+                    # Include the opt-in flag and detached model in the final hash;
+                    # preserve the legacy period for all validation consumers.
+                    result['snapshot_id'] = _digest({k: v for k, v in result.items() if k != 'snapshot_id'})
                 # No await between this final check, Repair publication, caching and return.
                 self._assert_current(context)
                 if self._energy_repairs_realtime:
@@ -698,6 +728,17 @@ class EnergyAnalysisService:
             raise
         finally:
             self._pending -= 1
+
+    async def async_get_build1_model(self, kind, user_id, *, date=None, mode='so_far', purpose='analysis'):
+        """Additive guarded model DTO; caller validates the outer result after awaits.
+
+        WS should expose this through a new command (e.g. energy_model), keeping
+        the existing energy_report language/timezone/hour_cycle HTML/text/CSV wire.
+        The canonical model is result['report_model']; period/context remain the
+        exact legacy validation envelope, not the model's full calendar period.
+        """
+        return await self.async_get_analysis(kind, user_id, anchor=date, purpose=purpose,
+            _report_model=True, _report_mode=mode)
 
     async def async_get_statistics_hours(self, user_id, *, hours=1, end=None):
         """Native-admin internal producer; no cache, reports or background actor."""
