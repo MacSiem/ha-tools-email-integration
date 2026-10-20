@@ -156,7 +156,7 @@ class EnergyAnalysisAccumulator:
         self._include_statistics_hours = include_statistics_hours
         self._statistics_result = None
         if type(include_report_hours) is not bool or (include_report_hours and
-                (consumers is None or patterns_window is not None or consumer_domain != 'grid_import')):
+                (consumers is None or patterns_window is not None)):
             raise ValueError('report_projection_not_configured')
         self._include_report_hours = include_report_hours
         self._report_pricing = None
@@ -363,6 +363,7 @@ class EnergyAnalysisAccumulator:
                                    if known and all(value is not None for value in parts) else None)
             result.append({**deepcopy(row), 'devices': group['devices'], 'costs': costs,
                 'zone': price.get('zone') if price.get('zoneAttribution') == 'single' else None,
+                'classification': price.get('classification'),
                 'currency': active.get('currency') if known else None,
                 'price_basis': active.get('price_basis') if known else None})
         if len(result) != len(self._rows) or len(groups) != len(self._rows):

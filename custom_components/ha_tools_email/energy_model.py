@@ -239,6 +239,10 @@ def _build_report(inputs):
     projection = inputs['projection']
     config = _tree(inputs.get('consumers', []))
     roots = [sid for sid, parent in config.items() if parent is None]
+    domain = inputs.get('consumer_domain','grid_import')
+    if domain not in ('grid_import','site_consumption'):
+        raise ValueError('invalid_consumer_domain')
+    partitioned = domain == 'grid_import' or not config
     if period['hours'] * max(1, len(config)) > 262144:
         raise ValueError('report_projection_too_large')
     sources = inputs.get('membership', {}).get('sources', {})
@@ -273,14 +277,14 @@ def _build_report(inputs):
         costs = {key: _decimal(raw.get('costs', {}).get(key)) if identity_ok and kwh is not None else None for key in COSTS}
         cells = raw.get('devices', {})
         root_values = [_decimal(cells.get(sid, {}).get('kwh')) for sid in roots]
-        measured = _sum(root_values, empty=ZERO) if raw else None
+        measured = _sum(root_values, empty=ZERO) if raw and partitioned else None
         for sid in config:
             cell = cells.get(sid, {})
             quantity = _decimal(cell.get('kwh'))
             if quantity is not None and quantity < 0:
                 raise ValueError('negative_consumer')
             device_hours[sid].append({'kwh': quantity,
-                'cost': _decimal(cell.get('costs', {}).get('usage_cost')) if identity_ok and quantity is not None else None,
+                'cost': _decimal(cell.get('costs', {}).get('usage_cost')) if identity_ok and quantity is not None and partitioned else None,
                 'eligible': eligible})
         residual = kwh - measured if kwh is not None and measured is not None else None
         if residual is not None and residual < Decimal('-.05'):
@@ -294,7 +298,7 @@ def _build_report(inputs):
         previous_day = (local.month,local.day) if period['kind']=='year' else (local.date()-first_date).days
         previous_value = previous.get((previous_day,local.hour,local.fold),_decimal(raw.get('prev_kwh')))
         hourly.append({'start': local.isoformat(), 'hour': local.hour, 'fold': local.fold,
-            'kwh': kwh, 'zone': raw.get('zone'), **costs, 'cost': costs['usage_cost'],
+            'kwh': kwh, 'zone': raw.get('zone'), 'classification': raw.get('classification'), **costs, 'cost': costs['usage_cost'],
             'measured_kwh': measured, 'prev_kwh': previous_value,
             'partial': bool(raw) and _instant(raw['to']) - instant < timedelta(hours=1),
             'future': not eligible})
@@ -303,7 +307,7 @@ def _build_report(inputs):
     coverage = {'expected_hours': expected, 'measured_hours': measured_hours,
         'ratio': coverage_ratio, 'complete': measured_hours == expected,
         'status': 'complete' if measured_hours == expected else 'partial' if measured_hours else 'no_data'}
-    share_ok = coverage['complete']
+    share_ok = coverage['complete'] and partitioned
     imported = _known_sum(row['kwh'] for row in hourly if not row['future'])
     observed = [row for row in hourly if row['kwh'] is not None and not row['future']]
     totals = {key: _sum(row[key] for row in observed) for key in COSTS}
@@ -333,15 +337,15 @@ def _build_report(inputs):
         if parent is not None:
             all_devices[parent]['children'].append(all_devices[sid])
     devices = sorted((all_devices[sid] for sid in roots), key=lambda row: (-(row['kwh'] or ZERO), row['id']))
-    measured = _sum((row['kwh'] for row in devices), empty=ZERO) if devices or imported is not None else None
+    measured = _sum((row['kwh'] for row in devices), empty=ZERO) if partitioned and (devices or imported is not None) else None
     remainder = _known_sum(residuals)
     if double_counting:
         remainder = None
         issues.append({'code': 'double_counting', 'severity': 'warning', 'data': {}})
     device_cost = _sum((row['cost'] for row in devices), empty=ZERO)
-    remainder_cost = usage - device_cost if usage is not None and device_cost is not None and not double_counting else None
+    remainder_cost = usage - device_cost if partitioned and usage is not None and device_cost is not None and not double_counting else None
     unmeasured = {'kwh': remainder, 'share': share(remainder), 'cost': remainder_cost,
-        'status': 'double_counting' if double_counting else 'ok' if all(value is not None for value in residuals) else 'unknown',
+        'status': 'double_counting' if double_counting else 'ok' if partitioned and all(value is not None for value in residuals) else 'unknown',
         'tolerance_adjustment_kwh': adjusted,
         'raw_balance_kwh': imported - measured if imported is not None and measured is not None else None}
     totals.update(measured_kwh=measured, unmeasured_kwh=remainder)
@@ -393,7 +397,9 @@ def _build_report(inputs):
         quantity = _known_sum(row['kwh'] for row in rows)
         measured_rows = [row for row in rows if row['kwh'] is not None]
         energy, variable = (_sum(row[key] for row in measured_rows) for key in ('energy_cost', 'variable_cost'))
-        zones.append({'id': zid, 'label': meta.get('label', zid), 'kwh': quantity,
+        classifications = {row.get('classification') for row in rows if row['kwh'] is not None}
+        classification = next(iter(classifications)) if len(classifications)==1 else None
+        zones.append({'id': zid, 'label': meta.get('label', zid), 'classification': classification, 'kwh': quantity,
             'share': share(quantity), 'energy_cost': energy, 'variable_cost': variable,
             'cost': _sum(row['cost'] for row in measured_rows),
             'energy_rate': _ratio(energy, quantity), 'variable_rate': _ratio(variable, quantity),
@@ -402,6 +408,8 @@ def _build_report(inputs):
     if not coverage['complete']:
         issues.append({'code': 'partial_coverage' if measured_hours else 'no_data', 'severity': 'warning',
             'data': {'measured_hours': measured_hours, 'expected_hours': expected}})
+    if not partitioned:
+        issues.append({'code':'consumer_domain_mismatch','severity':'warning','data':{'consumer_domain':domain}})
     if not identity_ok:
         issues.append({'code': 'incomparable_currency_or_basis', 'severity': 'warning', 'data': {}})
     comparisons = _comparisons(inputs.get('comparisons', []), imported, coverage_ratio, inputs.get('scope', 'full_period'))

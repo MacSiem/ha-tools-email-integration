@@ -81,13 +81,13 @@ class Build1LiveTests(unittest.TestCase):
         self.assertEqual('not_found_in_horizon', result['next_status'])
 
     def test_availability_gap_is_a_transition_and_initial_gap_can_find_recovery(self):
-        b = book([version(valid_to='2026-10-18'), version('2026-10-19', 2, 'new')])
+        b = book([version(valid_to='2026-10-18')])
         before = live.build_current(b, now=at('2026-10-17T23:59:30Z'))
         self.assertEqual('2026-10-18T00:00:00+00:00', before['next_change'])
         self.assertFalse(before['next_available'])
         self.assertIsNone(before['next_rate'])
         self.assertEqual('unknown_historical_version', before['next_reason'])
-        gap = live.build_current(b, now=at('2026-10-18T12:00:00Z'))
+        gap = live.build_current(book([version('2026-10-19',2,'new')]), now=at('2026-10-18T12:00:00Z'))
         self.assertFalse(gap['available'])
         self.assertIsNone(gap['rate'])
         self.assertTrue(gap['next_available'])

@@ -248,6 +248,8 @@ async def async_collect_inputs(service, configuration, period, context, accumula
         await guard()
         service._report_colors = (deepcopy(color_key), deepcopy(colors))
     resolved = resolve_model_periods(context['period_kind'], now, period['timezone'], anchor=context['period_anchor'])
+    if context.get('request_kind') == 'report_window':
+        resolved['comparisons']['previous'] = deepcopy(context['report_comparison_plan'])
     requests, baseline_cache, previous_facts = [], {}, None
     labels = {'previous': {'day':'previous_day','week':'previous_week','month':'previous_month','year':'previous_year'}[context['period_kind']], 'same_weekday': 'same_weekday_last_week', 'mean7': 'avg_7d', 'year_ago': 'same_week_last_year' if context['period_kind']=='week' else 'same_month_last_year' if context['period_kind']=='month' else 'previous_year'}
     for key, plan in resolved['comparisons'].items():
@@ -322,6 +324,6 @@ async def async_collect_inputs(service, configuration, period, context, accumula
         if row.get('name'):
             membership.setdefault('sources', {}).setdefault(row['stat_consumption'], {})['name'] = row['name']
     inputs = {'period': report_period(period), 'projection': projection, 'consumers': deepcopy(configuration['consumers']),
-        'membership': deepcopy(membership), 'measured_until': measured_until.isoformat(), 'scope': scope,
+        'membership': deepcopy(membership), 'consumer_domain': configuration['consumer_domain'], 'measured_until': measured_until.isoformat(), 'scope': scope,
         'comparisons': requests, 'previous': previous_facts, 'colors': colors, 'color_as_of': as_of, 'tariff': tariff}
     return await service._cpu(partial(build_report, inputs), guard)
