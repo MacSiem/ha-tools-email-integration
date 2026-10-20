@@ -840,7 +840,8 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
 
     def composition(side, caption, entries, ready):
         text_parts.append('\n' + caption)
-        html_parts.append('<table data-section="flow-' + side + '-composition"><caption>' + escape(caption) + '</caption>')
+        html_parts.append('<table data-section="flow-' + side + '-composition"><caption>' + escape(caption)
+            + '</caption><colgroup><col width="12" style="width:12px"><col></colgroup>')
         if ready and total is not None and total > 0:
             positive = [(name, parts, item, color) for name, parts, item, color in entries if number(item.get('kwh')) > 0]
             html_parts.append('<tr><td colspan="2"><table role="presentation" class="bar-track" width="100%" aria-hidden="true"><tr>')
@@ -853,8 +854,9 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                 share = compact_number(number(item['kwh']) / total * 100, unknown) + '%'
                 value = name + ': ' + amount((*parts, 'kwh')) + ' · ' + share
                 text_parts.append(value)
+                visual_value = name + ': ' + compact_number(item['kwh'], exact((*parts, 'kwh'))) + ' kWh · ' + share
                 html_parts.append('<tr><td data-role="flow-swatch" width="12" class="' + color
-                    + '" aria-hidden="true">&#160;</td><td>' + escape(value) + '</td></tr>')
+                    + '" aria-hidden="true">&#160;</td><td>' + escape(visual_value) + '</td></tr>')
         else:
             note = tr('Zerowe zużycie w okresie', 'No energy recorded in this period') if ready and total == 0 else unknown
             text_parts.append(note)
