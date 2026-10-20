@@ -247,6 +247,13 @@ class _View:
         return (f'<tr><td class="tx bd" style="padding:8px 0;border-top:1px solid {L["bd"]};font:{label_weight} 14px/20px {FONT};color:{L["tx"]}">{E(label)}{detail}</td>'
                 f'<td class="{cls} bd" align="right" valign="top" style="padding:8px 0;border-top:1px solid {L["bd"]};font:{weight} 14px/20px {FONT};color:{L[cls]};white-space:nowrap">{E(value)}</td></tr>')
 
+    def comparison_row(self, description, baseline, value, cls):
+        # Keep the baseline quantity and unit together, while the description may
+        # wrap independently. Do not change the cost rows' typography.
+        return (f'<tr><td class="tx bd" style="padding:8px 8px 8px 0;border-top:1px solid {L["bd"]};font:400 14px/20px {FONT};color:{L["tx"]}">{E(description)} · '
+                f'<span class="tx2 comparison-baseline" style="font:400 12px/16px {FONT};color:{L["tx2"]};white-space:nowrap">{E(baseline)}</span></td>'
+                f'<td class="{cls} bd" align="right" valign="top" style="padding:8px 0;border-top:1px solid {L["bd"]};font:700 14px/20px {FONT};color:{L[cls]};white-space:nowrap">{E(value)}</td></tr>')
+
     def comparison_block(self):
         rows = []
         for c in self.comparisons:
@@ -257,8 +264,10 @@ class _View:
             change = self.change(c)
             change_text = f' ({change})' if change else f' · {self.tr("partial")}' if not c.get('coverage_ok') or not self.complete else ''
             value = arrow + self.n(delta, 2 if self.kind == 'day' else 1, signed=True) + (' kWh' if known else '') + change_text
-            label = f'vs {self.comparison_label(c)} · {self.energy(c.get("kwh"), "tile")}'
-            rows.append(self.row(label, value, bold=True, cls=cls, label_bold=False))
+            description = f'vs {self.comparison_label(c)}'
+            baseline = self.energy(c.get("kwh"), "tile")
+            label = f'{description} · {baseline}'
+            rows.append(self.comparison_row(description, baseline, value, cls))
             self.lines.append(f'- {label}: {value}')
         return self.table(rows) if rows else section(paragraph(self.tr('no_data')))
 
@@ -323,8 +332,16 @@ class _View:
             visible = daily and (len(points) <= 7 or idx % 7 == 0) or not daily and date is not None and date.hour in (0, 6, 12, 18)
             labels.append((idx, label)) if visible else None
             self.lines.append(f'- {tip}{"*" if p.get("zone") == "cheap" else ""} · {p.get("zone") or ""} · {self.tr("previous")}: {self.energy(previous)}')
-        legend = ' '.join(f'<span class="{self.color(z.get("id"))}" style="display:inline-block;width:10px;height:10px;border-radius:3px;background-color:{L[self.color(z.get("id"))]}"></span>&nbsp;{E(self.zone_label(z))} {E(z.get("hours_label"))}' for z in self.zones)
-        legend += f' {_previous_tick(legend=True)}&nbsp;{E(self.comparison_label(self.comparisons[0]) if self.comparisons else self.tr("previous"))}'
+        # Whitespace between inline groups remains a line-break opportunity;
+        # each marker and its label/date travel together in mail clients.
+        legend_groups = []
+        for z in self.zones:
+            color = self.color(z.get('id'))
+            dot = f'<span class="{color}" style="display:inline-block;width:10px;height:10px;border-radius:3px;background-color:{L[color]}"></span>'
+            legend_groups.append(f'<span class="legend-group" style="display:inline-block;white-space:nowrap;margin-right:8px">{dot}&nbsp;{E(self.zone_label(z))} {E(z.get("hours_label"))}</span>')
+        previous_label = self.comparison_label(self.comparisons[0]) if self.comparisons else self.tr('previous')
+        legend_groups.append(f'<span class="legend-group" style="display:inline-block;white-space:nowrap;margin-right:8px">{_previous_tick(legend=True)}&nbsp;{E(previous_label)}</span>')
+        legend = ' '.join(legend_groups)
         axis = []
         for n, (idx, label) in enumerate(labels):
             following = labels[n + 1][0] if n + 1 < len(labels) else len(points)
@@ -415,8 +432,10 @@ class _View:
         rate_rows = []
         for zone in _items(self.tariff.get('zones')):
             label = f'{self.zone_label(zone)} ({zone.get("hours_label") or ""})'
-            value = f'{self.n(zone.get("energy_rate"), 2)} + {self.n(zone.get("variable_rate"), 2)} = {self.rate(zone.get("rate"))}'
-            rate_rows.append(f'<tr><td class="tx2" style="padding:4px 0;font:400 12px/16px {FONT};color:{L["tx2"]}">{E(label)}</td><td class="tx2" align="right" style="padding:4px 0;font:400 12px/16px {FONT};color:{L["tx2"]}">{E(value)}</td></tr>')
+            components = f'{self.n(zone.get("energy_rate"), 2)} + {self.n(zone.get("variable_rate"), 2)} = '
+            total_rate = self.rate(zone.get('rate'))
+            value = components + total_rate
+            rate_rows.append(f'<tr><td class="tx2" style="padding:4px 0;font:400 12px/16px {FONT};color:{L["tx2"]}">{E(label)}</td><td class="tx2" align="right" style="padding:4px 0;font:400 12px/16px {FONT};color:{L["tx2"]}">{E(components)}<b class="rate-total">{E(total_rate)}</b></td></tr>')
             self.lines.append(f'- {label}: {value}')
         basis = self.tariff.get('price_basis', self.m.get('price_basis'))
         basis_label = self.tr(basis) if basis in ('gross', 'net') else self.tr('basis_unknown')
