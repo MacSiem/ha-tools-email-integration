@@ -81,10 +81,11 @@ _CSS = ('body{margin:0;background:#f3f4f6;color:#111827;font:14px/20px Roboto,Ar
         '.kpis{margin-top:12px;border-collapse:separate;border-spacing:4px 0}'
         '.kpis td{background:#f3f4f6;padding:4px 8px;border:0}'
         '.kpi-label{font-size:12px;line-height:16px;color:#4b5563}'
-        '.kpi-number{font-size:20px;line-height:26px;font-weight:600}.kpi-unit{font-size:12px}'
+        '.kpi-number{font-size:20px;line-height:26px;font-weight:600}.kpi-unit{font-size:14px;line-height:20px;font-weight:400}'
         '.note{font-size:12px;line-height:16px;color:#4b5563}.timeline .chart-column{padding:1px;vertical-align:bottom;border:0}'
         '.column{height:96px}.column td{padding:0;border:0;line-height:0;font-size:0}'
         '.axis td{padding:4px 0;border:0;font-size:12px;white-space:normal}'
+        '.chart-legend td{border:0;font-size:12px;line-height:16px;padding:4px}.chart-legend table td{padding:0 4px}'
         '.flow-source{margin-top:12px}.flow-source td,.flow-source th{padding:4px}'
         '.bar-track{background:#eef0f3}.bar-track td{padding:0;border:0;height:7px;line-height:7px}'
         '.bar-fill,.zone-expensive{background:#2a78d6}.zone-cheap{background:#1baf7a}'
@@ -98,7 +99,7 @@ _CSS = ('body{margin:0;background:#f3f4f6;color:#111827;font:14px/20px Roboto,Ar
         '@media(prefers-color-scheme:dark){body{background:#111214;color:#e5e7eb}'
         '.report{background:#1c1c1e}.header,.period td{background:#284c80;color:#fff}'
         'th,.kpis td{background:#26272b;color:#e5e7eb}'
-        'td{border-color:#2e2f33}.note,.kpi-label{color:#a1a1aa}'
+        'td,.field-label{border-color:#2e2f33}.note,.kpi-label{color:#a1a1aa}'
         '.bar-track{background:#2e2f33}.bar-fill,.zone-expensive{background:#3987e5}'
         '.zone-cheap{background:#199e70}.zone-unknown,.unmeasured{background:#6b7280}'
         '.device-0{background:#d95926}.device-1{background:#9085e9}.device-2{background:#d55181}'
@@ -311,9 +312,12 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     def fact(parts):
         return facts.get(path_of(parts))
 
+    def shown_unit(value):
+        return value.replace('PLN', 'zł').replace('/miesiąc', '/mies.') if pl else value
+
     def amount(parts):
         row = fact(parts)
-        return user_value(row) + (' ' + row[3] if row[3] else '') if row else unknown
+        return user_value(row) + (' ' + shown_unit(row[3]) if row[3] else '') if row else unknown
 
     # Known status/scope values get human explanations. Future codes remain in
     # CSV; no technical code is promoted to a user-facing diagnosis or price.
@@ -431,8 +435,9 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         if not rows:
             rows = [(tr('Dane', 'Data'), unknown, '', None)]
         for caption, value, unit, bar in rows:
+            unit = shown_unit(unit)
             text_parts.append(caption + ': ' + value + (' ' + unit if unit else ''))
-            numeric = value.lstrip('+-<>−').replace('\u00a0', '').replace(',', '.').replace('.', '', 1).isdigit()
+            numeric = value.lstrip('+-<>−').replace('\u00a0', '').replace(',', '').replace('.', '').isdigit()
             value_attrs = (' class="number"' if numeric else '') + (' colspan="2"' if not unit else '')
             html_parts.append('<tr><th scope="row" class="field-label">' + escape(caption) + '</th><td'
                 + value_attrs + '>' + escape(value) + '</td>'
@@ -497,7 +502,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
 
     def unit(parts):
         row = fact(parts)
-        return row[3] if row else ''
+        return shown_unit(row[3]) if row else ''
 
     def compact_number(value, fallback, places=1):
         """Short main-layer typography; complete precision stays in CSV."""
@@ -672,11 +677,16 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     # Shared rows align all three numbers even when a translated label or note
     # wraps. No fixed height, clipping or flex/grid support is required in mail.
     html_parts.append('<table data-section="kpis" role="presentation" class="kpis">')
-    for index, role in enumerate(('kpi-label', 'kpi-number', 'kpi-unit', 'note')):
-        html_parts.append('<tr>' + ''.join('<td width="33%" class="'
-            + ('kpi-card ' if index == 0 else '') + role + '"'
-            + (' data-role="' + role + '"' if index < 2 else '') + '>'
-            + escape(values[index]) + '</td>' for values in kpis) + '</tr>')
+    for index, role in enumerate(('kpi-label', 'kpi-value', 'note')):
+        html_parts.append('<tr>')
+        for caption, value, units, context in kpis:
+            attrs = ' data-role="kpi-label"' if index == 0 else ''
+            content = (escape(caption) if index == 0 else escape(context) if index == 2 else
+                '<span class="kpi-number" data-role="kpi-number">' + escape(value) + '</span>'
+                + (' <span class="kpi-unit">' + escape(shown_unit(units)) + '</span>' if units else ''))
+            html_parts.append('<td width="33%" class="' + ('kpi-card ' if index == 0 else '')
+                + role + '"' + attrs + '>' + content + '</td>')
+        html_parts.append('</tr>')
     html_parts.append('</table>')
 
     chart = snapshot.get('chart') or {}
@@ -743,15 +753,17 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     html_parts.append('</tr></table>')
 
     text_parts.append('\n' + tr('Legenda stref wykresu', 'Chart zone legend'))
-    html_parts.append('<table data-section="chart-zone-legend"><caption>'
-                      + tr('Legenda stref wykresu', 'Chart zone legend') + '</caption>')
-    for zone_label, color in chart_legend:
+    html_parts.append('<table data-section="chart-zone-legend" class="chart-legend" aria-label="'
+                      + tr('Legenda stref wykresu', 'Chart zone legend') + '">')
+    legend_items = list(chart_legend) or [(unknown, 'zone-unknown')]
+    for index, (zone_label, color) in enumerate(legend_items):
+        if index % 2 == 0:
+            html_parts.append('<tr>')
         text_parts.append(zone_label)
-        html_parts.append('<tr><td data-role="zone-swatch" class="' + color + '" width="12" aria-hidden="true">&#160;</td><td>'
-                          + escape(zone_label) + '</td></tr>')
-    if not chart_legend:
-        text_parts.append(unknown)
-        html_parts.append('<tr><td>' + escape(unknown) + '</td></tr>')
+        html_parts.append('<td><table role="presentation"><tr><td data-role="zone-swatch" class="'
+            + color + '" width="8" aria-hidden="true">&#160;</td><td>' + escape(zone_label) + '</td></tr></table></td>')
+        if index % 2 or index == len(legend_items)-1:
+            html_parts.append('</tr>')
     html_parts.append('</table>')
 
     groups = snapshot.get('groups') or {}
