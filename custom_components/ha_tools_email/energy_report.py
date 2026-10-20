@@ -591,7 +591,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         except (InvalidOperation, TypeError, ValueError):
             return None
 
-    def energy_context():
+    def energy_context(*, compact=False):
         totals = snapshot.get('totals') or {}
         if totals.get('measurement_complete') is True and snapshot.get('coverage', {}).get('complete') is True:
             for kind in [(snapshot.get('context') or {}).get('comparison_kind') or 'previous']:
@@ -613,10 +613,13 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                     continue
                 delta = number(c['delta_kwh'], signed=True)
                 direction = tr('Spadek', 'Decrease') if delta < 0 else tr('Wzrost', 'Increase') if delta > 0 else tr('Bez zmian', 'No change')
-                result = comparison_names[kind] + ': ' + direction + ' ' + amount(('comparisons', kind, 'delta_kwh'))
+                delta_value = amount(('comparisons', kind, 'delta_kwh'))
+                result = comparison_names[kind] + ': ' + direction + ' ' + delta_value
+                brief = delta_value
                 if number(c.get('percent'), signed=True) is not None:
                     result += ' · ' + exact(('comparisons', kind, 'percent')) + '%'
-                return result
+                    brief += ' · ' + exact(('comparisons', kind, 'percent')) + '%'
+                return (brief + '\n' + comparison_names[kind]) if compact else result
         return tr('Brak porównywalnego pełnego okresu bazowego', 'No comparable full-period baseline')
 
     kpis = []
@@ -648,6 +651,10 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                 context = ((words['partial'] + ' · ') if state == 'partial' else '')
                 context += tr('Brak opublikowanego udziału za okres', 'No published period share')
         text_parts.extend([caption + ': ' + value + (' ' + units if units else ''), context])
+        if metric == 'kwh':
+            context = energy_context(compact=True)
+        elif metric == 'total_cost' and snapshot.get('active_tariff_id'):
+            context = amount(('totals', 'effective_price'))
         kpis.append((caption, value, units, context))
     # Shared rows align all three numbers even when a translated label or note
     # wraps. No fixed height, clipping or flex/grid support is required in mail.
