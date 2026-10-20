@@ -163,6 +163,7 @@ class EnergyCalendarPropagationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('fixture@example.invalid', to)
             self.assertIn('<!doctype html>', html)
             return {'status':'fixture_no_smtp'}
+        history.report_attempt_metadata=lambda *args, **kwargs: {}  # Metadata is covered by channel-history tests.
         history.async_dispatch_attempt=dispatch
         async def config():return {'default_recipient':'fixture@example.invalid'}
         smtp=Mock(side_effect=AssertionError('No SMTP in calendar propagation test'))

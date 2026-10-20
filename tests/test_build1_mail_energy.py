@@ -33,7 +33,8 @@ class Build1MailEnergyTests(unittest.TestCase):
         doc=Markers();doc.feed(self.render(language='en')['html'])
         self.assertGreaterEqual(len(doc.styles),25)  # actual 24-hour chart and legend
         for style in doc.styles:
-            self.assertIn('border-top:1px solid #737373',style)
+            self.assertIn('background-image:linear-gradient(to bottom,#e5e7eb 0%,#e5e7eb 50%,#111827 50%,#111827 100%)',style)
+            self.assertNotIn('border-top:',style)
             self.assertIn('box-sizing:border-box',style)
             self.assertIn('height:2px',style)
         # Gmail Android can retain #111827 cells while inverting the page.
@@ -42,9 +43,11 @@ class Build1MailEnergyTests(unittest.TestCase):
             rgb=[int(value[i:i+2],16)/255 for i in (1,3,5)]
             rgb=[v/12.92 if v<=.04045 else ((v+.055)/1.055)**2.4 for v in rgb]
             return sum(a*b for a,b in zip(rgb,(.2126,.7152,.0722)))
-        edge=lum('#737373');dark=lum('#111214');light=lum('#ffffff')
-        self.assertGreater((edge+.05)/(dark+.05),3)
-        self.assertGreater((light+.05)/(edge+.05),3)
+        light_ink=lum('#e5e7eb');dark_ink=lum('#111827')
+        for background in ('#ffffff','#121212','#2a78d6','#1baf7a'):
+            bg=lum(background)
+            contrast=lambda ink:(max(ink,bg)+.05)/(min(ink,bg)+.05)
+            self.assertGreater(max(contrast(light_ink),contrast(dark_ink)),3)
 
     def test_unknown_zone_classification_never_infers_cheap_from_rate_or_order(self):
         for row in self.model['zones']:

@@ -7,6 +7,7 @@ from contextlib import ExitStack
 from unittest.mock import patch
 
 from tests.test_energy_snapshot import energy, at, classified, usage
+from datetime import timedelta
 
 NOW = at('2026-10-18T12:34Z')
 
@@ -49,8 +50,15 @@ class SnapshotGuardTests(unittest.IsolatedAsyncioTestCase):
 
         async def executor(job):
             result = job()
-            await stage('override_cpu' if result['profile_source'] == 'override' else 'cpu')
+            snapshot = result[0] if isinstance(result, tuple) else result
+            name = ('override_cpu' if snapshot['profile_source'] == 'override' else 'cpu') if isinstance(snapshot, dict) and 'profile_source' in snapshot else 'short_cpu'
+            await stage(name)
             return result
+
+        async def short(hass, start, end, ids):
+            await stage('short_history', ids)
+            return {sid: [{'start': start + timedelta(minutes=5*i), 'change': .1}
+                for i in range(int((end-start).total_seconds()//300))] for sid in ids}
 
         class Storage:
             current_tariff_revision = 1
@@ -69,7 +77,7 @@ class SnapshotGuardTests(unittest.IsolatedAsyncioTestCase):
         hass = types.SimpleNamespace(data={}, config=types.SimpleNamespace(time_zone='UTC'),
                                      async_add_executor_job=executor)
         c = energy.EnergySnapshotCoordinator(hass, Storage(),
-                                             provider=supplied if provider else None)
+                                             provider=supplied if provider else None, short_provider=short)
         stack = ExitStack()
         self.addCleanup(stack.close)
         stack.enter_context(patch.object(energy, 'async_grid_sensors', sensors))
@@ -87,7 +95,7 @@ class SnapshotGuardTests(unittest.IsolatedAsyncioTestCase):
         return method(now=NOW, guard=guard, **kwargs)
 
     def private_events(self):
-        return [row for row in self.events if row[0] in ('metadata', 'history', 'provider')]
+        return [row for row in self.events if row[0] in ('metadata', 'history', 'provider', 'short_history')]
 
     async def test_fresh_denial_precedes_all_private_io_on_every_entry_point(self):
         for route in ('refresh', 'shared', 'override', 'private_refresh', 'private_shared', 'private_override'):
@@ -135,7 +143,7 @@ class SnapshotGuardTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNone(c.data)
 
     async def test_revocation_at_each_await_stops_further_private_reads_and_output(self):
-        for stage in ('metadata', 'history', 'settings', 'cpu', 'override_cpu'):
+        for stage in ('metadata', 'history', 'short_history', 'short_cpu', 'settings', 'cpu', 'override_cpu'):
             with self.subTest(stage=stage):
                 c, guard = self.fixture(blocked=stage)
                 published = []

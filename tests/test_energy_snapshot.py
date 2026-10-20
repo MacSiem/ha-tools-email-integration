@@ -219,7 +219,8 @@ class CoordinatorTests(unittest.IsolatedAsyncioTestCase):
             return usage()
         async def executor(build):
             result = build()
-            if result['profile_source'] == 'override':
+            snapshot = result[0] if isinstance(result, tuple) else result
+            if isinstance(snapshot, dict) and snapshot.get('profile_source') == 'override':
                 source[0] = 'sensor.b'
             return result
         hass = types.SimpleNamespace(config=types.SimpleNamespace(time_zone='UTC'),

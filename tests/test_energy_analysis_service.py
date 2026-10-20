@@ -376,6 +376,7 @@ class EnergyAnalysisServiceTest(unittest.TestCase):
                 self.assertTrue(h.coordinator._cpu_lock.locked())
                 self.assertEqual(1, h.subject._pending)
                 other = energy.EnergySnapshotCoordinator(h.hass, h.storage)
+                h.hass.data['ha_tools_email']['energy_snapshot'] = other
                 ran = []
                 queued = asyncio.create_task(other._async_run_cpu(lambda: ran.append(True)))
                 await asyncio.sleep(0)
