@@ -18,7 +18,7 @@ HISTORY_LIMIT = 128
 HISTORY_DAYS = 90
 _KINDS = frozenset({'manual', 'test', 'log_digest', 'energy_report'})
 _CADENCES = frozenset({'daily', 'weekly', 'monthly'})
-_OUTCOMES = frozenset({'accepted_by_smtp', 'preparation_failed', 'authentication_failed',
+_OUTCOMES = frozenset({'accepted_by_smtp', 'accepted_by_notify', 'preparation_failed', 'authentication_failed',
                        'recipients_refused', 'partial_acceptance', 'tls_failed',
                        'transport_outcome_unknown', 'send_failed', 'cancelled_outcome_unknown', 'outcome_unknown'})
 _PERIOD = re.compile(r'^(daily:\d{4}-\d{2}-\d{2}|weekly:\d{4}-W\d{2}|monthly:\d{4}-\d{2})$')
@@ -142,3 +142,34 @@ async def async_dispatch_attempt(hass, storage, send, prepare, *, source='manual
             pass
     return {'ok': True, 'status': 'accepted_by_smtp',
             'attempt_id': attempt['id'], 'history_status': history_status}
+
+
+async def async_dispatch_channel_attempt(storage, prepare, handoff, *, source='manual',
+        kind='energy_report', cadence=None, period=None, schedule_id=None, now=None):
+    """One awaited native service handoff, preserving SMTP's no-retry lifecycle.
+
+    A completed HA service call is acceptance, never evidence of a phone delivery.
+    prepare includes authorization and final context fences before handoff.
+    """
+    now = now or datetime.now(timezone.utc)
+    attempt = {'id': str(uuid.uuid4()), 'timestamp': now.isoformat(), 'source': source,
+        'kind': kind, 'cadence': cadence, 'period': period,
+        'schedule_ref': hashlib.sha256(str(schedule_id).encode()).hexdigest() if schedule_id is not None else None,
+        'recipient_count': None, 'outcome': 'preparation_failed'}
+    prepared, history_status = False, 'unavailable'
+    try:
+        payload = await prepare()
+        prepared = True
+        await handoff(payload)
+        attempt['outcome'] = 'accepted_by_notify'
+    except (Exception, asyncio.CancelledError) as error:
+        attempt['outcome'] = failure_outcome(error, prepared=prepared)
+        raise
+    finally:
+        try:
+            await storage.async_append_attempt(attempt, now=now)
+            history_status = 'recorded'
+        except Exception:
+            pass
+    return {'ok': True, 'status': 'accepted_by_notify',
+        'attempt_id': attempt['id'], 'history_status': history_status}
