@@ -22,6 +22,8 @@ from .energy_patterns_periods import resolve_patterns_window
 from .analysis_provider import (capture_energy_configuration,
                                 async_read_energy_chunk,
                                 async_require_energy_source_access)
+from .native_energy_pricing import NativeCostAccumulator, project_current_prices
+from .native_pricing_provider import async_read_native_cost_chunk
 from .composer import async_get_energy_metadata
 from .const import DOMAIN
 from .energy import _source_signature
@@ -98,6 +100,15 @@ def _finish(accumulator, context, provenance, comparisons=None, baseline_accumul
     return result
 
 
+def _finish_native(snapshot, accumulator, configuration, states, observed_at):
+    result = deepcopy(snapshot)
+    result['native_pricing'] = accumulator.finish()
+    result['native_pricing']['current_prices'] = project_current_prices(configuration, states, observed_at)
+    result.pop('snapshot_id', None)
+    result['snapshot_id'] = _digest(result)
+    return result
+
+
 def _finish_patterns(accumulator, context):
     result = accumulator.finish()
     result['context'].update(deepcopy(context))
@@ -142,6 +153,9 @@ class EnergyAnalysisService:
         self._stopped = False
         self._cache = None
         self._normalization = None
+        self._native_normalization = None
+        self._native_metadata = {}
+        self._native_states = {}
         self._update_subscriptions = set()
 
     def async_stop(self):
@@ -168,12 +182,17 @@ class EnergyAnalysisService:
             self._cache = None
             raise RuntimeError('energy_snapshot_unloaded')
 
+    def _configuration(self):
+        return capture_energy_configuration(self._manager.data or {},
+            currency=getattr(self.hass.config, 'currency', None),
+            cost_sensors=self.hass.data.get('energy', {}).get('cost_sensors', {}))
+
     def _capture(self, kind, anchor=None, comparison=None, *, purpose='analysis'):
         # Server-owned purpose; never accept a client-selected feature gate.
         if not isinstance(purpose, str) or purpose not in _ACCESS_PURPOSES:
             raise ValueError('invalid_analysis_purpose')
         self._check_running()
-        configuration = capture_energy_configuration(self._manager.data or {})
+        configuration = self._configuration()
         if not configuration['grid_sensors']:
             raise ValueError('energy_analysis_unavailable')
         zone = self.hass.config.time_zone
@@ -201,7 +220,7 @@ class EnergyAnalysisService:
         window = resolve_patterns_window(days, self._clock(), self.hass.config.time_zone)
         if window['status'] != 'ready':
             raise ValueError(window['reason'])
-        configuration = capture_energy_configuration(self._manager.data or {})
+        configuration = self._configuration()
         if not configuration['grid_sensors']:
             raise ValueError('energy_analysis_unavailable')
         context = {'request_kind': 'patterns', 'access_purpose': 'analysis',
@@ -266,7 +285,7 @@ class EnergyAnalysisService:
         now = self._clock()
         period = request.period(now)
         previous = self._report_previous_plan(request, period, now)
-        configuration = capture_energy_configuration(self._manager.data or {})
+        configuration = self._configuration()
         if not configuration['grid_sensors']:
             raise ValueError('energy_analysis_unavailable')
         context = {'request_kind':'report_window','access_purpose':purpose,
@@ -296,7 +315,7 @@ class EnergyAnalysisService:
                 or not 0 < (end-start).total_seconds() <= 168*3600
                 or end > now.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)):
             raise ValueError('invalid_statistics_window')
-        configuration = capture_energy_configuration(self._manager.data or {})
+        configuration = self._configuration()
         if not configuration['grid_sensors']:
             raise ValueError('energy_analysis_unavailable')
         period = {'kind': 'day', 'timezone': self.hass.config.time_zone,
@@ -335,6 +354,11 @@ class EnergyAnalysisService:
             raise RuntimeError('energy_analysis_context_changed')
         if ('normalization_signature' in context
                 and context['normalization_signature'] != self._normalization):
+            self._cache = None
+            raise RuntimeError('energy_analysis_context_changed')
+
+        if ('native_signature' in context
+                and context['native_signature'] != self._native_normalization):
             self._cache = None
             raise RuntimeError('energy_analysis_context_changed')
 
@@ -388,6 +412,54 @@ class EnergyAnalysisService:
             feature_policy=state['policy'], feature=feature, operation=operation)
         self._assert_current(context)
 
+    async def _native_access(self, context, configuration, user_id):
+        native = configuration['native_pricing']
+        ids = list(dict.fromkeys(s[key] for s in native['sources']
+            for key in ('cost_statistic_id', 'price_entity_id') if s[key] is not None))
+        # Reuse the existing policy/actor machinery, independently of base energy.
+        restricted = {**configuration, 'grid_sensors': [{'entity_id': sid} for sid in ids], 'consumers': []}
+        try:
+            await self._require_access(context, restricted, user_id)
+            allowed = True
+        except PermissionError:
+            allowed = False
+        self._assert_current(context)
+        if 'native_access' in context and context['native_access'] != allowed:
+            self._cache = None
+            raise RuntimeError('energy_analysis_context_changed')
+        context['native_access'] = allowed
+        return allowed
+
+    async def _guard_native(self, context, configuration, user_id):
+        if not context.get('native_requested'):
+            return
+        if not await self._native_access(context, configuration, user_id):
+            return
+        native = configuration['native_pricing']
+        ids = list(dict.fromkeys(s['cost_statistic_id'] for s in native['sources']
+                                if s['cost_statistic_id'] is not None))
+        metadata = await async_get_energy_metadata(self.hass, ids) if ids else {}
+        self._assert_current(context)
+        # Reauthorize after metadata awaits and before reading current states.
+        await self._native_access(context, configuration, user_id)
+        states = {}
+        for source in native['sources']:
+            sid = source['price_entity_id']
+            if sid is None:
+                continue
+            state = self.hass.states.get(sid)
+            states[sid] = None if state is None else {'state': state.state,
+                'unit_of_measurement': state.attributes.get('unit_of_measurement'),
+                'last_updated': state.last_updated.isoformat()}
+        signature = _digest({'metadata': metadata, 'states': states})
+        if 'native_signature' in context and context['native_signature'] != signature:
+            self._cache = None
+            raise RuntimeError('energy_analysis_context_changed')
+        self._native_normalization = signature
+        context['native_signature'] = signature
+        self._native_metadata, self._native_states = metadata, states
+        self._assert_current(context)
+
     async def _guard(self, context, configuration, user_id):
         """Nonrecursive fresh access + external Recorder normalization fence."""
         self._assert_current(context)
@@ -407,6 +479,7 @@ class EnergyAnalysisService:
         # In particular, role revocation during metadata IO must not publish.
         await self._require_access(context, configuration, user_id)
         self._assert_current(context)
+        await self._guard_native(context, configuration, user_id)
 
     async def _cpu(self, job, guard):
         await guard()
@@ -459,6 +532,8 @@ class EnergyAnalysisService:
                 self._assert_current(context)
                 if state['revision'] != context['tariff_revision']:
                     raise RuntimeError('energy_analysis_context_changed')
+                if state['book'] is None and 'native_pricing' in configuration:
+                    context['native_requested'] = True
                 guard = partial(self._guard, context, configuration, user_id)
                 await guard()
                 key = _digest(context)
@@ -569,6 +644,21 @@ class EnergyAnalysisService:
                                                'baseline_periods': deepcopy(plan['baseline_periods'])}
                 result = await self._cpu(partial(_finish, accumulator, deepcopy(context),
                                                 configuration['domain_provenance'], comparisons, baseline_accumulator, group_pair, mean_groups), guard)
+                if context.get('native_access'):
+                    native = configuration['native_pricing']
+                    cost = await self._cpu(partial(NativeCostAccumulator, native, period), guard)
+                    ids = list(dict.fromkeys(row['cost_statistic_id'] for row in native['sources']
+                                            if row['cost_statistic_id'] is not None))
+                    cursor, end = (datetime.fromisoformat(period[k]) for k in ('start', 'end'))
+                    while cursor < end:
+                        stop = min(cursor+timedelta(hours=168), end)
+                        raw = await async_read_native_cost_chunk(self.hass, ids, cursor, stop, guard=guard)
+                        await guard()
+                        await self._cpu(partial(cost.add_chunk, raw, deepcopy(self._native_metadata), cursor, stop), guard)
+                        del raw
+                        cursor = stop
+                    result = await self._cpu(partial(_finish_native, result, cost, native,
+                        deepcopy(self._native_states), self._clock()), guard)
                 # No await between this final check, Repair publication, caching and return.
                 self._assert_current(context)
                 if self._energy_repairs_realtime:
@@ -794,6 +884,8 @@ class EnergyAnalysisService:
             'comparisons':comparisons,'comparison':legacy_comparison,
             'source':{'name':'recorder','kind':'grid_import','status':snapshot['status'],
                       'complete':snapshot['coverage']['complete']}}
+        if 'native_pricing' in snapshot:
+            summary['native_pricing'] = deepcopy(snapshot['native_pricing'])
         return {**report,'subject':'Energy report · '+request.cadence,'body':report['text'],
             'summary':summary,'period':period,'context':deepcopy(snapshot['context'])}
 

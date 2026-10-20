@@ -40,7 +40,7 @@ def _consumer_display_names(devices):
     return view
 
 
-def capture_energy_configuration(preferences):
+def capture_energy_configuration(preferences, *, currency=None, cost_sensors=None):
     """Detach only operational fields from actual HA Energy preferences.
 
     Supports legacy flow_from/flow_to and current flat grid entries. HA declares
@@ -98,6 +98,19 @@ def capture_energy_configuration(preferences):
               'consumer_domain': domain, 'domain_provenance': ('ha_energy_grid_only_configuration'
                   if domain == 'grid_import' else 'ha_energy_mixed_or_unproven_configuration'),
               'electricity_configuration': projection}
+    from .native_energy_pricing import capture_native_pricing
+    native = capture_native_pricing(preferences, ids, currency)
+    # This is Core's explicit energy/info mapping; never infer an entity suffix.
+    if native['valid'] and isinstance(cost_sensors, dict):
+        for source in native['sources']:
+            if (source['cost_statistic_id'] is None
+                    and (source['price_entity_id'] is not None or source['number_price'] is not None)):
+                actual = cost_sensors.get(source['energy_id'])
+                if isinstance(actual, str) and actual and len(actual) <= 255:
+                    source['cost_statistic_id'] = actual
+    if not native['valid'] or any(s['cost_statistic_id'] is not None or
+            s['price_entity_id'] is not None or s['number_price'] is not None for s in native['sources']):
+        result['native_pricing'] = native
     result['source_signature'] = hashlib.sha256(json.dumps(result, sort_keys=True, separators=(',', ':'),
                                                           allow_nan=False).encode('utf-8')).hexdigest()
     return result
@@ -147,7 +160,8 @@ async def async_require_energy_source_access(hass, user_id, source_ids, *, featu
 async def async_capture_energy_configuration(hass):
     from homeassistant.components.energy.data import async_get_manager
     manager = await async_get_manager(hass)
-    return capture_energy_configuration(manager.data or {})
+    return capture_energy_configuration(manager.data or {}, currency=getattr(hass.config, 'currency', None),
+        cost_sensors=hass.data.get('energy', {}).get('cost_sensors', {}))
 
 
 def _instant(value):
