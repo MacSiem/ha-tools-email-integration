@@ -372,6 +372,10 @@ class EnergyAnalysisService:
                              actor_signature=context.get('actor_signature'))
 
     def _assert_current(self, context):
+        expiry = context.get('report_live_expires_at')
+        if expiry is not None and self._clock() >= datetime.fromisoformat(expiry):
+            self._cache = None
+            raise RuntimeError('energy_analysis_context_changed')
         _, _, current = self._recapture(context)
         if any(context.get(key) != value for key, value in current.items()):
             self._cache = None
@@ -605,10 +609,13 @@ class EnergyAnalysisService:
                 if self._cache is not None:
                     cached_key, at, cached = self._cache
                     if cached_key == key and 0 <= monotonic() - at < (60 if _report_model else CACHE_SECONDS):
-                        # guard already refreshed all source permissions and units.
-                        result = deepcopy(cached)
-                        self._assert_current(context)
-                        return result
+                        # Reauthorize first; a live rule can expire inside the 5-minute cutoff.
+                        try:
+                            self._assert_current(cached['context'])
+                        except RuntimeError:
+                            self._cache = None
+                        else:
+                            return deepcopy(cached)
                     self._cache = None
                 membership = deepcopy(self.registry.capture(
                     [row['stat_consumption'] for row in configuration['consumers']]))
@@ -748,6 +755,7 @@ class EnergyAnalysisService:
                     result['report_model'] = await async_collect_inputs(self, configuration,
                         model_period, context, accumulator, membership, state['book'], guard,
                         native=cost if context.get('native_access') else None)
+                    result['context'] = deepcopy(context)
                     # Include the opt-in flag and detached model in the final hash;
                     # preserve the legacy period for all validation consumers.
                     result['snapshot_id'] = _digest({k: v for k, v in result.items() if k != 'snapshot_id'})

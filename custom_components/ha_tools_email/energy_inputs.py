@@ -326,4 +326,11 @@ async def async_collect_inputs(service, configuration, period, context, accumula
     inputs = {'period': report_period(period), 'projection': projection, 'consumers': deepcopy(configuration['consumers']),
         'membership': deepcopy(membership), 'consumer_domain': configuration['consumer_domain'], 'measured_until': measured_until.isoformat(), 'scope': scope,
         'comparisons': requests, 'previous': previous_facts, 'colors': colors, 'color_as_of': as_of, 'tariff': tariff}
-    return await service._cpu(partial(build_report, inputs), guard)
+    model = await service._cpu(partial(build_report, inputs), guard)
+    actual_now = service._clock().astimezone(zone)
+    if period['kind'] == 'day' and start.astimezone(zone).date() == actual_now.date():
+        from .energy_live import build_current
+        model['current'] = await service._cpu(partial(build_current,book,now=actual_now),guard)
+        if model['current']['next_change'] is not None:
+            context['report_live_expires_at'] = model['current']['next_change']
+    return model
