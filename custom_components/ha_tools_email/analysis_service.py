@@ -290,10 +290,12 @@ class EnergyAnalysisService:
                 raise ValueError('report_comparison_plan_mismatch')
         return kind, deepcopy(plan)
 
-    def _capture_report(self, request, purpose, actor_signature):
+    def _capture_report(self, request, purpose, actor_signature, *, report_model=False):
         if type(request) is not ReportWindow or purpose not in ('report_read','report_execute'):
             raise ValueError('invalid_report_request')
         self._check_running()
+        if report_model and request.semantics != 'previous_completed_calendar_period':
+            raise ValueError('invalid_report_model_request')
         now = self._clock()
         period = request.period(now)
         previous = self._report_previous_plan(request, period, now)
@@ -314,6 +316,12 @@ class EnergyAnalysisService:
             context.update(comparison_kind='previous', comparison_signature=_digest(plan),
                 comparison_timezone=request.timezone, comparison_calendar_kind=request.cadence,
                 comparison_period_kind=comparison_period_kind, report_comparison_plan=plan)
+        if report_model:
+            from .energy_inputs import report_clock
+            timing = report_clock(now, request.timezone)
+            context.update(report_model=True, report_mode='full',
+                period_kind=comparison_period_kind, period_anchor=period['local_start'][:10],
+                report_color_as_of=timing['as_of'], report_cutoff=timing['cutoff'])
         return configuration, period, context
 
     def _capture_statistics(self, start, end, actor_signature):
@@ -349,7 +357,8 @@ class EnergyAnalysisService:
                                             context['actor_signature'])
         if context.get('request_kind') == 'report_window':
             return self._capture_report(ReportWindow(**context['report_request']),
-                context['access_purpose'],context['actor_signature'])
+                context['access_purpose'],context['actor_signature'],
+                report_model=context.get('report_model', False))
         if context.get('request_kind') == 'patterns':
             if context.get('access_purpose') != 'analysis':
                 raise ValueError('invalid_analysis_purpose')
@@ -535,8 +544,13 @@ class EnergyAnalysisService:
             raise ValueError('invalid_analysis_purpose')
         if type(_report_model) is not bool or _report_mode not in ('so_far', 'full'):
             raise ValueError('invalid_report_model_request')
-        if _report_model and (_report_window is not None or comparison is not None or kind not in ('day', 'week', 'month', 'year')):
-            raise ValueError('invalid_report_model_request')
+        if _report_model:
+            if _report_window is None and kind not in ('day', 'week', 'month', 'year'):
+                raise ValueError('invalid_report_model_request')
+            if _report_window is not None and (type(_report_window) is not ReportWindow or
+                    _report_window.semantics != 'previous_completed_calendar_period' or
+                    kind != 'report_window'):
+                raise ValueError('invalid_report_model_request')
         if _report_model:
             self._actor_signature(user_id)
         if _report_window is not None:
@@ -563,7 +577,7 @@ class EnergyAnalysisService:
                 policy_state = await self.storage.async_get_feature_access()
                 self._check_running()
                 configuration, period, context = (
-                    self._capture_report(_report_window,purpose,self._actor_signature(user_id))
+                    self._capture_report(_report_window,purpose,self._actor_signature(user_id), report_model=_report_model)
                     if _report_window is not None else
                     self._capture(kind, anchor, comparison, purpose=purpose,
                         report_model=_report_model, report_mode=_report_mode,
@@ -727,8 +741,12 @@ class EnergyAnalysisService:
                         deepcopy(self._native_states), self._clock()), guard)
                 if _report_model:
                     from .energy_inputs import async_collect_inputs
+                    # The collector receives calendar model kind while the guard
+                    # closure and result retain the exact frozen report_window.
+                    model_period = ({**deepcopy(period), 'kind': context['period_kind']}
+                                    if _report_window is not None else period)
                     result['report_model'] = await async_collect_inputs(self, configuration,
-                        period, context, accumulator, membership, state['book'], guard,
+                        model_period, context, accumulator, membership, state['book'], guard,
                         native=cost if context.get('native_access') else None)
                     # Include the opt-in flag and detached model in the final hash;
                     # preserve the legacy period for all validation consumers.
@@ -917,10 +935,33 @@ class EnergyAnalysisService:
         finally:
             self._pending -= 1
 
+    async def _async_render_energy_artifact(self, snapshot, actor, options):
+        """Present one authorized snapshot; retain the legacy CSV byte for byte."""
+        from .energy_report import render_energy_analysis
+        # A model-only first-hour DTO has no legacy CSV calculation. Retain the
+        # pre-existing report availability boundary rather than inventing rows.
+        if 'totals' not in snapshot:
+            raise ValueError('no_completed_interval')
+        # The legacy exporter walks arbitrary new fields. Do not add the model
+        # as a new CSV section; retain identity and every legacy fact unchanged.
+        export_view = {key: value for key, value in snapshot.items() if key != 'report_model'}
+        report = await self.coordinator._async_run_cpu(partial(render_energy_analysis, export_view, **options))
+        if 'report_model' in snapshot:
+            if not await self.async_validate_result(snapshot, actor):
+                raise RuntimeError('energy_analysis_context_changed')
+            from .mail_energy import render
+            presentation = await self.coordinator._async_run_cpu(partial(render, snapshot['report_model'], **options))
+            # The caller reauthorizes after this await before releasing output.
+            # Copy only presentation fields. CSV/identity belong to this exact
+            # producer snapshot and its unchanged legacy export implementation.
+            report = {**report, **{key: presentation[key] for key in
+                ('subject', 'preheader', 'html', 'text', 'notify')}}
+        return report
+
     async def async_prepare_report(self, request, actor, *, purpose, language,
                                    timezone_name, hour_cycle, date_language=None):
         """One authorized snapshot/render artifact; CSV is download data only."""
-        from .energy_report import render_energy_analysis, validate_report_preferences
+        from .energy_report import validate_report_preferences
         options = {'language':language,'timezone_name':timezone_name,'hour_cycle':hour_cycle}
         if date_language is not None:
             options['date_language'] = date_language
@@ -930,10 +971,11 @@ class EnergyAnalysisService:
         if type(request) is not ReportWindow:
             raise ValueError('invalid_report_request')
         request.period(self._clock())
-        snapshot = await self.async_get_analysis('report_window',actor,purpose=purpose,_report_window=request)
+        snapshot = await self.async_get_analysis('report_window',actor,purpose=purpose,_report_window=request,
+            _report_model=request.semantics == 'previous_completed_calendar_period', _report_mode='full')
         if not await self.async_validate_result(snapshot,actor):
             raise RuntimeError('energy_analysis_context_changed')
-        report = await self.coordinator._async_run_cpu(partial(render_energy_analysis,snapshot,**options))
+        report = await self._async_render_energy_artifact(snapshot, actor, options)
         if not await self.async_validate_result(snapshot,actor) or not self.context_is_current(snapshot):
             raise RuntimeError('energy_analysis_context_changed')
         # Legacy aliases are references to producer values, never another price pass.
@@ -971,22 +1013,21 @@ class EnergyAnalysisService:
                       'complete':snapshot['coverage']['complete']}}
         if 'native_pricing' in snapshot:
             summary['native_pricing'] = deepcopy(snapshot['native_pricing'])
-        return {**report,'subject':'Energy report · '+request.cadence,'body':report['text'],
+        return {**report,'subject':report.get('subject', 'Energy report · '+request.cadence),'body':report['text'],
             'summary':summary,'period':period,'context':deepcopy(snapshot['context'])}
 
     async def async_get_report(self, kind, user_id, *, language, timezone_name,
                                hour_cycle, anchor=None, comparison=None, date_language=None):
         """Render the same authorized calculation without requiring SMTP."""
-        from .energy_report import render_energy_analysis, validate_report_preferences
+        from .energy_report import validate_report_preferences
         date_options = {} if date_language is None else {'date_language': date_language}
         validate_report_preferences(language, timezone_name, hour_cycle, **date_options)
         snapshot = await self.async_get_analysis(kind, user_id, anchor=anchor,
-            comparison=comparison, purpose='report_read')
+            comparison=comparison, purpose='report_read', _report_model=True)
         if not await self.async_validate_result(snapshot, user_id):
             raise RuntimeError('energy_analysis_context_changed')
-        report = await self.coordinator._async_run_cpu(partial(render_energy_analysis,
-            snapshot, language=language, timezone_name=timezone_name, hour_cycle=hour_cycle,
-            **date_options))
+        report = await self._async_render_energy_artifact(snapshot, user_id,
+            {'language':language, 'timezone_name':timezone_name, 'hour_cycle':hour_cycle, **date_options})
         # Renderer awaits the shared CPU lane. Reauthorize concrete sources and
         # this independent report purpose before releasing any rendered data.
         if not await self.async_validate_result(snapshot, user_id):
