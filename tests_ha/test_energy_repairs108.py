@@ -96,7 +96,7 @@ async def test_native_empty_sensor_error_or_edit_after_final_await_is_not_absenc
     await coordinator._async_tick(None)
     assert issue(hass, MISSING_IMPORT) is None  # Malformed is not confirmed empty.
     manager.data = {'energy_sources': [], 'device_consumption': []}
-    real_tariff, calls = storage.async_get_tariff, 0
+    real_tariff, calls = storage.async_get_tariff_book, 0
     async def tariff_then_change_sources():
         nonlocal calls
         result = await real_tariff()
@@ -104,7 +104,7 @@ async def test_native_empty_sensor_error_or_edit_after_final_await_is_not_absenc
         if calls == 2:  # Refresh's final existing storage await.
             manager.data = preferences()
         return result
-    with patch.object(storage, 'async_get_tariff', new=tariff_then_change_sources):
+    with patch.object(storage, 'async_get_tariff_book', new=tariff_then_change_sources):
         await coordinator._async_tick(None)
     assert calls == 2 and issue(hass, MISSING_IMPORT) is None
     assert await hass.config_entries.async_unload(entry.entry_id)
