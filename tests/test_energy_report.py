@@ -442,9 +442,24 @@ class EnergyReportTest(unittest.TestCase):
         rows = [node for node in group.children if isinstance(node, ReportNode) and node.tag == 'tr']
         value_rows = [row for row in rows if len(row.find(data_role='kpi-number')) == 3]
         self.assertEqual(1, len(value_rows))
-        self.assertEqual(4, len(rows))
+        self.assertEqual(3, len(rows))
         for row in rows:
             self.assertEqual(3, len([cell for cell in row.children if isinstance(cell, ReportNode)]))
+
+    def test_kpi_units_stay_with_values_and_grouped_lower_amounts_align(self):
+        self.snapshot['totals']['total_cost'] = '12345.6789'
+        result = self.render()
+        dom = ReportDOM(result['html']).root
+        group, = dom.find(data_section='kpis')
+        rows = [node for node in group.children if isinstance(node, ReportNode) and node.tag == 'tr']
+        for cell, unit in zip(rows[1].children, ('kWh', 'EUR', '')):
+            self.assertEqual(1, len(cell.find(data_role='kpi-number')))
+            if unit:
+                self.assertIn(unit, cell.text())
+                self.assertTrue(cell.find(**{'class': 'kpi-unit'}))
+        lower = [node for node in dom.find() if node.tag == 'td' and node.text() == '12,345.68']
+        self.assertTrue(lower)
+        self.assertTrue(all('number' in node.attrs.get('class', '').split() for node in lower))
 
     def test_polish_lower_zone_details_have_readable_duration_labels(self):
         self.snapshot['chart']['bins'][0]['zone_breakdown'] = {'unattributed': {
