@@ -436,6 +436,25 @@ class EnergyReportTest(unittest.TestCase):
         cards = ReportDOM(html).root.find(**{'class': 'kpi-card'})
         self.assertEqual(3, len(cards))
 
+    def test_kpi_values_share_one_row_so_wrapped_labels_do_not_shift_baselines(self):
+        group, = ReportDOM(self.render()['html']).root.find(data_section='kpis')
+        rows = [node for node in group.children if isinstance(node, ReportNode) and node.tag == 'tr']
+        value_rows = [row for row in rows if len(row.find(data_role='kpi-number')) == 3]
+        self.assertEqual(1, len(value_rows))
+        self.assertEqual(4, len(rows))
+        for row in rows:
+            self.assertEqual(3, len([cell for cell in row.children if isinstance(cell, ReportNode)]))
+
+    def test_polish_lower_zone_details_have_readable_duration_labels(self):
+        self.snapshot['chart']['bins'][0]['zone_breakdown'] = {'unattributed': {
+            'recorded_kwh': '0.123456789', 'measured_seconds': 1, 'missing_seconds': 3599}}
+        rendered = self.render(language='pl')
+        for output in ('html', 'text'):
+            self.assertIn('Czas pomiaru', rendered[output])
+            self.assertIn('Brakujący czas', rendered[output])
+            self.assertNotIn('measured seconds', rendered[output])
+            self.assertNotIn('missing seconds', rendered[output])
+
     def test_kpi_labels_and_notes_keep_primary_foreground_for_client_dark_recoloring(self):
         # Outlook Android recolors the light KPI background to rgb(72,77,84).
         # Its muted #536274 foreground became rgb(142,157,177): only 3.09:1.
