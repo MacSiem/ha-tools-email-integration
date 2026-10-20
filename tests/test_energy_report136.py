@@ -115,7 +115,7 @@ class Mail136Test(unittest.TestCase):
         c.update(baseline_kwh='0', full_baseline_kwh='0', percent=None)
         kpis = self.section(self.render(), 'kpis').text()
         self.assertNotIn('Unknown%', kpis)
-        self.assertIn('Increase', kpis)
+        self.assertIn('No change', kpis)
 
     def test_mail136_destination_colors_distinguish_device_identities_and_match_legend(self):
         devices = self.s['groups']['devices']
@@ -128,3 +128,12 @@ class Mail136Test(unittest.TestCase):
         self.assertEqual({'device-0', 'device-1', 'unmeasured'}, set(colors))
         swatches = [n.attrs.get('class') for n in destination.find(data_role='flow-swatch')]
         self.assertEqual(set(colors), set(swatches))
+
+    def test_mail136_kpi_respects_requested_year_ago_baseline(self):
+        self.s = json.loads((fixture.ROOT / 'tests/fixtures/energy-report-schema2-v53.json').read_text())
+        self.s['context']['comparison_kind'] = 'year_ago'
+        self.s['comparisons']['year_ago'] = dict(self.s['comparisons']['previous'], delta_kwh='-123.45')
+        kpis = self.section(self.render(), 'kpis').text()
+        self.assertIn('Same period last year', kpis)
+        self.assertIn('Decrease -123.45 kWh', kpis)
+        self.assertNotIn('Previous period', kpis)
