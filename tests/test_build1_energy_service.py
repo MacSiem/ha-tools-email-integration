@@ -91,6 +91,27 @@ class Build1ServiceTest(unittest.TestCase):
                 self.assertEqual(before, after)
         asyncio.run(run())
 
+    def test_first_five_minutes_work_without_inventing_a_completed_hour(self):
+        async def run():
+            h = Harness(); h.now = datetime(2026, 1, 11, 0, 7, tzinfo=UTC)
+            async def short(subject, configuration, start, end, guard):
+                await guard()
+                self.assertEqual(300, (end-start).total_seconds())
+                return {'sensor.grid':'0.7','sensor.device':'0.2'}
+            with h.patches(), patch.object(inputs,'async_short_hour',short):
+                with self.assertRaises(ValueError):
+                    await h.subject.async_get_analysis('day','user')
+                result = await h.subject.async_get_build1_model('day','user')
+                model = result['report_model']
+                self.assertEqual(0,result['period']['hours'])
+                self.assertEqual(.7,model['totals']['import_kwh'])
+                self.assertEqual(1,model['coverage']['measured_hours'])
+                self.assertTrue(model['hourly'][0]['partial'])
+                self.assertTrue(model['hourly'][1]['future'])
+                self.assertTrue(h.subject.context_is_current(result))
+                self.assertTrue(await h.subject.async_validate_result(result,'user'))
+        asyncio.run(run())
+
     def test_invalid_mode_and_external_report_window_rejected_before_io(self):
         async def run():
             h = Harness()
