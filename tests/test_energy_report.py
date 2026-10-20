@@ -219,7 +219,7 @@ class EnergyReportTest(unittest.TestCase):
         self.assertIn('&lt;script&gt;', result['html'])
         markup = Markup(result['html'])
         self.assertFalse(set(markup.tags) - {'html', 'head', 'title', 'meta', 'style', 'body',
-            'table', 'caption', 'colgroup', 'col', 'tr', 'th', 'td'})
+            'table', 'caption', 'colgroup', 'col', 'tr', 'th', 'td', 'span'})
         self.assertIn('@media(prefers-color-scheme:dark)', result['html'])
         self.assertNotIn('<svg', result['html'])
         self.assertNotIn('<canvas', result['html'])
@@ -270,6 +270,8 @@ class EnergyReportTest(unittest.TestCase):
         result=self.render(language='pl');rows=self.rows(result)
         self.assertEqual('-0,1250',rows['totals.kwh']['value'])
         self.assertEqual('EUR/miesiąc',rows['rates.0.legacy_combined_monthly']['unit'])
+        self.assertIn('EUR/mies.', result['text'])
+        self.assertIn('EUR/mies.', result['html'])
         self.assertIn('-0,1',result['text']);self.assertIn('-0,1',result['html'])
         self.assertFalse(rows['totals.kwh']['value'].startswith("'"))
 
