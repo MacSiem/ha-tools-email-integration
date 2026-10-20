@@ -13,8 +13,9 @@ class Mail136Test(unittest.TestCase):
         return fixture.REPORT.render_energy_analysis(self.s, language='en', timezone_name='Europe/Warsaw', hour_cycle='24')
 
     def section(self, result, name):
-        node, = fixture.ReportDOM(result['html']).root.find(data_section=name)
-        return node
+        nodes = fixture.ReportDOM(result['html']).root.find(data_section=name)
+        self.assertEqual(1, len(nodes), 'Missing report section: ' + name)
+        return nodes[0]
 
     def test_mail136_kpi_uses_full_producer_comparison_and_effective_price(self):
         self.s = json.loads((fixture.ROOT / 'tests/fixtures/energy-report-schema2-v53.json').read_text())
