@@ -81,7 +81,7 @@ Native cost statistics and price entities require their own current read permiss
 
 The read-only `ha_tools_email/energy_report` endpoint returns HTML, text and CSV from the same prepared snapshot. Calendar comparisons use actual measured bounds, including daylight-saving changes. The browser supplies its display language, date language, timezone and 12/24-hour preference; this never changes the measurement calendar or tariff clock. Legacy preview/send endpoints described later retain their documented role and rolling-window behavior.
 
-The report places a published comparison beside the energy total and an effective tariff price beside cost when available. Its zone legend and **From / To** composition bars use proven complete breakdowns; partial or overlapping data stays unavailable. Visual labels are brief, while text, details and CSV retain the exact producer values.
+The report places a published comparison beside the energy total and an effective tariff price beside cost when available. Its zone legend and **From / To** composition bars use proven complete breakdowns; partial or overlapping data stays unavailable. HTML and plain text use localized, readable numbers throughout: one decimal for kWh, two for amounts and whole percentages. Rates retain up to four decimals when needed; tiny nonzero values use explicit bounds rather than looking like measured zero. The CSV export in HA retains the exact producer values and is not added as an email attachment. Repeated local hours at the daylight-saving transition include their numeric UTC offsets.
 
 ![Polish dark HA report preview: zone legend and complete From/To composition bars](docs/screenshots/energy-report-flow-pl-dark.png)
 

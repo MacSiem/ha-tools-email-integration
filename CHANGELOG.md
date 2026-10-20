@@ -2,7 +2,9 @@
 
 ## 2.4.0 (Unreleased)
 
-- Add selected-baseline context and published effective price to report summaries, explicit chart-zone legends, and table-only From/To composition bars with matching stable device colors. Require complete non-overlapping producer partitions; retain exact text/CSV values beside brief visual labels.
+- Polish the complete Energy mail layout, including aligned lower tables, contextual KPIs, consistent units and light/dark surfaces. Localize grouped numbers with one decimal for energy, two for amounts and whole percentages; retain meaningful rate precision and bound tiny nonzero values without changing CSV facts. Distinguish both repeated daylight-saving hours and show missing amounts/currencies once.
+
+- Add selected-baseline context and published effective price to report summaries, explicit chart-zone legends, and table-only From/To composition bars with matching stable device colors. Require complete non-overlapping producer partitions; retain exact CSV values beside readable HTML and plain-text labels.
 
 - Read the import cost already recorded by HA Energy when no tariff book exists, with explicit currency and source-hour coverage. Return the same native fact in analysis and HTML/text/CSV reports; keep current price observations separate from history and components/fixed fees unknown. Recheck the complete published source set after native IO, including cached responses.
 
