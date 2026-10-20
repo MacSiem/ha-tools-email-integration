@@ -8,7 +8,7 @@ import unittest
 from tests.test_tariff_book_websocket import BookWebsocketTest
 from tests.test_tariff_history import book
 from tests.test_tariff_profile import profile as legacy_profile
-from tests.test_tariff_profiles_v2 import profile
+from tests.test_build1_tariff_profiles import profile
 
 NOW = datetime(2026, 10, 20, 12, tzinfo=timezone.utc)
 
