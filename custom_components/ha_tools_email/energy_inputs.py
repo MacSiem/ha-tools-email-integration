@@ -28,6 +28,41 @@ def report_clock(now, zone):
             'cutoff': now.replace(minute=now.minute // 5 * 5, second=0, microsecond=0).isoformat()}
 
 
+def resolve_model_periods(kind, now, zone, *, anchor=None):
+    """Retain empty completed-hour frames when a real five-minute cell can exist.
+
+    The one-hour lookahead resolves calendar boundaries only; every data read is
+    clipped back to the actual server cutoff, never to that lookahead clock.
+    """
+    resolved = resolve_analysis_periods(kind,now,zone,anchor=anchor)
+    current = resolved.get('current')
+    if resolved.get('reason') != 'no_completed_interval' or not current:
+        return resolved
+    cutoff = datetime.fromisoformat(report_clock(now,zone)['cutoff'])
+    if cutoff <= datetime.fromisoformat(current['start']):
+        return resolved
+    frames = resolve_analysis_periods(kind,now+timedelta(hours=1),zone,anchor=anchor)
+    if frames.get('status') != 'ready':
+        return resolved
+    for frame in [frames['current'], *[p for plan in frames['comparisons'].values()
+                  for p in plan.get('baseline_periods',[])]]:
+        # These are calendar descriptors with zero completed measurements.
+        frame.update(end=frame['start'],local_end=frame['local_start'],hours=0,
+                     partial=True,status='ready',reason=None)
+    return frames
+
+
+def empty_completed_projection(book, start):
+    """No completed samples; only an explicit empty projection before a short cell."""
+    from types import SimpleNamespace
+    active = next((row for row in book['tariffs'] if row['id']==book.get('active_tariff_id')),None) if book else None
+    version = _version_at(active['versions'],start.timestamp()*1000) if active else None
+    profile = version['profile'] if version else {}
+    facts = {'hours':[], 'currency':profile.get('currency'),'price_basis':profile.get('priceBasis'),
+        'fixed_share':'0' if version else None,'rates':[],'fees':None,'measurement_fingerprint':None}
+    return SimpleNamespace(report_projection=lambda:deepcopy(facts))
+
+
 def report_period(period):
     """Full accepted calendar descriptor; leave the legacy period untouched."""
     return {**deepcopy(period), 'end': period['calendar_end'],
@@ -212,7 +247,7 @@ async def async_collect_inputs(service, configuration, period, context, accumula
         colors = await service._cpu(partial(identity_colors, totals, expected, as_of), guard)
         await guard()
         service._report_colors = (deepcopy(color_key), deepcopy(colors))
-    resolved = resolve_analysis_periods(context['period_kind'], now, period['timezone'], anchor=context['period_anchor'])
+    resolved = resolve_model_periods(context['period_kind'], now, period['timezone'], anchor=context['period_anchor'])
     requests, baseline_cache = [], {}
     labels = {'previous': {'day':'previous_day','week':'previous_week','month':'previous_month','year':'previous_year'}[context['period_kind']], 'same_weekday': 'same_weekday_last_week', 'mean7': 'avg_7d', 'year_ago': 'same_week_last_year' if context['period_kind']=='week' else 'same_month_last_year' if context['period_kind']=='month' else 'previous_year'}
     for key, plan in resolved['comparisons'].items():
