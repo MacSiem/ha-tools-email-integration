@@ -24,6 +24,7 @@ from homeassistant.helpers.storage import Store
 from .feature_access import default_feature_access, validate_feature_access
 from .tariff import TariffValidationError, validate_tariff_profile
 from .tariff_history import prepare_tariff_book_edit, validate_tariff_book
+from .tariff_profile_service import prepare_profile_edit, project_profile_state
 from .scheduler import normalize_schedule_calendar
 from .report_status import project_report_status
 from .native_report_projection import project_native_reports
@@ -263,6 +264,54 @@ class EmailStorage:
                     raw = {'schema': 0}
             return {'book': raw, 'revision': state['revision'], 'updated_at': state['updated_at'],
                     'legacy_profile': state['profile'] if raw is None else None}
+
+    async def async_get_tariff_profile(self, *, tariff_id=None, version_id=None, legacy_combined=None):
+        """Read wire schema 2 without migrating or altering the legacy API."""
+        with self._book_admission():
+            async with self._lock:
+                data = await self._async_tariff_data_locked()
+                state = self._tariff_state(data)
+                raw = deepcopy(data.get('tariff_book'))
+            result = await self._async_book_cpu(partial(project_profile_state,
+                raw, state['profile'], tariff_id=tariff_id, version_id=version_id,
+                legacy_combined=legacy_combined))
+            result.update(revision=state['revision'], updated_at=state['updated_at'])
+            return result
+
+    async def async_save_tariff_profile(self, profile, *, expected_revision,
+                                       tariff_id=None, version_id=None, legacy_combined=None,
+                                       historical_edit_ack=False, now=None, before_save=None):
+        """Atomic merge/proof/confirmed save under the shared tariff revision.
+
+        The job constructs the result before saving, so a projection failure
+        cannot report an unsuccessful operation after a successful Store write.
+        It preserves the old schema-1 profile, unknown keys and archived reports.
+        """
+        if (type(expected_revision) is not int or expected_revision < 0
+                or type(historical_edit_ack) is not bool
+                or (legacy_combined is not None and type(legacy_combined) is not bool)):
+            raise TariffValidationError([{'path': 'expected_revision', 'reason': 'invalid_revision_or_ack'}])
+        with self._book_admission():
+            async with self._lock:
+                data = await self._async_tariff_data_locked()
+                state = self._tariff_state(data)
+                if state['revision'] != expected_revision:
+                    raise TariffRevisionConflict('tariff_revision_conflict')
+                clean, result = await self._async_book_cpu(partial(prepare_profile_edit,
+                    deepcopy(data.get('tariff_book')), state['profile'], profile,
+                    now=now or datetime.now(timezone.utc), tariff_id=tariff_id,
+                    version_id=version_id, legacy_combined=legacy_combined))
+                if result['historical_changes'] and not historical_edit_ack:
+                    raise ValueError('historical_edit_ack_required')
+                if before_save is not None and await before_save() is not True:
+                    raise PermissionError('unauthorized')
+                candidate = deepcopy(data)
+                candidate.update(tariff_book=clean, tariff_revision=expected_revision + 1,
+                                 tariff_updated_at=_now_iso())
+                await self._store.async_save_confirmed(candidate)
+                self._data = candidate
+                result.update(revision=expected_revision + 1, updated_at=candidate['tariff_updated_at'])
+                return result
 
     async def async_preview_tariff_book(self, book, *, expected_revision, now=None):
         """Return validated proposed history and exact past ranges, without writes."""

@@ -21,6 +21,7 @@ from .storage import EmailStorage, TariffRevisionConflict, FeatureAccessRevision
 from .feature_access import default_feature_access, effective_feature_capabilities, feature_access_allowed
 from .report_status import MAX_STATUS_SCHEDULES, PURPOSE_FEATURES
 from .tariff import TariffValidationError
+from .tariff_profiles import list_tariff_templates
 from .analysis_provider import async_require_energy_source_access
 from .energy_statistics_api import async_register_statistics_commands
 
@@ -276,6 +277,132 @@ async def _ws_set_feature_access(hass, connection, msg):
         return
     if not _feature_context_current(hass, storage, result['revision']):
         connection.send_error(msg['id'], 'feature_access_changed', 'Access settings changed. Reload before continuing.')
+        return
+    connection.send_result(msg['id'], result)
+
+
+@websocket_api.websocket_command({
+    vol.Required('type'): f'{DOMAIN}/get_tariff_profile',
+    vol.Optional('tariff_id'): str,
+    vol.Optional('version_id'): str,
+    vol.Optional('legacy_combined'): bool,
+})
+@websocket_api.async_response
+async def _ws_get_tariff_profile(hass, connection, msg):
+    access = await _feature_authorized(hass, connection, 'energy_tariff', 'read')
+    if access is None:
+        connection.send_error(msg['id'], 'unauthorized', 'Tariff read access required.')
+        return
+    storage = access[0]
+    coordinator = hass.data.get(DOMAIN, {}).get('energy_snapshot')
+    try:
+        result = await storage.async_get_tariff_profile(tariff_id=msg.get('tariff_id'),
+            version_id=msg.get('version_id'), legacy_combined=msg.get('legacy_combined'))
+    except TariffValidationError:
+        connection.send_error(msg['id'], 'invalid_tariff_profile', 'Tariff profile or selected version is invalid.')
+        return
+    except Exception:
+        connection.send_error(msg['id'], 'tariff_profile_read_failed', 'Tariff profile could not be read.')
+        return
+    if not await _feature_authorized(hass, connection, 'energy_tariff', 'read', token=access):
+        connection.send_error(msg['id'], 'unauthorized', 'Tariff read access required.')
+        return
+    if not _book_context_current(hass, storage, coordinator, result['revision']):
+        connection.send_error(msg['id'], 'tariff_revision_conflict', 'Tariff settings changed. Reload before continuing.')
+        return
+    connection.send_result(msg['id'], result)
+
+
+@websocket_api.websocket_command({
+    vol.Required('type'): f'{DOMAIN}/set_tariff_profile',
+    vol.Required('profile'): dict,
+    vol.Required('expected_revision'): vol.All(int, vol.Range(min=0)),
+    vol.Optional('tariff_id'): str,
+    vol.Optional('version_id'): str,
+    vol.Optional('legacy_combined'): bool,
+    vol.Optional('historical_edit_ack', default=False): bool,
+})
+@websocket_api.async_response
+async def _ws_set_tariff_profile(hass, connection, msg):
+    access = await _feature_authorized(hass, connection, 'energy_tariff', 'execute')
+    if access is None:
+        connection.send_error(msg['id'], 'unauthorized', 'Tariff editing access required.')
+        return
+    storage = access[0]
+    coordinator = hass.data.get(DOMAIN, {}).get('energy_snapshot')
+
+    async def before_save():
+        if not await _feature_authorized(hass, connection, 'energy_tariff', 'execute', token=access):
+            return False
+        return _book_context_current(hass, storage, coordinator)
+
+    try:
+        result = await storage.async_save_tariff_profile(msg['profile'],
+            expected_revision=msg['expected_revision'], tariff_id=msg.get('tariff_id'),
+            version_id=msg.get('version_id'), legacy_combined=msg.get('legacy_combined'),
+            historical_edit_ack=msg.get('historical_edit_ack', False), before_save=before_save)
+    except TariffRevisionConflict:
+        connection.send_error(msg['id'], 'tariff_revision_conflict', 'Tariff settings changed. Reload before saving.')
+        return
+    except PermissionError:
+        connection.send_error(msg['id'], 'unauthorized', 'Tariff editing access required.')
+        return
+    except TariffValidationError:
+        connection.send_error(msg['id'], 'invalid_tariff_profile', 'Tariff profile, migration or revision is invalid.')
+        return
+    except ValueError as error:
+        if str(error) == 'historical_edit_ack_required':
+            connection.send_error(msg['id'], 'historical_edit_ack_required',
+                'This edit changes historical calculations. Review the affected dates and confirm explicitly.')
+        else:
+            connection.send_error(msg['id'], 'invalid_tariff_profile', 'Tariff profile or revision is invalid.')
+        return
+    except Exception:
+        connection.send_error(msg['id'], 'tariff_profile_save_failed', 'Tariff profile could not be saved.')
+        return
+    if not await _feature_authorized(hass, connection, 'energy_tariff', 'execute', token=access):
+        connection.send_error(msg['id'], 'unauthorized', 'Tariff editing access required.')
+        return
+    if not _book_context_current(hass, storage, coordinator, result['revision']):
+        connection.send_error(msg['id'], 'tariff_revision_conflict', 'Tariff settings changed. Reload before continuing.')
+        return
+    hass.async_create_task(coordinator._async_tick(None))
+    connection.send_result(msg['id'], result)
+
+
+@websocket_api.websocket_command({
+    vol.Required('type'): f'{DOMAIN}/list_tariff_templates',
+    vol.Optional('holiday_dates'): list,
+})
+@websocket_api.async_response
+async def _ws_list_tariff_templates(hass, connection, msg):
+    access = await _feature_authorized(hass, connection, 'energy_tariff', 'read')
+    if access is None:
+        connection.send_error(msg['id'], 'unauthorized', 'Tariff read access required.')
+        return
+    storage = access[0]
+    config = getattr(hass, 'config', None)
+    currency, zone = getattr(config, 'currency', None), getattr(config, 'time_zone', None)
+    try:
+        if not isinstance(currency, str) or not isinstance(zone, str):
+            raise ValueError('missing_home_configuration')
+        # Only bounded template construction (at most 366 explicit dates).
+        # This does not compile schedules or invoke the pricing engine.
+        result = {'templates': list_tariff_templates(currency=currency, timezone=zone,
+                                                     holiday_dates=msg.get('holiday_dates')),
+                  'currency': currency, 'timezone': zone}
+    except (TariffValidationError, ValueError):
+        connection.send_error(msg['id'], 'invalid_tariff_template_request', 'Template settings or holiday dates are invalid.')
+        return
+    except Exception:
+        connection.send_error(msg['id'], 'tariff_templates_read_failed', 'Tariff templates could not be read.')
+        return
+    if not await _feature_authorized(hass, connection, 'energy_tariff', 'read', token=access):
+        connection.send_error(msg['id'], 'unauthorized', 'Tariff read access required.')
+        return
+    if (not _feature_context_current(hass, storage, access[1]['revision'])
+            or (getattr(hass.config, 'currency', None), getattr(hass.config, 'time_zone', None)) != (currency, zone)):
+        connection.send_error(msg['id'], 'tariff_context_changed', 'Tariff settings changed. Reload before continuing.')
         return
     connection.send_result(msg['id'], result)
 
@@ -1088,6 +1215,9 @@ def async_register_commands(hass: HomeAssistant) -> None:
         _ws_subscribe_analysis_updates,
         _ws_get_tariff,
         _ws_get_tariff_book,
+        _ws_get_tariff_profile,
+        _ws_set_tariff_profile,
+        _ws_list_tariff_templates,
         _ws_preview_tariff_book,
         _ws_set_tariff_book,
         _ws_energy_snapshot,
