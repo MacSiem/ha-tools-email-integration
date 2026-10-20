@@ -414,6 +414,26 @@ class HistoricalTariffRates:
         clean = validate_tariff_book({'schema': 2, 'tariffs': [tariff]})['tariffs'][0]
         self._tariff_id = clean['id']
         self._compiled = tuple((*_bounds(v), v, EnergyTariff(v['profile'])) for v in clean['versions'])
+        self._boundaries = sorted({point for start, end, _, model in self._compiled
+                                   for point in (start, end, *model._boundaries)
+                                   if point is not None})
+
+    def rate_at(self, value):
+        """Resolve an instant through the same exclusive version boundaries."""
+        stamp = _stamp(value)
+        if stamp is None:
+            return {'available': False, 'reason': 'invalid_instant'}
+        selected = next((item for item in self._compiled
+                         if item[0] is not None and item[0] <= stamp
+                         and (item[1] is None or stamp < item[1])), None)
+        if selected is None:
+            return {'available': False, 'reason': 'unknown_historical_version'}
+        _, _, version, model = selected
+        return {**model.rate_at(stamp), 'currency': version['profile']['currency'],
+                'price_basis': version['profile']['priceBasis'],
+                'timezone': version['profile']['timezone'],
+                'clock': deepcopy(version['profile']['clock']),
+                'rate_semantics': version['rate_semantics']}
 
     def resolve_interval(self, start, end):
         a, b = _stamp(start), _stamp(end)

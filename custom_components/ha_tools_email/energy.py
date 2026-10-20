@@ -414,7 +414,7 @@ class EnergySnapshotCoordinator:
                     self._invalidate()
                     raise RuntimeError('energy_sources_changed')
                 self._measurement, self._measurement_key, self._measurement_at = measured, key, now
-            state = await self.storage.async_get_tariff()
+            state = await self._async_snapshot_tariff()
             self._check_running()
             await self._async_check_source_access(guard, sensors)
             if real_time:
@@ -423,7 +423,8 @@ class EnergySnapshotCoordinator:
                     self._invalidate()
                     raise RuntimeError('energy_calendar_changed')
                 now = finished
-            self._model_boundaries = EnergyTariff(state.get('profile'))._boundaries
+            if 'book' not in state:
+                self._model_boundaries = EnergyTariff(state.get('profile'))._boundaries
             result = await self._async_build_snapshot(state, self._measurement, now=now, measurement_timezone=tz)
             self._check_running()
             await self._async_check_source_access(guard)
@@ -433,7 +434,7 @@ class EnergySnapshotCoordinator:
             await self._async_check_source_access(guard, latest)
             latest_meta = await async_get_energy_metadata(self.hass, [row['entity_id'] for row in latest])
             await self._async_check_source_access(guard, latest)
-            latest_state = await self.storage.async_get_tariff()
+            latest_state = await self._async_snapshot_tariff()
             self._check_running()
             await self._async_check_source_access(guard, latest)
             if (tz != self.hass.config.time_zone or _source_signature(latest, latest_meta) != key[3]
@@ -475,7 +476,22 @@ class EnergySnapshotCoordinator:
             raise RuntimeError('energy_snapshot_changed')
         return result
 
+    async def _async_snapshot_tariff(self):
+        read_book = getattr(self.storage, 'async_get_tariff_book', None)
+        if read_book is None:  # Legacy source-only adapters retain their API.
+            return await self.storage.async_get_tariff()
+        state = await read_book()
+        if state['book'] is not None:
+            return {'book': state['book'], 'revision': state['revision']}
+        return {'profile': state['legacy_profile'], 'revision': state['revision']}
+
     async def _async_build_snapshot(self, state, measurement, **kwargs):
+        if 'book' in state:
+            from .energy_book_snapshot import build_book_snapshot
+            result, boundaries = await self._async_run_cpu(partial(
+                build_book_snapshot, state, measurement, **kwargs))
+            self._model_boundaries = boundaries
+            return result
         build = partial(build_snapshot, state, measurement, **kwargs)
         return await self._async_run_cpu(build)
 
