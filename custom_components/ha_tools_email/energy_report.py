@@ -67,42 +67,42 @@ _LABELS = {
     'comparison_scope': ('Zakres porównania', 'Comparison scope'),
     'currency': ('Waluta', 'Currency'), 'price_basis': ('Podstawa ceny', 'Price basis'),
 }
-_CSS = ('body{margin:0;background:#eef2f7;color:#202a38;font:14px Arial,sans-serif;font-variant-numeric:tabular-nums}'
+_CSS = ('body{margin:0;background:#f3f4f6;color:#111827;font:14px/20px Roboto,Arial,sans-serif;font-variant-numeric:tabular-nums}'
         'table{border-collapse:collapse;width:100%;table-layout:fixed}'
         '.report{max-width:640px;margin:0 auto;background:#fff}'
-        'caption,th,td{text-align:left;padding:5px;vertical-align:top;overflow-wrap:anywhere}'
-        'caption{font-size:15px;font-weight:bold;padding-top:15px;padding-bottom:6px}'
-        '.field-label{background:transparent;font-weight:normal;border-bottom:1px solid #d8e0eb}'
+        'caption,th,td{text-align:left;padding:8px;vertical-align:top;overflow-wrap:anywhere}'
+        'caption{font-size:16px;line-height:22px;font-weight:600;padding-top:16px;padding-bottom:8px}'
+        '.field-label{background:transparent;font-weight:normal;border-bottom:1px solid #e5e7eb}'
         '.number{text-align:right;font-variant-numeric:tabular-nums}'
-        '.unit{font-size:12px;white-space:nowrap;overflow-wrap:normal}'
-        'th{background:#edf2f8}td{border-bottom:1px solid #d8e0eb;white-space:pre-wrap}'
+        '.unit{font-size:14px;white-space:nowrap;overflow-wrap:normal}'
+        'th{background:#f3f4f6}td{border-bottom:1px solid #e5e7eb;white-space:pre-wrap}'
         '.header{background:#284c80;color:#fff;font-size:21px;padding:16px}'
         '.period td{background:#284c80;color:#edf4ff;padding:0 16px 12px;border:0;font-size:12px}'
-        '.kpis{margin-top:12px;border-collapse:separate;border-spacing:5px 0}'
-        '.kpis td{background:#eef4fc;padding:4px 7px;border:0}'
-        '.kpi-label{font-size:12px;color:#202a38}'
-        '.kpi-number{font-size:20px;font-weight:bold}.kpi-unit{font-size:12px}'
-        '.note{font-size:12px;color:#202a38}.timeline .chart-column{padding:1px;vertical-align:bottom;border:0}'
+        '.kpis{margin-top:12px;border-collapse:separate;border-spacing:4px 0}'
+        '.kpis td{background:#f3f4f6;padding:4px 8px;border:0}'
+        '.kpi-label{font-size:12px;line-height:16px;color:#4b5563}'
+        '.kpi-number{font-size:20px;line-height:26px;font-weight:600}.kpi-unit{font-size:12px}'
+        '.note{font-size:12px;line-height:16px;color:#4b5563}.timeline .chart-column{padding:1px;vertical-align:bottom;border:0}'
         '.column{height:96px}.column td{padding:0;border:0;line-height:0;font-size:0}'
-        '.axis td{padding:3px 0;border:0;font-size:12px;white-space:normal}'
-        '.flow-source{margin-top:10px}.flow-source td,.flow-source th{padding:4px}'
-        '.bar-track{background:#e4e9f0}.bar-track td{padding:0;border:0;height:7px;line-height:7px}'
-        '.bar-fill,.zone-expensive{background:#2877cb}.zone-cheap{background:#25824b}'
-        '.zone-unknown,.unmeasured{background:#7b8595}'
+        '.axis td{padding:4px 0;border:0;font-size:12px;white-space:normal}'
+        '.flow-source{margin-top:12px}.flow-source td,.flow-source th{padding:4px}'
+        '.bar-track{background:#eef0f3}.bar-track td{padding:0;border:0;height:7px;line-height:7px}'
+        '.bar-fill,.zone-expensive{background:#2a78d6}.zone-cheap{background:#1baf7a}'
+        '.zone-unknown,.unmeasured{background:#9ca3af}'
         '.device-0{background:#eb6834}.device-1{background:#6250d6}.device-2{background:#e87ba4}'
-        '.device-3{background:#eda100}.device-4{background:#718096}'
+        '.device-3{background:#eda100}.device-4{background:#9ca3af}'
         '[data-section="source-times"]{font-size:12px}'
-        '@media(max-width:420px){.kpi-card{width:33.333%;padding:3px;box-sizing:border-box}'
-        '.kpis .kpi-number{font-size:18px}'
-        'caption,th,td{padding:4px}.header{font-size:19px}.axis td{font-size:12px}}'
-        '@media(prefers-color-scheme:dark){body{background:#101318;color:#edf1f7}'
-        '.report{background:#1b1f26}.header,.period td{background:#284c80;color:#fff}'
-        'th,.kpis td{background:#272f3d;color:#edf1f7}'
-        'td{border-color:#485468}.note,.kpi-label{color:#bdc7d6}'
-        '.bar-track{background:#353d49}.bar-fill,.zone-expensive{background:#68aaff}'
-        '.zone-cheap{background:#65ce8c}.zone-unknown,.unmeasured{background:#a6afbc}'
+        '@media(max-width:420px){.kpi-card{width:33.333%;padding:4px;box-sizing:border-box}'
+        '.kpis .kpi-number{font-size:20px}'
+        'caption,th,td{padding:4px}.header{font-size:20px}.axis td{font-size:12px}}'
+        '@media(prefers-color-scheme:dark){body{background:#111214;color:#e5e7eb}'
+        '.report{background:#1c1c1e}.header,.period td{background:#284c80;color:#fff}'
+        'th,.kpis td{background:#26272b;color:#e5e7eb}'
+        'td{border-color:#2e2f33}.note,.kpi-label{color:#a1a1aa}'
+        '.bar-track{background:#2e2f33}.bar-fill,.zone-expensive{background:#3987e5}'
+        '.zone-cheap{background:#199e70}.zone-unknown,.unmeasured{background:#6b7280}'
         '.device-0{background:#d95926}.device-1{background:#9085e9}.device-2{background:#d55181}'
-        '.device-3{background:#c98500}.device-4{background:#a6afbc}}')
+        '.device-3{background:#c98500}.device-4{background:#6b7280}}')
 
 # Public producer metadata is useful in CSV; it is not the reading order of a mail.
 _PRIVATE = frozenset(('context', 'user_id', 'user_ids', 'auth', 'credentials',
@@ -206,7 +206,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                 number = Decimal(str(value))
                 if number.is_finite():
                     result = format(number, 'f')
-                    return result.replace('.', ',') if pl else result, True
+                    return localized_number(result), True
             except InvalidOperation:
                 pass
         return str(value), False
@@ -378,6 +378,18 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     def title(key):
         return numeric_titles.get(key, label(key))
 
+    def localized_number(text):
+        """Group presentation digits without touching the lossless facts."""
+        integer, dot, fraction = text.partition('.')
+        prefix = integer[:len(integer) - len(integer.lstrip('+-<>−'))]
+        digits = integer[len(prefix):]
+        groups = []
+        while digits:
+            groups.append(digits[-3:])
+            digits = digits[:-3]
+        separator = '\u00a0' if pl else ','
+        return prefix + separator.join(reversed(groups)) + ((',' if pl else '.') + fraction if dot else '')
+
     def user_value(row):
         key = row[0].rsplit('.', 1)[-1]
         if key in ('status', 'reason', 'comparison_scope', 'scope', 'price_basis', 'comparison_reason'):
@@ -390,8 +402,8 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         unit = row[3]
         rate = '/kWh' in unit and key != 'effective_price'
         money = bool(unit and unit != 'kWh' and unit != 's') or key.endswith('_cost')
-        places = 4 if rate else 1 if key == 'percent' else 2
-        minimum = 2 if rate or money else 1 if unit == 'kWh' or key == 'percent' else 0
+        places = 4 if rate else 0 if key == 'percent' else 1 if unit == 'kWh' else 2
+        minimum = 0 if key == 'percent' else 2 if rate or money else 1 if unit == 'kWh' else 0
         quantum = Decimal(1).scaleb(-places)
         with localcontext() as precision:
             precision.prec = max(40, len(value.as_tuple().digits) + max(0, value.adjusted()) + places + 4)
@@ -409,7 +421,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                 text = integer + ('.' + fraction if fraction else '')
             if (key.startswith('delta_') or key == 'percent') and value > 0:
                 text = '+' + text
-        return text.replace('.', ',') if pl else text
+        return localized_number(text)
 
     def table(title_text, rows, *, section=None):
         text_parts.append('\n' + title_text)
@@ -420,7 +432,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
             rows = [(tr('Dane', 'Data'), unknown, '', None)]
         for caption, value, unit, bar in rows:
             text_parts.append(caption + ': ' + value + (' ' + unit if unit else ''))
-            numeric = value.lstrip('+-<>−').replace(',', '.').replace('.', '', 1).isdigit()
+            numeric = value.lstrip('+-<>−').replace('\u00a0', '').replace(',', '.').replace('.', '', 1).isdigit()
             value_attrs = (' class="number"' if numeric else '') + (' colspan="2"' if not unit else '')
             html_parts.append('<tr><th scope="row" class="field-label">' + escape(caption) + '</th><td'
                 + value_attrs + '>' + escape(value) + '</td>'
@@ -487,7 +499,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         row = fact(parts)
         return row[3] if row else ''
 
-    def compact_number(value, fallback):
+    def compact_number(value, fallback, places=1):
         """Short main-layer typography; complete precision stays in CSV."""
         try:
             if isinstance(value, bool):
@@ -497,13 +509,13 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                 return fallback
             if number == 0:
                 return '0'
-            result = format(number, '.1f')
+            result = format(number.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP), 'f')
             # A small known nonzero must not become a measured zero.
             if Decimal(result) == 0 and number != 0:
-                return ('<0,1' if pl else '<0.1') if number > 0 else ('>−0,1' if pl else '>−0.1')
+                return localized_number(('<' if number > 0 else '>−') + format(Decimal(1).scaleb(-places), 'f'))
             if '.' in result:
                 result = result.rstrip('0').rstrip('.')
-            return result.replace('.', ',') if pl else result
+            return localized_number(result)
         except (InvalidOperation, ValueError, TypeError):
             return fallback
 
@@ -642,7 +654,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                 ratio = Decimal(str(share['ratio']))
                 with localcontext() as precision:
                     precision.prec = max(40, len(ratio.as_tuple().digits) + 2)
-                    value = compact_number(ratio.scaleb(2), unknown)
+                    value = compact_number(ratio.scaleb(2), unknown, 0)
                 units = '%'
                 context = amount(('period_summary', 'cheap_zone_share', 'known_cheap_kwh'))
             else:
@@ -897,7 +909,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                     + '%" style="width:' + width + '%">&#160;</td>')
             html_parts.append('</tr></table></td></tr>')
             for name, parts, item, color in positive:
-                share = compact_number(number(item['kwh']) / total * 100, unknown) + '%'
+                share = compact_number(number(item['kwh']) / total * 100, unknown, 0) + '%'
                 value = name + ': ' + amount((*parts, 'kwh')) + ' · ' + share
                 text_parts.append(value)
                 visual_value = name + ': ' + compact_number(item['kwh'], exact((*parts, 'kwh'))) + ' kWh · ' + share
@@ -954,7 +966,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
             change += ' · ' + exact((*cp, 'status'))
         def coverage_percent(value):
             ratio = number(value)
-            return compact_number(ratio * 100, unknown) + '%' if ratio is not None and ratio <= 1 else unknown
+            return compact_number(ratio * 100, unknown, 0) + '%' if ratio is not None and ratio <= 1 else unknown
         baseline_coverage = [number(value) for value in covered[1:]]
         baseline_minimum = min(baseline_coverage) if baseline_coverage and None not in baseline_coverage else None
         if not comparable:
