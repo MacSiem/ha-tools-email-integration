@@ -377,17 +377,17 @@ class AnalysisUpdateSubscriptionTest(unittest.IsolatedAsyncioTestCase):
             send_error=lambda *args: self.fail(str(args)))
         await ws._ws_subscribe_analysis_updates(hass, connection, {'id': 7})
         self.assertEqual(results, [7])
-        self.assertEqual(set(listeners), {ws.DOMAIN+'_energy_analysis_updated', ws.DOMAIN+'_feature_access_updated',
+        self.assertEqual(set(listeners), {ws.DOMAIN+'_energy_analysis_updated', ws.DOMAIN+'_energy_updated', ws.DOMAIN+'_feature_access_updated',
                                          ws.DOMAIN+'_report_status_updated', ws.DOMAIN+'_schedules_changed'})
         callbacks = list(listeners.values())
         for changed in callbacks:
             changed(types.SimpleNamespace(data={'private': 'secret'}))
-        self.assertEqual(delivered, [(7, {})] * 4)
+        self.assertEqual(delivered, [(7, {})] * 5)
         bucket['energy_analysis'] = object()
         callbacks[0](None)
         connection.subscriptions[7]()
         callbacks[1](None)
-        self.assertEqual(len(removed), 4)
+        self.assertEqual(len(removed), 5)
         self.assertFalse(service._update_subscriptions)
         self.assertIs(connection.subscriptions[99], foreign)
-        self.assertEqual(delivered, [(7, {})] * 4)
+        self.assertEqual(delivered, [(7, {})] * 5)
