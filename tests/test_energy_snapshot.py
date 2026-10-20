@@ -376,7 +376,7 @@ def entity_modules():
     registry.DeviceInfo = dict
     sensor = types.ModuleType('homeassistant.components.sensor')
     sensor.SensorEntity = SensorEntity
-    sensor.SensorDeviceClass = types.SimpleNamespace(ENUM='enum', TIMESTAMP='timestamp', MONETARY='monetary')
+    sensor.SensorDeviceClass = types.SimpleNamespace(ENUM='enum', TIMESTAMP='timestamp', MONETARY='monetary', ENERGY='energy')
     sensor.SensorStateClass = types.SimpleNamespace(MEASUREMENT='measurement', TOTAL='total')
     binary = types.ModuleType('homeassistant.components.binary_sensor')
     binary.BinarySensorEntity = BinarySensorEntity
@@ -397,27 +397,28 @@ class EntityContractTests(unittest.IsolatedAsyncioTestCase):
     async def test_five_entities_share_exact_snapshot_units_ids_and_unload_listeners(self):
         sensor, binary = entity_modules()
         c = energy.EnergySnapshotCoordinator(types.SimpleNamespace(config=types.SimpleNamespace(time_zone='UTC')), None)
-        c.data = energy.build_snapshot({'profile': classified(), 'revision': 42}, usage(),
-            now=at('2026-10-18T12:34Z'), measurement_timezone='UTC')
+        from tests.test_build1_energy_entities import build
+        c.data = build({'profile': classified(), 'revision': 42}, usage(), now='2026-10-18T12:04Z')
+        c.tariff_context_is_current = lambda result: True
         hass = types.SimpleNamespace(data={'ha_tools_email': {'energy_snapshot': c}})
         entry = types.SimpleNamespace(entry_id='stable-entry')
         entities = []
         await sensor.async_setup_entry(hass, entry, entities.extend)
         await binary.async_setup_entry(hass, entry, entities.extend)
-        self.assertEqual(5, len(entities))
-        self.assertEqual(5, len({e._attr_unique_id for e in entities}))
+        self.assertEqual(7, len(entities))
+        self.assertEqual(7, len({e._attr_unique_id for e in entities}))
         self.assertEqual(1, len({str(e._attr_device_info) for e in entities}))
-        self.assertEqual(['expensive', 1, at('2026-10-18T22:00Z'), 8.4],
+        self.assertEqual(['day', 1, at('2026-10-18T22:00Z'), 8.4],
             [entities[0].native_value, entities[1].native_value, entities[2].native_value,
              round(entities[3].native_value, 4)])
-        self.assertFalse(entities[4].is_on)
+        self.assertFalse(entities[6].is_on)
         self.assertEqual('EUR/kWh', entities[1].native_unit_of_measurement)
         self.assertEqual('EUR', entities[3].native_unit_of_measurement)
         for e in entities:
             self.assertTrue(e.available)
             self.assertEqual(42, e.extra_state_attributes['tariff_revision'])
             await e.async_added_to_hass()
-        self.assertEqual(5, len(c._listeners))
+        self.assertEqual(7, len(c._listeners))
         for e in entities:
             e.remove()
         self.assertFalse(c._listeners)
