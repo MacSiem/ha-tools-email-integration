@@ -248,7 +248,7 @@ async def async_collect_inputs(service, configuration, period, context, accumula
         await guard()
         service._report_colors = (deepcopy(color_key), deepcopy(colors))
     resolved = resolve_model_periods(context['period_kind'], now, period['timezone'], anchor=context['period_anchor'])
-    requests, baseline_cache = [], {}
+    requests, baseline_cache, previous_facts = [], {}, None
     labels = {'previous': {'day':'previous_day','week':'previous_week','month':'previous_month','year':'previous_year'}[context['period_kind']], 'same_weekday': 'same_weekday_last_week', 'mean7': 'avg_7d', 'year_ago': 'same_week_last_year' if context['period_kind']=='week' else 'same_month_last_year' if context['period_kind']=='month' else 'previous_year'}
     for key, plan in resolved['comparisons'].items():
         rows = []
@@ -283,6 +283,25 @@ async def async_collect_inputs(service, configuration, period, context, accumula
             fact = baseline_fact(baseline, hours, scope)
             baseline_cache[cache_key] = fact
             rows.append(fact)
+        if key == 'previous' and rows:
+            # Comparison totals keep the matched measured window. Chart ghosts
+            # additionally use actual remaining hourly facts of that prior period.
+            baseline = plan['baseline_periods'][0]
+            prior = deepcopy(rows[0]['hours'])
+            cursor = datetime.fromisoformat(rows[0]['period']['end'])
+            limit = datetime.fromisoformat(baseline['calendar_end'])
+            if cursor.minute or cursor.second or cursor.microsecond:
+                cursor = cursor.replace(minute=0,second=0,microsecond=0)+timedelta(hours=1)
+            while cursor < limit:
+                stop = min(cursor+timedelta(hours=168),limit)
+                chunk = await async_read_energy_chunk(service.hass,configuration,cursor,stop,
+                    guard=guard,include_consumers=False)
+                await guard()
+                evidence = await service._cpu(partial(measurement_evidence,chunk['grid'],cursor,stop),guard)
+                prior.extend(evidence['hourly_buckets'])
+                del chunk,evidence
+                cursor = stop
+            previous_facts = {'start':baseline['start'],'end':baseline['calendar_end'],'hours':prior}
         if key == 'mean7':
             requests.append({'key': 'avg_7d', 'baselines': rows})
         else:
@@ -304,5 +323,5 @@ async def async_collect_inputs(service, configuration, period, context, accumula
             membership.setdefault('sources', {}).setdefault(row['stat_consumption'], {})['name'] = row['name']
     inputs = {'period': report_period(period), 'projection': projection, 'consumers': deepcopy(configuration['consumers']),
         'membership': deepcopy(membership), 'measured_until': measured_until.isoformat(), 'scope': scope,
-        'comparisons': requests, 'colors': colors, 'color_as_of': as_of, 'tariff': tariff}
+        'comparisons': requests, 'previous': previous_facts, 'colors': colors, 'color_as_of': as_of, 'tariff': tariff}
     return await service._cpu(partial(build_report, inputs), guard)
