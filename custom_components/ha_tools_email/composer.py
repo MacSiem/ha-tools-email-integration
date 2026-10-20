@@ -760,7 +760,9 @@ async def async_build_energy_report_payload(
         bounds=(window_start,window_end) if window_start is not None else None)
     preferences = dict(report_preferences) if report_preferences is not None else {
         'language':presentation['language'],
-        'timezone_name':getattr(presentation['zone'],'key','UTC'),'hour_cycle':'24'}
+        # HA YAML/ZoneInfo can retain a str subclass in this trusted default.
+        # Keep explicit caller preferences under the unchanged strict validator.
+        'timezone_name':str(getattr(presentation['zone'],'key','UTC')),'hour_cycle':'24'}
     return await service.async_prepare_report(request,actor,purpose=purpose,**preferences)
 
 
