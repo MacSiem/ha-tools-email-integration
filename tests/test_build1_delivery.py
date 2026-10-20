@@ -60,3 +60,33 @@ class NotifyDispatchTest(unittest.IsolatedAsyncioTestCase):
   result=await delivery.async_dispatch_notification(hass,storage,'persistent_notification',AsyncMock(return_value={'title':'x','message':'x','data':{'secret':'not_for_persistent'}}),AsyncMock())
   self.assertEqual(result['status'],'accepted_by_notify');self.assertEqual(result['history_status'],'unavailable')
   self.assertEqual(hass.services.async_call.call_args.args[2],{'title':'x','message':'x'})
+
+
+class ChannelIntegrationTest(unittest.IsolatedAsyncioTestCase):
+ async def test_native_report_does_not_read_smtp_and_revalidates_source(self):
+  events=[]
+  payload={'subject':'Energy','body':'18.8 kWh','html':'<p>18.8 kWh</p>','notify':{'title':'Energy','message':'18.8 kWh'}}
+  service=types.SimpleNamespace(_actor_signature=Mock(),_check_running=Mock(),context_is_current=Mock(return_value=True),async_validate_result=AsyncMock(return_value=True))
+  storage=types.SimpleNamespace(current_schedule_revision=2,async_append_attempt=AsyncMock())
+  hass=types.SimpleNamespace(config=types.SimpleNamespace(time_zone='UTC'),services=types.SimpleNamespace(async_call=AsyncMock()))
+  hass.data={'ha_tools_email':{'energy_analysis':service,'storage':storage,'schedule_generation':4,'load_config':AsyncMock(side_effect=AssertionError('SMTP must not be read'))}}
+  composer=types.ModuleType(pkg.__name__+'.composer');composer.async_build_report_payload=AsyncMock(return_value=payload)
+  with patch.dict(sys.modules,{pkg.__name__+'.composer':composer}):
+   result=await delivery.async_send_energy_channels(hass,storage,channels=['persistent_notification'],cadence='daily',actor='owner')
+  self.assertEqual(result['status'],'accepted_by_notify')
+  hass.data['ha_tools_email']['load_config'].assert_not_awaited()
+  self.assertGreaterEqual(service.async_validate_result.await_count,1)
+  self.assertEqual(composer.async_build_report_payload.call_args.kwargs['purpose'],'report_execute')
+  self.assertEqual(hass.services.async_call.await_count,1)
+ async def test_changed_generation_stops_service_io_after_compose(self):
+  service=types.SimpleNamespace(_actor_signature=Mock(),_check_running=Mock(),context_is_current=Mock(return_value=True),async_validate_result=AsyncMock(return_value=True))
+  storage=types.SimpleNamespace(current_schedule_revision=2,async_append_attempt=AsyncMock())
+  hass=types.SimpleNamespace(config=types.SimpleNamespace(time_zone='UTC'),services=types.SimpleNamespace(async_call=AsyncMock()),data={})
+  hass.data={'ha_tools_email':{'energy_analysis':service,'storage':storage,'schedule_generation':4}}
+  async def compose(*args,**kwargs):
+   hass.data['ha_tools_email']['schedule_generation']=5
+   return {'subject':'x','body':'x','html':'x'}
+  composer=types.ModuleType(pkg.__name__+'.composer');composer.async_build_report_payload=compose
+  with patch.dict(sys.modules,{pkg.__name__+'.composer':composer}):
+   with self.assertRaisesRegex(RuntimeError,'context_changed'):await delivery.async_send_energy_channels(hass,storage,channels=['persistent_notification'],cadence='daily',actor='owner')
+  hass.services.async_call.assert_not_awaited()
