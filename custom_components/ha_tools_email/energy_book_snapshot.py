@@ -28,8 +28,12 @@ def build_book_snapshot(state, measurement, *, now, measurement_timezone):
     variable = current.get('variableRate') if available else None
     usage_rate = calculate_energy_amounts(1, energy, variable,
         current['rate_semantics'])['usage_cost'] if available else None
+    clock = current.get('clock')
+    public_clock = None if clock is None else {'mode': clock['mode']}
+    if public_clock is not None and clock['mode'] == 'fixed':
+        public_clock['offsetMinutes'] = clock['offsetMinutes']
     result.update(currency=current.get('currency'), price_basis=current.get('price_basis'),
-                  tariff_timezone=current.get('timezone'), tariff_clock=current.get('clock'))
+                  tariff_timezone=current.get('timezone'), tariff_clock=public_clock)
     result['current'].update(available=available, reason=current.get('reason'),
         zone_id=current.get('zone') if available else None, zone_class=classification,
         cheap=None if classification is None else classification == 'cheap',
