@@ -2,6 +2,11 @@
 
 ## 2.4.0 (Unreleased)
 
+- Preserve native tariff-zone ENUM options during temporary snapshot unavailability, while keeping values unavailable. Prevent self-generated registry updates from interrupting authorized statistics reads; explicitly removing a tariff still clears its options.
+- Keep unmeasured energy cost unknown when grid and device measurements do not support the same residual. Preserve independently valid device costs and real zero balances.
+- Notify authorized active report cards when schedules change, without forwarding schedule contents or overwriting unsaved drafts. Include all seven Energy entities in source-device reassociation and keep Reports status on its own device.
+- Keep English tariff rows readable on narrow mail clients without changing Polish HTML or the plain-text alternatives.
+
 - Add native daily import and cheap-energy-share sensors from completed five-minute Recorder evidence plus non-overlapping full hours. Today’s usage-cost sensor uses the same cutoff. Current-zone states now identify the actual zone; classification remains an attribute. Preserve stable entity IDs and explicitly reject stale or incomplete measurements.
 - Add explicit native/mobile/email delivery targets, channel-aware schedules and attempt history with batch/period metadata. Unconfirmed handoffs are not automatically retried; report delivery problems surface through native status and Repairs.
 

@@ -35,70 +35,7 @@ async def drain(runtime):
 @pytest.mark.parametrize('compile_delay',[10,3610])
 @pytest.mark.freeze_time('2026-10-19T10:55:01+00:00')
 async def test_real_hour_compile_after_boundary_or_next_hour_is_automatically_retried(
-        hass,hass_storage,recorder_mock,hass_ws_client,hass_admin_user,freezer,compile_delay,monkeypatch):
-    # Keep the real failing request and its public error envelope. Record only
-    # the producer exception which the WS boundary deliberately maps to a generic
-    # error, so the next Core run can distinguish a stale-context fence from an
-    # actual adapter/readiness defect. No retry or replacement producer is used.
-    from custom_components.ha_tools_email.energy_statistics_publisher import EnergyStatisticsPublisher
-    prepare_failures = []
-    real_prepare = EnergyStatisticsPublisher.async_prepare
-
-    async def observe_prepare(self, actor):
-        try:
-            return await real_prepare(self, actor)
-        except (ValueError, RuntimeError, OSError) as error:
-            prepare_failures.append((type(error).__name__, str(error)))
-            raise
-
-    monkeypatch.setattr(EnergyStatisticsPublisher, 'async_prepare', observe_prepare)
-    runtime_observations = []
-    real_runtime = EnergyStatisticsPublisher.async_refresh_runtime
-
-    async def observe_runtime(self, actor, **kwargs):
-        at = kwargs['now'].isoformat()
-        try:
-            result = await real_runtime(self, actor, **kwargs)
-            runtime_observations.append((at, result))
-            return result
-        except Exception as error:
-            runtime_observations.append((at, type(error).__name__, str(error)))
-            print('READINESS_RUNTIME_ERROR', at, type(error).__name__, str(error), flush=True)
-            raise
-
-    monkeypatch.setattr(EnergyStatisticsPublisher, 'async_refresh_runtime', observe_runtime)
-    from custom_components.ha_tools_email.analysis_service import EnergyAnalysisService
-    real_assert_current = EnergyAnalysisService._assert_current
-    context_changes = []
-    registry_events = []
-    from homeassistant.core import callback
-    @callback
-    def observe_registry(event):
-        registry_events.append({'action': event.data.get('action'),
-            'entity_id': event.data.get('entity_id'),
-            'changed_fields': sorted(event.data.get('changes', {}))})
-    hass.bus.async_listen(er.EVENT_ENTITY_REGISTRY_UPDATED, observe_registry)
-
-    def observe_assert_current(self, context):
-        try:
-            return real_assert_current(self, context)
-        except RuntimeError as error:
-            if str(error) == 'energy_analysis_context_changed':
-                _, _, current = self._recapture(context)
-                changed = sorted(key for key, value in current.items()
-                                 if context.get(key) != value)
-                context_changes.append({'changed_keys': changed,
-                    'registry_revision_before': context.get('registry_revision'),
-                    'registry_revision_after': current.get('registry_revision'),
-                    'normalization_changed': 'normalization_signature' in context
-                        and context['normalization_signature'] != self._normalization})
-                import json
-                print('READINESS_CONTEXT', json.dumps(context_changes[-1]), 'REGISTRY_EVENTS', json.dumps(registry_events[-5:]), flush=True)
-            raise
-
-    monkeypatch.setattr(EnergyAnalysisService, '_assert_current', observe_assert_current)
-
-
+        hass,hass_storage,recorder_mock,hass_ws_client,hass_admin_user,freezer,compile_delay):
     await hass.config.async_set_time_zone('UTC')
     entry,storage=await _setup(hass)
     await storage.async_save_tariff_book(migrate_tariff_v1(profile(),legacy_combined=False),expected_revision=0)
@@ -137,7 +74,7 @@ async def test_real_hour_compile_after_boundary_or_next_hour_is_automatically_re
     refresh_token=await hass.auth.async_create_refresh_token(hass_admin_user,client_id='http://localhost/')
     client=await hass_ws_client(hass,hass.auth.async_create_access_token(refresh_token))
     membership_revision = hass.data[DOMAIN]['energy_membership'].revision
-    prepared=await command(client,'prepare');assert prepared['success'],(prepared,prepare_failures,context_changes)
+    prepared=await command(client,'prepare');assert prepared['success'],prepared
     assert hass.data[DOMAIN]['energy_membership'].revision == membership_revision
     enabled=await command(client,'enable',proposal=prepared['result']['proposal'],expected_revision=prepared['result']['revision'],
         acknowledge_global=True,acknowledge_current_membership=True)
@@ -165,7 +102,6 @@ async def test_real_hour_compile_after_boundary_or_next_hour_is_automatically_re
         freezer.move_to(datetime.now(UTC)+timedelta(seconds=15))
         async_fire_time_changed(hass,datetime.now(UTC))
         await hass.async_block_till_done();await drain(runtime)
-    assert publisher._state['runtime']['last_end'] is not None, (runtime_observations, context_changes, publisher._state['runtime'], publisher._state['pending'], runtime._paused, runtime._retry_after)
     sid=next(sid for sid,row in publisher._state['series'].items() if row['identity']['kind']=='area')
     result=await recorder_mock.async_add_executor_job(partial(statistics_during_period,
         hass,END-timedelta(hours=1),END,{sid},'hour',None,{'sum','change'}))

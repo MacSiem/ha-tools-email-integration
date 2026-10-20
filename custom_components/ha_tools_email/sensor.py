@@ -78,10 +78,16 @@ class EnergySensor(EnergySnapshotEntity, SensorEntity):
     def options(self):
         if self.key != 'zone':
             return None
-        data = self.coordinator.data or {}
+        data = self.coordinator.data
+        if data is None:
+            # Loading/error invalidates values, not the last accepted ENUM schema.
+            # Dropping options here makes Core rewrite registry capabilities and
+            # spuriously invalidate in-flight source/statistics authorization.
+            return list(getattr(self, '_published_zone_options', ()))
         options = data.get('entity_facts', {}).get('zone_options', [])
         value = data.get('current', {}).get('zone_id')
-        return list(dict.fromkeys([*options, *([value] if value is not None else [])]))
+        self._published_zone_options = tuple(dict.fromkeys([*options, *([value] if value is not None else [])]))
+        return list(self._published_zone_options)
 
     @property
     def state_class(self):
