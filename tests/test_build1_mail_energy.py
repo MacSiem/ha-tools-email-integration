@@ -23,33 +23,25 @@ GOLDEN = json.loads((ROOT / 'tests/fixtures/build1/golden-energy-2026-10-17.json
 
 
 class Build1MailEnergyTests(unittest.TestCase):
-    def test_previous_period_ticks_are_local_images_with_inversion_independent_pixels(self):
+    def test_previous_period_ticks_use_clipped_foreground_without_image_dependencies(self):
         from html.parser import HTMLParser
         class Markers(HTMLParser):
-            def __init__(self):super().__init__();self.images=[]
+            def __init__(self):super().__init__();self.markers=[]
             def handle_starttag(self,tag,attrs):
                 a=dict(attrs)
-                if tag=='img' and 'tick' in a.get('class','').split():self.images.append(a)
-        doc=Markers();doc.feed(self.render(language='en')['html'])
-        self.assertGreaterEqual(len(doc.images),25)
-        sources={a['src'] for a in doc.images}
-        self.assertEqual(1,len(sources))
-        source=next(iter(sources))
-        self.assertTrue(source.startswith('data:image/png;base64,'))
-        import base64,struct,zlib
-        png=base64.b64decode(source.split(',',1)[1],validate=True)
-        self.assertEqual(b'\x89PNG\r\n\x1a\n',png[:8])
-        self.assertEqual((2,2),struct.unpack('!II',png[16:24]))
-        at=8;compressed=b''
-        while at<len(png):
-            size=int.from_bytes(png[at:at+4],'big');kind=png[at+4:at+8]
-            if kind==b'IDAT':compressed+=png[at+8:at+8+size]
-            at+=12+size
-        self.assertEqual(b'\x00'+bytes.fromhex('e5e7ebe5e7eb')+b'\x00'+bytes.fromhex('111827111827'),zlib.decompress(compressed))
-        for a in doc.images:
-            self.assertEqual('2',a['height'])
-            self.assertEqual('',a['alt'])
-            self.assertNotIn('http',a['src'])
+                if 'tick-ink' in a.get('class','').split():self.markers.append(a)
+        html=self.render(language='en')['html']
+        doc=Markers();doc.feed(html)
+        self.assertGreaterEqual(len(doc.markers),25)
+        for a in doc.markers:
+            self.assertEqual('true',a['aria-hidden'])
+            self.assertIn('height:2px',a['style'])
+            self.assertIn('overflow:hidden',a['style'])
+            self.assertIn('color:#111827',a['style'])
+        self.assertNotIn('<img',html)
+        self.assertNotIn('background-image:',html)
+        self.assertEqual(24,html.count('style="padding:0 1px"><table role="presentation" width="100%" style="table-layout:fixed">'))
+        self.assertNotIn('█',self.render()['text'])
 
     def test_unknown_zone_classification_never_infers_cheap_from_rate_or_order(self):
         for row in self.model['zones']:
@@ -84,10 +76,7 @@ class Build1MailEnergyTests(unittest.TestCase):
         self.assertEqual(markers, [str(i) for i in range(13)])
         for text in ('width="600"', 'max-width:600px', 'max-width: 480px', 'prefers-color-scheme: dark', 'supported-color-schemes', 'mso-hide:all', 'height="4"'):
             self.assertIn(text, html)
-        # Only the fixed local marker is allowed; no network images or trackers.
-        from importlib import import_module
-        asset=import_module(PACKAGE+'.mail_frame').ENERGY_MARKER_DATA_URI
-        self.assertEqual({asset},set(re.findall(r'<img[^>]+src="([^"]+)"',html)))
+        self.assertNotIn('<img', html)
         self.assertNotIn('<svg', html)
         self.assertEqual(html.count('Jak czytać te liczby.'), 1)
         self.assertNotIn('href=', html)
