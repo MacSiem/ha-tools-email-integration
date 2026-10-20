@@ -74,6 +74,7 @@ _CSS = ('body{margin:0;background:#eef2f7;color:#202a38;font:14px Arial,sans-ser
         'caption{font-size:15px;font-weight:bold;padding-top:15px;padding-bottom:6px}'
         '.field-label{background:transparent;font-weight:normal;border-bottom:1px solid #d8e0eb}'
         '.number{text-align:right;font-variant-numeric:tabular-nums}'
+        '.unit{font-size:12px;white-space:nowrap;overflow-wrap:normal}'
         'th{background:#edf2f8}td{border-bottom:1px solid #d8e0eb;white-space:pre-wrap}'
         '.header{background:#284c80;color:#fff;font-size:21px;padding:16px}'
         '.period td{background:#284c80;color:#edf4ff;padding:0 16px 12px;border:0;font-size:12px}'
@@ -414,7 +415,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         text_parts.append('\n' + title_text)
         html_parts.append('<table' + (' data-section="' + section + '"' if section else '')
                           + '><caption>' + escape(title_text) + '</caption>'
-                          + '<colgroup><col width="50%"><col width="34%"><col width="16%"></colgroup>')
+                          + '<colgroup><col width="50%"><col width="28%"><col width="22%"></colgroup>')
         if not rows:
             rows = [(tr('Dane', 'Data'), unknown, '', None)]
         for caption, value, unit, bar in rows:
@@ -423,7 +424,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
             value_attrs = (' class="number"' if numeric else '') + (' colspan="2"' if not unit else '')
             html_parts.append('<tr><th scope="row" class="field-label">' + escape(caption) + '</th><td'
                 + value_attrs + '>' + escape(value) + '</td>'
-                + ('<td>' + escape(unit) + '</td>' if unit else '') + '</tr>')
+                + ('<td class="unit">' + escape(unit) + '</td>' if unit else '') + '</tr>')
             if bar is not None:
                 width, color = bar
                 html_parts.append('<tr><td colspan="3"><table role="presentation" class="bar-track" width="100%"><tr>'
@@ -1144,9 +1145,14 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
             if status:
                 zone_rows.append([clock, '\n'.join(caption + ': ' + value for caption, value, _, _ in status), ''])
     if zone_rows:
-        matrix(tr('Szczegóły · Zmierzone strefy', 'Details · Measured zones'),
-            [tr('Czas i strefa', 'Time and zone'), tr('Pomiary', 'Measurements'), tr('Koszty', 'Costs')],
-            zone_rows, section='measured-zone-values')
+        zone_title = tr('Szczegóły · Zmierzone strefy', 'Details · Measured zones')
+        text_parts.append('\n' + zone_title)
+        html_parts.append('<table data-section="measured-zone-values"><caption>' + escape(zone_title) + '</caption>')
+        for caption, measurements, costs in zone_rows:
+            text_parts.extend([caption, measurements, costs])
+            html_parts.append('<tr><th colspan="2" scope="colgroup" data-role="zone-heading">' + escape(caption)
+                + '</th></tr><tr><td>' + escape(measurements) + '</td><td>' + escape(costs) + '</td></tr>')
+        html_parts.append('</table>')
     fee_rows = []
     for index, day in enumerate((snapshot.get('fees') or {}).get('days') or []):
         row = fact(('fees', 'days', index, 'day_fraction'))

@@ -62,7 +62,8 @@ class Mail136Test(unittest.TestCase):
         result = self.render()
         zones = self.section(result, 'measured-zone-values')
         rows = [node for node in zones.children if isinstance(node, fixture.ReportNode) and node.tag == 'tr']
-        self.assertLessEqual(len(rows), 25)
+        self.assertLessEqual(len(rows), 49)
+        self.assertEqual(24, len(zones.find(data_role='zone-heading')))
         self.assertNotIn('Unattributed to zone', zones.text())
         self.assertIn('10.0 kWh', zones.text())
         groups = self.section(result, 'comparison-groups')
