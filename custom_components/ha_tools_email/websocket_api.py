@@ -232,7 +232,7 @@ async def _ws_feature_capabilities(hass, connection, msg):
         connection.send_error(msg['id'], 'feature_access_changed', 'Access settings changed. Reload before continuing.')
         return
     connection.send_result(msg['id'], {'capabilities': capabilities, 'revision': state['revision'],
-                                      'status': state['status']})
+                                      'status': state['status'], 'energy_model_schema': 'ha_tools.energy_report/1'})
 
 
 @websocket_api.websocket_command({
@@ -470,15 +470,45 @@ async def _ws_energy_analysis(hass, connection, msg):
     vol.Required('type'): f'{DOMAIN}/energy_report',
     vol.Optional('period', default='day'): vol.In(('day', 'week', 'month', 'year')),
     vol.Optional('anchor'): str,
+    vol.Optional('date'): str,
+    vol.Optional('mode'): vol.In(('so_far','full')),
+    vol.Optional('representation'): vol.In(('model','document')),
     vol.Optional('comparison'): str,
-    vol.Required('language'): vol.In(('pl', 'en')),
+    vol.Optional('language'): vol.In(('pl', 'en')),
     vol.Optional('date_language'): vol.In(('pl', 'en')),
-    vol.Required('timezone'): str,
-    vol.Required('hour_cycle'): vol.In(('12', '24')),
+    vol.Optional('timezone'): str,
+    vol.Optional('hour_cycle'): vol.In(('12', '24')),
 })
 @websocket_api.async_response
 async def _ws_energy_report(hass, connection, msg):
     """Read-only report in HA; identity and feature purpose are server-owned."""
+    if msg.get('representation') == 'model':
+        if any(key in msg for key in ('anchor','comparison','language','date_language','timezone','hour_cycle')):
+            connection.send_error(msg['id'],'invalid_model_request','Use date and mode for the model representation.')
+            return
+        if not await _feature_authorized(hass,connection,'energy_analysis','read'):
+            connection.send_error(msg['id'],'unauthorized','Energy access required.')
+            return
+        service = hass.data.get(DOMAIN,{}).get('energy_analysis')
+        try:
+            result = await service.async_get_build1_model(msg.get('period','day'),connection.user.id,
+                date=msg.get('date'),mode=msg.get('mode','so_far'),purpose='analysis')
+            if (not await service.async_validate_result(result,connection.user.id)
+                    or hass.data.get(DOMAIN,{}).get('energy_analysis') is not service
+                    or not service.context_is_current(result)):
+                raise RuntimeError('energy_analysis_changed')
+        except PermissionError:
+            connection.send_error(msg['id'],'unauthorized','Energy or source access required.')
+            return
+        except Exception:
+            connection.send_error(msg['id'],'energy_report_unavailable','Energy report is unavailable.')
+            return
+        connection.send_result(msg['id'],result['report_model'])
+        return
+    if not all(key in msg for key in ('language','timezone','hour_cycle')) or any(key in msg for key in ('date','mode')):
+        connection.send_error(msg['id'],'invalid_report_request','Document display preferences are required.')
+        return
+
     if not await _feature_authorized(hass, connection, 'energy_reports', 'read'):
         connection.send_error(msg['id'], 'unauthorized', 'Report access required.')
         return
