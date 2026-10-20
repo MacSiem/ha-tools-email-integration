@@ -9,7 +9,7 @@ import math
 from zoneinfo import ZoneInfo
 
 from . import energy_format as fmt
-from .mail_frame import E, FONT, L, ENERGY_MARKER_DATA_URI, button, h2, hr, kpi_cell, paragraph, render_frame, safe_external_url, section
+from .mail_frame import E, FONT, L, button, h2, hr, kpi_cell, paragraph, render_frame, safe_external_url, section
 
 _LABELS = {
     'energy': ('Energia', 'Energy'), 'import': ('Zużycie (import)', 'Consumption (import)'),
@@ -65,6 +65,15 @@ _COMPARE = {
     'same_week_last_year': ('ten sam tydzień rok temu', 'same week last year'),
     'same_month_last_year': ('ten sam miesiąc rok temu', 'same month last year'),
 }
+
+
+def _previous_tick(*, legend=False):
+    # Actual foreground glyphs follow Gmail's readable-text inversion. A fixed
+    # two-pixel clip preserves chart geometry without remote or inline images.
+    display, width = ('inline-block', '10px') if legend else ('block', '100%')
+    return (f'<span class="tick-ink" aria-hidden="true" style="display:{display};width:{width};'
+            'height:2px;overflow:hidden;vertical-align:3px;font:700 8px/2px monospace;'
+            'white-space:nowrap;color:#111827">' + '█' * 128 + '</span>')
 
 
 def _numeric(value):
@@ -299,9 +308,7 @@ class _View:
                 attrs = f' class="{key}" bgcolor="{color}"' if key else ''
                 bg = f'background-color:{color};' if color else ''
                 if key == 'tick':
-                    # A fixed local PNG keeps both contrasting pixels in Gmail.
-                    image = f'<img class="tick" src="{ENERGY_MARKER_DATA_URI}" width="100%" height="2" alt="" role="presentation" style="display:block;width:100%;height:2px;border:0">'
-                    segments.append(f'<tr><td height="{height}" style="height:{height}px;line-height:0;font-size:0">{image}</td></tr>')
+                    segments.append(f'<tr><td height="{height}" style="height:{height}px;line-height:0;font-size:0">{_previous_tick()}</td></tr>')
                 else:
                     segments.append(f'<tr><td{attrs} height="{height}" style="height:{height}px;{bg}line-height:0;font-size:0">&nbsp;</td></tr>')
                 cursor = end
@@ -312,12 +319,12 @@ class _View:
                 hour = int(p['hour'])
                 label = f'{hour:02d}:00' if self.cycle not in ('12', 'h12', 12) else f'{hour % 12 or 12}:00 {"AM" if hour < 12 else "PM"}'
             tip = f'{label}: {self.energy(current)}'
-            cols.append(f'<td data-energy-bar="{idx}" title="{E(tip)}" valign="bottom" width="{100 / len(points):.4f}%" style="padding:0 1px"><table role="presentation" width="100%">{"".join(segments)}</table></td>')
+            cols.append(f'<td data-energy-bar="{idx}" title="{E(tip)}" valign="bottom" width="{100 / len(points):.4f}%" style="padding:0 1px"><table role="presentation" width="100%" style="table-layout:fixed">{"".join(segments)}</table></td>')
             visible = daily and (len(points) <= 7 or idx % 7 == 0) or not daily and date is not None and date.hour in (0, 6, 12, 18)
             labels.append((idx, label)) if visible else None
             self.lines.append(f'- {tip}{"*" if p.get("zone") == "cheap" else ""} · {p.get("zone") or ""} · {self.tr("previous")}: {self.energy(previous)}')
         legend = ' '.join(f'<span class="{self.color(z.get("id"))}" style="display:inline-block;width:10px;height:10px;border-radius:3px;background-color:{L[self.color(z.get("id"))]}"></span>&nbsp;{E(self.zone_label(z))} {E(z.get("hours_label"))}' for z in self.zones)
-        legend += f' <img class="tick" src="{ENERGY_MARKER_DATA_URI}" width="10" height="2" alt="" role="presentation" style="display:inline-block;width:10px;height:2px;vertical-align:3px;border:0">&nbsp;{E(self.comparison_label(self.comparisons[0]) if self.comparisons else self.tr("previous"))}'
+        legend += f' {_previous_tick(legend=True)}&nbsp;{E(self.comparison_label(self.comparisons[0]) if self.comparisons else self.tr("previous"))}'
         axis = []
         for n, (idx, label) in enumerate(labels):
             following = labels[n + 1][0] if n + 1 < len(labels) else len(points)
