@@ -33,16 +33,17 @@ class Build1MailEnergyTests(unittest.TestCase):
         doc=Markers();doc.feed(self.render(language='en')['html'])
         self.assertGreaterEqual(len(doc.styles),25)  # actual 24-hour chart and legend
         for style in doc.styles:
-            self.assertIn('border-top:1px solid #9ca3af',style)
+            self.assertIn('border-top:1px solid currentColor',style)
+            self.assertIn('color:#111827',style)
             self.assertIn('box-sizing:border-box',style)
             self.assertIn('height:2px',style)
         # Gmail Android can retain #111827 cells while inverting the page.
-        # The gray edge remains distinguishable against the actual dark page.
+        # Native dark CSS also binds currentColor to the readable foreground.
         def lum(value):
             rgb=[int(value[i:i+2],16)/255 for i in (1,3,5)]
             rgb=[v/12.92 if v<=.04045 else ((v+.055)/1.055)**2.4 for v in rgb]
             return sum(a*b for a,b in zip(rgb,(.2126,.7152,.0722)))
-        edge=lum('#9ca3af');dark=lum('#111111')
+        edge=lum('#e5e7eb');dark=lum('#111214')
         self.assertGreater((edge+.05)/(dark+.05),3)
 
     def test_unknown_zone_classification_never_infers_cheap_from_rate_or_order(self):

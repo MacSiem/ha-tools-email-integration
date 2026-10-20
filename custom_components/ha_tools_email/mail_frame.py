@@ -21,7 +21,7 @@ def css():
              ('d1', 'background-color', 'd1'), ('d2', 'background-color', 'd2'), ('d3', 'background-color', 'd3'), ('d4', 'background-color', 'd4'),
              ('other', 'background-color', 'other'), ('unm', 'background-color', 'unmeasured'), ('room', 'background-color', 'room'), ('acc', 'background-color', 'accent'),
              ('btn', 'background-color', 'btn'), ('btntx', 'color', 'btntx'), ('good', 'color', 'good'), ('warn', 'color', 'warn'), ('crit', 'color', 'crit'),
-             ('tick', 'background-color', 'tx')]
+             ('tick', 'background-color', 'tx'), ('tick', 'color', 'tx')]
     dark = '\n'.join(f'  .{c} {{ {p}: {D[k]} !important; }}' for c, p, k in pairs)
     ogsc = '\n'.join(f'[data-ogsc] .{c} {{ color: {D[k]} !important; }}' for c, p, k in pairs if p == 'color')
     ogsb = '\n'.join(f'[data-ogsb] .{c} {{ background-color: {D[k]} !important; }}' for c, p, k in pairs if p == 'background-color')
