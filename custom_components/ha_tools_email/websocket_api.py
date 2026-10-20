@@ -172,7 +172,8 @@ async def _ws_subscribe_analysis_updates(hass, connection, msg):
         connection.send_event(msg['id'], {})
 
     try:
-        for event in (f'{DOMAIN}_energy_analysis_updated', f'{DOMAIN}_feature_access_updated',
+        for event in (f'{DOMAIN}_energy_analysis_updated', f'{DOMAIN}_energy_updated',
+                      f'{DOMAIN}_feature_access_updated',
                       EVENT_REPORT_STATUS_UPDATED, EVENT_SCHEDULES_CHANGED):
             removers.append(hass.bus.async_listen(event, changed))
         service._update_subscriptions.add(unsubscribe)

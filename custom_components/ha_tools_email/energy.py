@@ -231,6 +231,11 @@ class EnergySnapshotCoordinator:
         self._unsub = None
         self._boundary_unsub = None
         self._model_boundaries = []
+        # Constant-size control state, separate from shared/manual snapshots.
+        # Invalidation queues a bit; only the trusted tick may publish it.
+        self._energy_update_key = None
+        self._energy_update_invalidated = False
+        self._energy_update_purged = False
 
     @property
     def running(self):
@@ -288,8 +293,12 @@ class EnergySnapshotCoordinator:
         return lambda: self._listeners.discard(listener)
 
     async def async_start(self):
+        if self._stopped or self._unsub is not None:
+            return
         from homeassistant.helpers.event import async_track_time_interval
         await self._async_tick(None)
+        if self._stopped:
+            return
         self._unsub = async_track_time_interval(self.hass, self._async_tick, timedelta(seconds=30))
         self._schedule_boundary(datetime.now(timezone.utc))
 
@@ -305,14 +314,58 @@ class EnergySnapshotCoordinator:
             self._invalidate()
         finally:
             self._tick_running = False
+        self._publish_energy_update(result)
         if result is not None and result == self.data:
             # Only this server-clock background path owns missing-import facts.
             # Outside the refresh catch: Repair errors must remain observable.
             from .energy_repairs import publish_missing_import
             publish_missing_import(self)
 
+    def _publish_energy_update(self, result):
+        """Server-tick-only, control-only notification after final fresh guards.
+
+        One accepted update per absolute five-minute bucket, plus real tariff
+        state changes. A failed refresh purges once until restoration. A lower
+        API invalidation only queues a bit; a successful next tick coalesces
+        pending purge+restore into one accepted update, never two refreshes.
+        No await follows the ownership/context checks and precedes bus fire.
+        """
+        bucket = getattr(self.hass, 'data', {}).get(DOMAIN, {})
+        if (self._stopped or bucket.get('energy_snapshot') is not self
+                or bucket.get('storage') is not self.storage):
+            return
+        fire = getattr(getattr(self.hass, 'bus', None), 'async_fire', None)
+        if fire is None:
+            return
+        accepted = (result is not None and result == self.data
+                    and result.get('profile_source') == 'shared')
+        if accepted and not self.tariff_context_is_current(result):
+            self._invalidate()
+            accepted = False
+        if not accepted:
+            if self._energy_update_invalidated and not self._energy_update_purged:
+                fire(f'{DOMAIN}_energy_updated', {})
+                self._energy_update_purged = True
+            return
+        current = result.get('current', {})
+        stamp = datetime.fromisoformat(result['generated_at'])
+        # Only bounded scalar metadata, never a source matrix or policy.
+        key = (int(stamp.timestamp()) // 300,
+            result.get('tariff_revision'), result.get('currency'), result.get('price_basis'),
+            result.get('measurement_timezone'), result.get('tariff_timezone'),
+            *(current.get(name) for name in ('available', 'zone_id', 'zone_class',
+                'energy_rate', 'variable_rate', 'usage_rate')))
+        if (key != self._energy_update_key or self._energy_update_invalidated
+                or self._energy_update_purged):
+            fire(f'{DOMAIN}_energy_updated', {})
+            self._energy_update_key = key
+            self._energy_update_invalidated = False
+            self._energy_update_purged = False
+
     def _invalidate(self):
         self.data = None
+        if not self._stopped:
+            self._energy_update_invalidated = True
         for listener in tuple(self._listeners):
             listener()
 
@@ -334,6 +387,9 @@ class EnergySnapshotCoordinator:
             from .energy_repairs import clear_owned_issues
             clear_owned_issues(self)
         self._stopped = True
+        self._energy_update_key = None
+        self._energy_update_invalidated = False
+        self._energy_update_purged = False
         if self._unsub:
             self._unsub()
             self._unsub = None
