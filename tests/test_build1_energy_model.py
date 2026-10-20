@@ -34,6 +34,29 @@ def inputs_for(start='2026-10-17T00:00:00+02:00', end='2026-10-18T00:00:00+02:00
 
 
 class Build1ModelTests(unittest.TestCase):
+    def test_daily_chart_aggregates_real_dst_hours_and_keeps_missing_day_unknown(self):
+        inputs = inputs_for('2026-10-25T00:00:00+02:00','2026-10-27T00:00:00+01:00')
+        inputs['period']['kind'] = 'week'
+        inputs['projection']['hours'] = inputs['projection']['hours'][:25]
+        result = model.build_report(inputs)
+        self.assertEqual(2,len(result['daily']))
+        self.assertEqual(25,result['daily'][0]['kwh'])
+        self.assertEqual(12.5,result['daily'][0]['cost'])
+        self.assertTrue(result['daily'][0]['complete'])
+        self.assertIsNone(result['daily'][1]['kwh'])
+        self.assertFalse(result['daily'][1]['complete'])
+        self.assertEqual(25,result['daily'][0]['zones'][0]['kwh'])
+
+    def test_previous_hour_ticks_use_real_civil_matches_without_dst_invention(self):
+        inputs = inputs_for('2026-10-25T00:00:00+02:00','2026-10-26T00:00:00+01:00')
+        inputs['previous'] = {'start':'2026-10-24T00:00:00+02:00',
+            'end':'2026-10-25T00:00:00+02:00','hours':[
+                {'from':'2026-10-24T02:00:00+02:00','to':'2026-10-24T03:00:00+02:00','kwh':'1.23456789'}]}
+        result = model.build_report(inputs)
+        repeated = [r for r in result['hourly'] if r['hour']==2]
+        self.assertEqual([1.23456789,None],[r['prev_kwh'] for r in repeated])
+        self.assertEqual(25,result['totals']['import_kwh'])
+
     def test_inclusive_parent_and_root_rooms_do_not_double_count(self):
         inputs = inputs_for()
         original = copy.deepcopy(inputs)
