@@ -49,7 +49,7 @@ class Mail136Test(unittest.TestCase):
         destination = self.section(result, 'flow-destination-composition')
         self.assertEqual(2, len(source.find(data_role='flow-segment')))
         self.assertEqual(2, len(destination.find(data_role='flow-segment')))
-        for text in ('From', 'To', '192.0 kWh', '58.0 kWh', '50 kWh', '200.0 kWh', 'Unmeasured'):
+        for text in ('From', 'To', '192.0 kWh', '58.0 kWh', '50.0 kWh', '200.0 kWh', 'Unmeasured'):
             self.assertIn(text, result['text'])
         self.assertNotIn('No area', destination.text())
         self.assertIn('76.8%', source.text())
