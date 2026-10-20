@@ -98,9 +98,12 @@ class Report70ComparisonTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('11.0', rows['comparisons.previous.delta_kwh']['value'])
         self.assertEqual('-1.00', rows['comparisons.previous.costs.delta_cost']['value'])
         for kind in ('html','text'):
-            self.assertIn('Previous period', report[kind])
-            self.assertIn('11.0', report[kind])
-            self.assertIn('-1.00', report[kind])
+            self.assertIn('Comparison', report[kind])
+            self.assertIn('+11.0', report[kind])
+        # Monetary common-window delta remains exact export data, rather than
+        # being mistaken for the R9 consumption comparison in the new mail.
+        self.assertEqual('-1.00', rows['comparisons.previous.costs.delta_cost']['value'])
+        for kind in ('html','text'):
             self.assertNotIn('real-admin', report[kind])
         self.assertIn('period_summary.peak_hour', report['csv'])
 
@@ -156,7 +159,19 @@ class Report70ComparisonTest(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(Decimal('0'),Decimal(device['delta_kwh']))
                 if not missing_device:
                     self.assertFalse(comparison['groups']['reconciles_household_delta'])
-                self.assertIn('Common measurements only',report['html'])
+                # Preserve the old common-mask arithmetic in summary and CSV.
+                # BUILD-1 R9 compares each actual window at >=90% coverage:
+                # current 240 vs measured baseline 230, not 230 vs230.
+                model = h.subject._cache[2]['report_model']
+                r9 = next(row for row in model['comparisons'] if row['key'] == 'previous_day')
+                self.assertEqual(230, r9['kwh'])
+                self.assertEqual(10, r9['delta_kwh'])
+                self.assertTrue(r9['coverage_ok'])
+                self.assertAlmostEqual(100*10/230, r9['delta_pct'])
+                self.assertIn('+4.3%', report['html'])
+                exported = {row['field']: row for row in csv.DictReader(StringIO(report['csv']))}
+                self.assertEqual('230.0', exported['comparisons.previous.current_kwh']['value'])
+                self.assertEqual('230.0', exported['comparisons.previous.baseline_kwh']['value'])
 
     async def test_zero_baseline_is_measured_zero_with_unknown_percentage(self):
         h, _ = self.fixture('2026-01-03T12:00:00+00:00')
@@ -186,6 +201,7 @@ class Report70ComparisonTest(unittest.IsolatedAsyncioTestCase):
         h, _ = self.fixture('2026-01-03T12:00:00+00:00');request=self.request(h)
         with h.patches():
             first=await self.prepare(h,request)
+            self.assertEqual(request.end, first['context']['report_cutoff'])
             count=len(h.queries)
             h.now += timedelta(hours=1)
             again=await self.prepare(h,request)
@@ -275,8 +291,9 @@ class Report70ComparisonTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(artifact['text'],parts['text/plain'])
         self.assertEqual(artifact['html'],parts['text/html'])
         for text in parts.values():
-            self.assertIn(artifact['snapshot_id'],text)
-            self.assertIn('Previous period',text)
+            self.assertIn('Comparison',text)
+        self.assertIn('<!-- ha-tools-snapshot:' + artifact['snapshot_id'] + ' -->', parts['text/html'])
+        self.assertNotIn(artifact['snapshot_id'], parts['text/plain'])
         self.assertEqual(artifact['snapshot_id'],artifact['summary']['snapshot_id'])
         self.assertIn(artifact['snapshot_id'],artifact['csv'])
 
@@ -296,7 +313,14 @@ class Report70ComparisonTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('calendar_boundary_not_recorder_hour',previous['reason'])
         self.assertEqual('hour',previous['chart']['grain'])
         self.assertEqual([],previous['chart']['markers'])
-        self.assertTrue(all(start >= datetime.fromisoformat(request.start) for _,start,_ in h.queries))
+        # Only the legacy previous plan is unavailable. Color history and the
+        # independent same-weekday/mean7 windows remain legitimate bounded IO.
+        self.assertNotIn('baseline_analysis', previous)
+        self.assertTrue(all(0 < (end-start).total_seconds() <= 168*3600 for _,start,end in h.queries))
+        model = h.subject._cache[2]['report_model']
+        r9 = next(row for row in model['comparisons'] if row['key'] == 'previous_day')
+        self.assertFalse(r9['coverage_ok'])
+        self.assertEqual(0, r9['qualified_days'])
         self.assertEqual(Decimal('240'),Decimal(report['summary']['total_kwh']))
 
     async def test_plan_context_is_hashed_detached_and_revalidated_for_server_actor(self):

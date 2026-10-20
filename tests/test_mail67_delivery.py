@@ -275,6 +275,9 @@ class ActualDeliveryTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_scheduled_reread_then_native_validation_after_smtp_load(self):
         h,sent=self.fixture();events=[]
+        async def before_read(ids, start, end):
+            self.assertNotIn('smtp_load', events)
+        h.on_read = before_read
         expected={'id':'s','kind':'energy_report','cadence':'daily','enabled':True}
         async def load():
             events.append('smtp_load')
@@ -293,9 +296,13 @@ class ActualDeliveryTest(unittest.IsolatedAsyncioTestCase):
                 recipients=[],now=h.now,actor='real-admin',schedule_id='s',expected_schedule=expected)
         self.assertEqual(['smtp_load','schedule_reread','native_validation'],events)
         self.assertEqual('accepted_by_smtp',result['status'])
-        self.assertEqual({'smtp_config':1,'schedule_read':1,'private_queries':4,'sent':1},
+        self.assertEqual({'smtp_config':1,'schedule_read':1,'sent':1},
             {'smtp_config':h.hass.data[service.DOMAIN]['load_config'].await_count,
-             'schedule_read':h.storage.async_get_schedule.await_count,'private_queries':len(h.queries),'sent':len(sent)})
+             'schedule_read':h.storage.async_get_schedule.await_count,'sent':len(sent)})
+        # R9 and qualified 30-day colors add authorized historical reads. Every
+        # read remains bounded and is completed before SMTP configuration loads.
+        self.assertGreaterEqual(len(h.queries), 4)
+        self.assertTrue(all(0 < (end-start).total_seconds() <= 168*3600 for _,start,end in h.queries))
 
 
     async def test_log_path_keeps_config_before_composer_without_energy_io(self):

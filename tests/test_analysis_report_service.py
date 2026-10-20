@@ -1,6 +1,7 @@
 """Report lifecycle on the real calculation/CPU service without SMTP."""
 from copy import deepcopy
 import sys
+import importlib
 import types
 import unittest
 from unittest.mock import patch
@@ -10,6 +11,18 @@ from tests.test_energy_analysis_service import Harness, service
 class AnalysisReportServiceTest(unittest.IsolatedAsyncioTestCase):
     def fixture(self):
         h=Harness();h.user.is_admin=True
+        inputs = importlib.import_module(service.__package__ + '.energy_inputs')
+        original_patches = h.patches
+        async def missing_short_cells(subject, configuration, start, end, guard):
+            # This fixture exercises renderer authorization, not Recorder. No
+            # short-term records are supplied: preserve unknown, never a zero.
+            await guard()
+            return {row['entity_id']: None for row in subject._sensors(configuration)}
+        def patches():
+            stack = original_patches()
+            stack.enter_context(patch.object(inputs, 'async_short_hour', missing_short_cells))
+            return stack
+        h.patches = patches
         calls=[]
         def validate(language,timezone_name,hour_cycle, *, date_language=None):
             if date_language is not None and date_language not in ('en','pl'):

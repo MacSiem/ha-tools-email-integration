@@ -71,7 +71,9 @@ class FriendlyEnergyMailDatesTest(unittest.TestCase):
                 expected=('18 paź 2026 15:00:00 -0700' if language=='pl' else 'Oct 18, 2026 15:00:00 -0700')
                 for field in ('body','html'):
                     body=unescape(payload[field])
-                    self.assertIn(expected,body)
+                    # Compact mail labels retain the calendar identity while
+                    # exact converted instants/offsets remain in the CSV audit.
+                    self.assertIn('18 paź' if language == 'pl' else '18 Oct',body)
                     self.assertIn('America/Los_Angeles',body)
                     self.assertNotIn('2026-10-19 (24h;',body)
                 self.assertEqual(expected+' [America/Los_Angeles]',facts['period.start'])
@@ -98,8 +100,8 @@ class FriendlyEnergyMailDatesTest(unittest.TestCase):
                 self.assertEqual([first,second,prefix+' 03:00:00 +0100 [Europe/Warsaw]'],
                     [values[f'chart.bins.{i}.from'] for i in range(3)])
                 for field in ('body','html'):
-                    self.assertIn('02:00 +0200',unescape(payload[field]))
-                    self.assertIn('02:00 +0100',unescape(payload[field]))
+                    self.assertIn('02:00 UTC+02:00',unescape(payload[field]))
+                    self.assertIn('02:00 UTC+01:00',unescape(payload[field]))
                 from tests.helper_composer_schema2 import renderer
                 from tests.test_mail_layout import Document
                 # Short clocks distinguish the actual instants in both clock

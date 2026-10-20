@@ -18,6 +18,7 @@ service=service_fixture.service
 provider=service_fixture.provider
 composer=importlib.import_module(service.__package__+'.composer')
 renderer=importlib.import_module(service.__package__+'.energy_report')
+inputs=importlib.import_module(service.__package__+'.energy_inputs')
 history=importlib.import_module(service.__package__+'.tariff_history')
 UTC=timezone.utc
 
@@ -62,7 +63,7 @@ class ComposerFixture:
         self.points=points or self._unit_points
         self.language=language;self.display_zone=display_zone or measurement_zone
         self.manager_reads=[];self.metadata_reads=[];self.statistics_calls=[]
-        self.adapter_reads=[];self.rendered_snapshots=[]
+        self.adapter_reads=[];self.rendered_snapshots=[];self.statistic_periods=[]
 
     def _unit_points(self,start,end,ids):
         return {sid:[{'start':(start+timedelta(hours=i)).timestamp(),'change':row.get('change',1)}
@@ -90,11 +91,17 @@ class ComposerFixture:
                 for sid,row in self.rows.items() if sid in statistic_ids}
         def statistics(hass,start,end,ids,*args):
             self.statistics_calls.append((start,end,set(ids)))
+            self.statistic_periods.append(args[0] if args else 'hour')
+            if args and args[0] == '5minute':
+                # Explicit short records only. Do not spread fixture daily/hour
+                # aggregates into fabricated five-minute measurements.
+                return {sid: deepcopy(row.get('short_points', [])) for sid,row in self.rows.items() if sid in ids}
             return deepcopy(self.points(start,end,ids))
         stats.get_metadata=metadata;stats.statistics_during_period=statistics
         class Recorder:
             async def async_add_executor_job(self,fn,*args,**kwargs):return fn(*args,**kwargs)
         util=types.ModuleType('homeassistant.components.recorder.util');util.get_instance=lambda hass:Recorder()
+        recorder=types.ModuleType('homeassistant.components.recorder');recorder.get_instance=util.get_instance
         energy=types.ModuleType('homeassistant.components.energy.data')
         async def manager(hass):
             self.manager_reads.append(True)
@@ -113,10 +120,11 @@ class ComposerFixture:
             if snapshot!=before:raise AssertionError('renderer mutated producer snapshot')
             self.rendered_snapshots.append(before)
             return result
-        stack.enter_context(patch.dict('sys.modules',{m.__name__:m for m in (core,const,stats,util,energy)}))
+        stack.enter_context(patch.dict('sys.modules',{m.__name__:m for m in (core,const,stats,util,recorder,energy)}))
         stack.enter_context(patch.object(composer,'__package__',service.__package__))
         stack.enter_context(patch.object(service,'async_get_energy_metadata',composer.async_get_energy_metadata))
         stack.enter_context(patch.object(provider,'async_get_energy_metadata',composer.async_get_energy_metadata))
+        stack.enter_context(patch.object(inputs,'async_get_energy_metadata',composer.async_get_energy_metadata))
         stack.enter_context(patch.object(provider,'async_get_energy_usage',usage))
         stack.enter_context(patch.object(renderer,'render_energy_analysis',render))
         return stack
@@ -137,9 +145,11 @@ class ComposerFixture:
         return {**value,'body':value['text']}
 
     def assert_queries_cover(self,testcase,start,end):
-        selected=sorted((a,b) for a,b,ids in self.statistics_calls if start<=a<b<=end)
+        # Multiple authorized consumers (legacy paired comparison and R9 model)
+        # may reuse a window. Verify coverage, not an obsolete exact call count.
+        selected=sorted(set((a,b) for a,b,ids in self.statistics_calls if start<=a<b<=end))
         testcase.assertTrue(selected)
-        testcase.assertEqual(start,selected[0][0]);testcase.assertEqual(end,selected[-1][1])
+        testcase.assertEqual(start,selected[0][0]);testcase.assertEqual(end,max(stop for _,stop in selected))
         for i,(a,b) in enumerate(selected):
             testcase.assertLessEqual((b-a).total_seconds(),168*3600)
-            if i:testcase.assertEqual(selected[i-1][1],a)
+            if i:testcase.assertLessEqual(a, max(stop for _,stop in selected[:i]))

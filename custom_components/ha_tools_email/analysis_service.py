@@ -321,7 +321,7 @@ class EnergyAnalysisService:
             timing = report_clock(now, request.timezone)
             context.update(report_model=True, report_mode='full',
                 period_kind=comparison_period_kind, period_anchor=period['local_start'][:10],
-                report_color_as_of=timing['as_of'], report_cutoff=timing['cutoff'])
+                report_color_as_of=timing['as_of'], report_cutoff=period['end'])
         return configuration, period, context
 
     def _capture_statistics(self, start, end, actor_signature):
@@ -956,6 +956,9 @@ class EnergyAnalysisService:
             # producer snapshot and its unchanged legacy export implementation.
             report = {**report, **{key: presentation[key] for key in
                 ('subject', 'preheader', 'html', 'text', 'notify')}}
+            # Bind the actual MIME presentation to its producer without putting
+            # an operational 64-character identity in the visible reading flow.
+            report['html'] += '\n<!-- ha-tools-snapshot:' + snapshot['snapshot_id'] + ' -->'
         return report
 
     async def async_prepare_report(self, request, actor, *, purpose, language,

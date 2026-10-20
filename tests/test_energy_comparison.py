@@ -170,14 +170,16 @@ class RuntimeComparisonTest(unittest.IsolatedAsyncioTestCase):
         with fx.patches():
             # Existing partial analysis path owns these internal fragments.
             payload=await fx.analysis('week',anchor='2026-10-12',comparison='previous')
-        self.assertEqual(2,len(fx.statistics_calls),'The partial calendar period needs a measured baseline')
+        self.assertIn((start,end,{'sensor.grid'}),fx.statistics_calls)
+        self.assertTrue(all(ids == {'sensor.grid'} and 0 < (b-a).total_seconds() <= 168*3600
+                            for a,b,ids in fx.statistics_calls))
         self.assertEqual((baseline_start,baseline_end),fx.statistics_calls[1][:2])
         previous=fx.snapshot['comparisons']['previous']
         self.assertEqual(Decimal('12'),Decimal(str(previous['current_kwh'])))
         self.assertEqual(Decimal('10'),Decimal(str(previous['baseline_kwh'])))
         self.assertEqual(20,previous['percent'])
         self.assertTrue(fx.snapshot['period']['partial'])
-        self.assertIn('Selected comparisons',payload['body'])
+        self.assertIn('Comparison',payload['body'])
         # Public full-window report requests must continue rejecting this shape.
         other=ComposerFixture(end,points=points)
         with other.patches(),self.assertRaisesRegex(ValueError,'invalid_report_calendar_boundaries'):
@@ -197,7 +199,8 @@ class RuntimeComparisonTest(unittest.IsolatedAsyncioTestCase):
             {'type':'solar','stat_energy_from':'sensor.solar'}]},
             rows={'sensor.grid':{'name':'Grid <meter>'}},points=points)
         with fx.patches():payload=await fx.compose(start=start,end=end)
-        self.assertEqual(1,len(fx.manager_reads));self.assertEqual(2,len(fx.statistics_calls))
+        self.assertEqual(1,len(fx.manager_reads));self.assertGreaterEqual(len(fx.statistics_calls),2)
+        self.assertTrue(all(ids == {'sensor.grid'} for _,_,ids in fx.statistics_calls))
         self.assertEqual(fx.adapter_reads[0]['sensors'],fx.adapter_reads[1]['sensors'])
         self.assertEqual(['sensor.grid'],[r['entity_id'] for r in fx.adapter_reads[1]['sensors']])
         self.assertEqual((start-timedelta(days=1),start),fx.statistics_calls[1][:2])
@@ -214,7 +217,7 @@ class RuntimeComparisonTest(unittest.IsolatedAsyncioTestCase):
                           ('comparisons.previous.delta_kwh','6'),('comparisons.previous.percent','25')]:
             self.assertEqual(Decimal(want),Decimal(facts[path]))
         for body in (payload['body'],payload['html']):
-            self.assertIn('Selected comparisons',body);self.assertIn('UTC',body)
+            self.assertIn('Comparison',body);self.assertIn('UTC',body)
             self.assertNotIn('9999',body)
         # Preserve the grid-name escaping scenario on the existing pure formatter.
         pure=c.build_energy_report_payload(fx.adapter_reads[0]['result']['devices'],cadence='daily',source_kind='grid')
@@ -273,7 +276,7 @@ class ActualRecorderComparisonTest(unittest.IsolatedAsyncioTestCase):
                 if cadence=='weekly':self.assertEqual((167,84,83),(current,previous,comparison['delta_kwh']))
                 if cadence=='monthly':self.assertEqual((743,336,407),(current,previous,comparison['delta_kwh']))
                 for body in (payload['body'],payload['html']):
-                    self.assertIn('Selected comparisons',body);self.assertIn('Europe/Warsaw',body)
+                    self.assertIn('Comparison',body);self.assertIn('Europe/Warsaw',body)
                     # The random snapshot hash can contain these digits; inspect
                     # rendered measurements, while retaining the exact-source IO proof.
                     numeric_body = body.replace(payload['summary']['snapshot_id'], '')

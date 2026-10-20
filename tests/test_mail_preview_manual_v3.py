@@ -118,12 +118,20 @@ class MailPreviewManualTests(unittest.IsolatedAsyncioTestCase):
         for artifact in (read, execute):
             identity = artifact['snapshot_id']
             self.assertEqual(identity, artifact['summary']['snapshot_id'])
-            for field in ('html', 'body', 'csv'):
+            for field in ('html', 'csv'):
                 self.assertIn(identity, artifact[field])
+            if artifact['context'].get('report_model'):
+                self.assertIn('<!-- ha-tools-snapshot:' + identity + ' -->', artifact['html'])
+                self.assertNotIn(identity, artifact['body'])
+            else:
+                self.assertIn(identity, artifact['body'])
         self.assertEqual({key: read[key] for key in ('snapshot_id', 'subject', 'body', 'html', 'csv')},
                          {key: mail[key] for key in ('snapshot_id', 'subject', 'body', 'html', 'csv')})
         self.assertEqual({key: execute[key] for key in ('subject', 'body', 'html')}, self.sent[-1])
-        self.assertIn(execute['snapshot_id'], self.sent[-1]['body'])
+        if execute['context'].get('report_model'):
+            self.assertNotIn(execute['snapshot_id'], self.sent[-1]['body'])
+        else:
+            self.assertIn(execute['snapshot_id'], self.sent[-1]['body'])
         self.assertIn(execute['snapshot_id'], self.sent[-1]['html'])
 
     async def test_frozen_preview_equals_actual_dispatch_for_two_kinds_three_cadences_and_modes(self):
@@ -146,7 +154,11 @@ class MailPreviewManualTests(unittest.IsolatedAsyncioTestCase):
                             self.assertEqual(NOW.isoformat(), mail['generated_at'])
                             self.assertEqual(cadence, mail['cadence'])
                             self.assertIn('<!doctype html>', mail['html'])
-                            if kind == 'energy_report':
+                            if kind == 'energy_report' and mode == 'calendar':
+                                self.assertIn('<!-- block:12 -->', mail['html'])
+                                self.assertIn('Jak czytać te liczby.' if language.startswith('pl') else 'How to read these numbers.', mail['html'])
+                                self.assertIn('Energia —' if language.startswith('pl') else 'Energy —', mail['body'])
+                            elif kind == 'energy_report':
                                 self.assertIn('data-section="period"', mail['html'])
                                 self.assertIn('Źródło i jakość danych' if language.startswith('pl') else 'Source and data quality', mail['html'])
                                 self.assertIn('Okres raportu:' if language.startswith('pl') else 'Report period:', mail['body'])
