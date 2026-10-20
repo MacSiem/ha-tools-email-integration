@@ -137,3 +137,25 @@ class Mail136Test(unittest.TestCase):
         self.assertIn('Same period last year', kpis)
         self.assertIn('Decrease -123.45 kWh', kpis)
         self.assertNotIn('Previous period', kpis)
+
+    def test_mail137_visual_flow_labels_are_brief_but_text_and_csv_keep_exact_producer_values(self):
+        device = next(iter(self.s['groups']['devices'].values()))
+        raw_device, raw_residual = '49.9999999999995450', '200.0000000000004550'
+        device.update(kwh=raw_device, recorded_kwh=raw_device)
+        self.s['groups']['unmeasured'].update(kwh=raw_residual, recorded_kwh=raw_residual)
+        result = self.render()
+        visual = self.section(result, 'flow-destination-composition').text()
+        self.assertIn('50 kWh', visual)
+        self.assertIn('200 kWh', visual)
+        for raw in (raw_device, raw_residual):
+            self.assertNotIn(raw, visual)
+            self.assertIn(raw, result['text'])
+            self.assertIn(raw, result['csv'])
+
+    def test_mail137_flow_swatch_width_is_an_explicit_column_not_an_equal_table_share(self):
+        result = self.render()
+        for side in ('source', 'destination'):
+            section = self.section(result, 'flow-' + side + '-composition')
+            columns = [n for n in section.find(width='12') if n.tag == 'col']
+            self.assertEqual(1, len(columns))
+            self.assertIn('width:12px', columns[0].attrs.get('style', ''))
