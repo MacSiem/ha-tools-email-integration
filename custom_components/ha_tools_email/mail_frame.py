@@ -2,6 +2,28 @@
 from html import escape
 from urllib.parse import urlsplit
 
+# Fixed two-pixel presentation asset, no remote requests or report identifiers.
+ENERGY_MARKER_DATA_URI = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAE0lEQVR4nGN4+vw1EDEISqgDEQA7CQYPTtvo4AAAAABJRU5ErkJggg=='
+ENERGY_MARKER_CID = 'ha-tools-energy-previous@local'
+
+
+def _energy_marker_mime(html):
+    """Resolve only our fixed preview asset to one related inline PNG for SMTP."""
+    from base64 import b64decode
+    from email.mime.image import MIMEImage
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    if ENERGY_MARKER_DATA_URI not in html:
+        return MIMEText(html, 'html', 'utf-8')
+    related = MIMEMultipart('related')
+    related.attach(MIMEText(html.replace(ENERGY_MARKER_DATA_URI, 'cid:' + ENERGY_MARKER_CID), 'html', 'utf-8'))
+    picture = MIMEImage(b64decode(ENERGY_MARKER_DATA_URI.split(',', 1)[1], validate=True), _subtype='png')
+    picture.add_header('Content-ID', '<' + ENERGY_MARKER_CID + '>')
+    picture.add_header('Content-Disposition', 'inline')
+    related.attach(picture)
+    return related
+
+
 def E(value):
     return escape(str(value) if value is not None else '', quote=True)
 

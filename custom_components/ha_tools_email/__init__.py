@@ -39,6 +39,7 @@ from .const import (
     VERSION,
 )
 from .composer import _mail_text
+from .mail_frame import _energy_marker_mime
 from .scheduler import async_start_scheduler, async_stop_scheduler, async_reload_schedules
 from .smtp import open_smtp_connection
 from .history import PartialSMTPAcceptance, async_dispatch_attempt
@@ -112,7 +113,10 @@ def _send_email(hass: HomeAssistant, cfg: dict, to: str, subject: str, body: str
 
     # Attach HTML if provided
     if html:
-        msg.attach(MIMEText(_mail_text(html), "html", "utf-8"))
+        # Legacy HTML keeps its exact alternative MIME shape. Only a local
+        # preview PNG needs a related part for Gmail, which rejects data URLs.
+        msg.attach(_energy_marker_mime(_mail_text(html)) if "data:image/png;base64," in html
+                   else MIMEText(_mail_text(html), "html", "utf-8"))
 
     # Connect and send
     _LOGGER.debug("Connecting to configured SMTP server (encryption=%s)", encryption)

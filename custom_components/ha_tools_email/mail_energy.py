@@ -9,7 +9,7 @@ import math
 from zoneinfo import ZoneInfo
 
 from . import energy_format as fmt
-from .mail_frame import E, FONT, L, button, h2, hr, kpi_cell, paragraph, render_frame, safe_external_url, section
+from .mail_frame import E, FONT, L, ENERGY_MARKER_DATA_URI, button, h2, hr, kpi_cell, paragraph, render_frame, safe_external_url, section
 
 _LABELS = {
     'energy': ('Energia', 'Energy'), 'import': ('Zużycie (import)', 'Consumption (import)'),
@@ -299,11 +299,11 @@ class _View:
                 attrs = f' class="{key}" bgcolor="{color}"' if key else ''
                 bg = f'background-color:{color};' if color else ''
                 if key == 'tick':
-                    # Gmail Android can retain dark fills while inverting the page.
-                    # A local two-tone image avoids Gmail border/foreground inversion.
-                    # One pixel contrasts with the page, the other with each colour bar.
-                    bg += 'background-image:linear-gradient(to bottom,#e5e7eb 0%,#e5e7eb 50%,#111827 50%,#111827 100%);box-sizing:border-box;'
-                segments.append(f'<tr><td{attrs} height="{height}" style="height:{height}px;{bg}line-height:0;font-size:0">&nbsp;</td></tr>')
+                    # A fixed local PNG keeps both contrasting pixels in Gmail.
+                    image = f'<img class="tick" src="{ENERGY_MARKER_DATA_URI}" width="100%" height="2" alt="" role="presentation" style="display:block;width:100%;height:2px;border:0">'
+                    segments.append(f'<tr><td height="{height}" style="height:{height}px;line-height:0;font-size:0">{image}</td></tr>')
+                else:
+                    segments.append(f'<tr><td{attrs} height="{height}" style="height:{height}px;{bg}line-height:0;font-size:0">&nbsp;</td></tr>')
                 cursor = end
             date = starts[idx]
             date_key = date.strftime('%Y-%m-%d %H:%M') if date else ''
@@ -317,7 +317,7 @@ class _View:
             labels.append((idx, label)) if visible else None
             self.lines.append(f'- {tip}{"*" if p.get("zone") == "cheap" else ""} · {p.get("zone") or ""} · {self.tr("previous")}: {self.energy(previous)}')
         legend = ' '.join(f'<span class="{self.color(z.get("id"))}" style="display:inline-block;width:10px;height:10px;border-radius:3px;background-color:{L[self.color(z.get("id"))]}"></span>&nbsp;{E(self.zone_label(z))} {E(z.get("hours_label"))}' for z in self.zones)
-        legend += f' <span class="tick" style="display:inline-block;width:10px;height:2px;vertical-align:3px;background-image:linear-gradient(to bottom,#e5e7eb 0%,#e5e7eb 50%,#111827 50%,#111827 100%);box-sizing:border-box;background-color:{L["tx"]}"></span>&nbsp;{E(self.comparison_label(self.comparisons[0]) if self.comparisons else self.tr("previous"))}'
+        legend += f' <img class="tick" src="{ENERGY_MARKER_DATA_URI}" width="10" height="2" alt="" role="presentation" style="display:inline-block;width:10px;height:2px;vertical-align:3px;border:0">&nbsp;{E(self.comparison_label(self.comparisons[0]) if self.comparisons else self.tr("previous"))}'
         axis = []
         for n, (idx, label) in enumerate(labels):
             following = labels[n + 1][0] if n + 1 < len(labels) else len(points)
