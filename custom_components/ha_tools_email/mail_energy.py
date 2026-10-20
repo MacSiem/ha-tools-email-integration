@@ -18,7 +18,7 @@ _LABELS = {
     'comparison': ('Porównanie', 'Comparison'), 'hour_chart': ('Zużycie w ciągu doby', 'Consumption throughout the day'),
     'daily_chart': ('Zużycie w kolejnych dniach', 'Daily consumption'),
     'chart_note': ('kolor = strefa taryfy; kreska = poprzedni okres; luka = brak pomiaru', 'colour = tariff zone; tick = previous period; gap = missing reading'),
-    'comparison_note': ('ten sam zakres; % tylko przy pełnym pokryciu obu okresów', 'matching window; % only with complete coverage in both periods'),
+    'comparison_note': ('ten sam zakres pomiaru; % przy wystarczającym pokryciu', 'matching measurement window; % requires sufficient coverage'),
     'zones': ('Strefy taryfy', 'Tariff zones'), 'devices': ('Urządzenia', 'Devices'),
     'devices_note': ('4 największe, pozostałe zmierzone i niezmierzone (import − suma urządzeń)', 'Top 4, other measured and unmeasured (import − devices)'),
     'rooms': ('Pokoje', 'Rooms'), 'rooms_note': ('suma urządzeń w obszarach HA; bez rozdzielania niezmierzonej energii', 'Devices grouped by HA area; unmeasured energy is not allocated'),
@@ -230,10 +230,11 @@ class _View:
     def table(self, rows):
         return section('<table role="presentation" width="100%">' + ''.join(rows) + '</table>')
 
-    def row(self, label, value, *, bold=False, sub='', cls='tx'):
+    def row(self, label, value, *, bold=False, sub='', cls='tx', label_bold=None):
         weight = 700 if bold else 400
+        label_weight = weight if label_bold is None else 700 if label_bold else 400
         detail = f'<br><span class="tx2" style="font:400 12px/16px {FONT};color:{L["tx2"]}">{E(sub)}</span>' if sub else ''
-        return (f'<tr><td class="tx bd" style="padding:8px 0;border-top:1px solid {L["bd"]};font:{weight} 14px/20px {FONT};color:{L["tx"]}">{E(label)}{detail}</td>'
+        return (f'<tr><td class="tx bd" style="padding:8px 0;border-top:1px solid {L["bd"]};font:{label_weight} 14px/20px {FONT};color:{L["tx"]}">{E(label)}{detail}</td>'
                 f'<td class="{cls} bd" align="right" valign="top" style="padding:8px 0;border-top:1px solid {L["bd"]};font:{weight} 14px/20px {FONT};color:{L[cls]};white-space:nowrap">{E(value)}</td></tr>')
 
     def comparison_block(self):
@@ -247,7 +248,7 @@ class _View:
             change_text = f' ({change})' if change else f' · {self.tr("partial")}' if not c.get('coverage_ok') or not self.complete else ''
             value = arrow + self.n(delta, 2 if self.kind == 'day' else 1, signed=True) + (' kWh' if known else '') + change_text
             label = f'vs {self.comparison_label(c)} · {self.energy(c.get("kwh"), "tile")}'
-            rows.append(self.row(label, value, bold=True, cls=cls))
+            rows.append(self.row(label, value, bold=True, cls=cls, label_bold=False))
             self.lines.append(f'- {label}: {value}')
         return self.table(rows) if rows else section(paragraph(self.tr('no_data')))
 
@@ -342,9 +343,9 @@ class _View:
             hours = str(z.get('hours_label') or '')
             values = (self.energy(z.get('kwh')), self.share(share), self.money(z.get('cost')))
             dot = f'<span class="{cls}" style="display:inline-block;width:10px;height:10px;border-radius:3px;background-color:{L[cls]}"></span>'
-            cells = f'<td class="tx bd" style="padding:8px 0;border-top:1px solid {L["bd"]};font:400 14px/20px {FONT};color:{L["tx"]}">{dot}&nbsp;{E(label)} <span class="tx2" style="font:400 12px/16px {FONT};color:{L["tx2"]}">{E(hours)}</span></td>'
+            cells = f'<td class="tx bd" style="padding:8px 0;border-top:1px solid {L["bd"]};font:400 14px/20px {FONT};color:{L["tx"]}">{dot}&nbsp;{E(label)} <span class="tx2 zone-hours" style="font:400 12px/16px {FONT};color:{L["tx2"]}">{E(hours)}</span></td>'
             for idx, value in enumerate(values):
-                cells += f'<td class="tx bd" align="right" style="padding:8px 0;border-top:1px solid {L["bd"]};font:{700 if idx == 0 else 400} 14px/20px {FONT};color:{L["tx"]}">{E(value)}</td>'
+                cells += f'<td class="tx bd zone-value" align="right" style="padding:8px 0 8px 6px;border-top:1px solid {L["bd"]};font:{700 if idx == 0 else 400} 14px/20px {FONT};color:{L["tx"]}">{E(value)}</td>'
             rows.append('<tr>' + cells + '</tr>')
             self.lines.append(f'- {label} ({hours}): {" · ".join(values)}')
         bar = f'<table role="presentation" width="100%" style="border-radius:6px"><tr>{"".join(segments)}</tr></table>' if segments else ''

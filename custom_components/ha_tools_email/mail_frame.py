@@ -39,6 +39,8 @@ a {{ text-decoration:none; }}
   .hm {{ display:none !important; }}
   .bar {{ width:14% !important; }}
   .rank-name {{ width:42% !important; }}
+  .zone-hours {{ display:block !important; }}
+  .zone-value {{ font-size:12px !important; }}
   .rank-value {{ width:24% !important; font-size:12px !important; padding-left:4px !important; }}
   .rank-cost {{ width:20% !important; font-size:12px !important; padding-left:4px !important; }}
 }}
