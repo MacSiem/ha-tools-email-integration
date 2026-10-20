@@ -64,7 +64,7 @@ class ReportDOM(HTMLParser):
     def handle_starttag(self, tag, attrs):
         node = ReportNode(tag, attrs)
         self.stack[-1].children.append(node)
-        if tag not in ('meta',):
+        if tag not in ('meta', 'col'):
             self.stack.append(node)
 
     def handle_endtag(self, tag):
@@ -218,7 +218,7 @@ class EnergyReportTest(unittest.TestCase):
         self.assertIn('&lt;script&gt;', result['html'])
         markup = Markup(result['html'])
         self.assertFalse(set(markup.tags) - {'html', 'head', 'title', 'meta', 'style', 'body',
-            'table', 'caption', 'tr', 'th', 'td'})
+            'table', 'caption', 'colgroup', 'col', 'tr', 'th', 'td'})
         self.assertIn('@media(prefers-color-scheme:dark)', result['html'])
         self.assertNotIn('<svg', result['html'])
         self.assertNotIn('<canvas', result['html'])
