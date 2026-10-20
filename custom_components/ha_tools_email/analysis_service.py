@@ -451,7 +451,14 @@ class EnergyAnalysisService:
             states[sid] = None if state is None else {'state': state.state,
                 'unit_of_measurement': state.attributes.get('unit_of_measurement'),
                 'last_updated': state.last_updated.isoformat()}
-        signature = _digest({'metadata': metadata, 'states': states})
+        normalization = {}
+        for sid in ids:
+            meta = metadata.get(sid)
+            if isinstance(meta, tuple) and len(meta) == 2:
+                meta = meta[1]
+            normalization[sid] = ({key: meta.get(key) for key in
+                ('has_sum', 'unit_of_measurement', 'unit_class')} if isinstance(meta, dict) else None)
+        signature = _digest({'metadata': normalization, 'states': states})
         if 'native_signature' in context and context['native_signature'] != signature:
             self._cache = None
             raise RuntimeError('energy_analysis_context_changed')

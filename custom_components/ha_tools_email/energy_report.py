@@ -19,10 +19,21 @@ _NUMBERS = frozenset(('kwh', 'energyRate', 'variableRate', 'effective_price', 'p
     'legacy_combined', 'legacy_combined_monthly', 'quantum', 'current', 'baseline',
     'common_current', 'common_baseline', 'hours', 'calendar_hours', 'observed_hours',
     'expected_hours', 'expected_seconds', 'measured_seconds', 'offsetMinutes',
-    'priority', 'fold', 'start_fold', 'end_fold'))
+    'priority', 'fold', 'start_fold', 'end_fold', 'amount', 'recorded_amount', 'price',
+    'expected_source_hours', 'measured_source_hours'))
 _INSTANTS = frozenset(('generated_at', 'captured_at', 'membership_as_of', 'start',
-    'end', 'local_start', 'local_end', 'calendar_end', 'calendar_local_end'))
+    'end', 'local_start', 'local_end', 'calendar_end', 'calendar_local_end', 'observed_at'))
 _LABELS = {
+    'native_pricing': ('Fakty cenowe HA Energy', 'HA Energy pricing facts'),
+    'period_cost': ('Koszt zapisany w HA', 'Cost recorded in HA'),
+    'amount': ('Koszt całego okresu', 'Full-period recorded cost'),
+    'recorded_amount': ('Zapisany podzbiór kosztu', 'Recorded cost subset'),
+    'current_prices': ('Bieżące ceny · teraz', 'Current prices · now'),
+    'price': ('Cena teraz', 'Price now'), 'observed_at': ('Czas odczytu', 'Observed at'),
+    'components_status': ('Stan rozbicia kosztu', 'Cost breakdown status'),
+    'fixed_fees_status': ('Stan opłat stałych', 'Fixed fees status'),
+    'expected_source_hours': ('Oczekiwane godziny źródeł', 'Expected source hours'),
+    'measured_source_hours': ('Zmierzone godziny źródeł', 'Measured source hours'),
     'snapshot_id': ('Identyfikator migawki', 'Snapshot ID'),
     'report': ('Raport energii', 'Energy report'),
     'period': ('Okres', 'Period'), 'coverage': ('Pokrycie pomiarami', 'Measurement coverage'),
@@ -247,6 +258,8 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                 unit = 's'
             elif key.endswith('kwh'):
                 unit = 'kWh'
+            elif key in ('amount', 'recorded_amount', 'price') and 'native_pricing' in path:
+                unit = (currency or unknown) + ('/kWh' if key == 'price' else '')
             elif key.endswith('_cost') or key in ('energyRate', 'variableRate', 'effective_price', 'legacy_combined_monthly'):
                 unit = currency or unknown
                 if key in ('energyRate', 'variableRate', 'effective_price'):
@@ -519,6 +532,14 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     text_parts.append(period_caption + ': ' + period_value)
     html_parts.append('<table data-section="period" class="period"><tr><td>'
                       + escape(period_value) + '</td></tr></table>')
+    native = snapshot.get('native_pricing') if not snapshot.get('active_tariff_id') else None
+    if not isinstance(native, Mapping) or native.get('schema') != 1 or native.get('source') != 'ha_energy':
+        native = None
+    native_cost = native.get('period_cost', {}) if native else {}
+    native_ready = (native_cost.get('status') == 'ready' and native_cost.get('coverage', {}).get('complete') is True
+                    and native_cost.get('amount') is not None and native_cost.get('currency') is not None)
+    native_note = tr('Źródło: Home Assistant Energy. Rozbicie kosztu i opłaty stałe są nieznane; to nie jest pełny rachunek.',
+                     'Source: Home Assistant Energy. Cost breakdown and fixed fees are unknown; this is not a complete bill.')
     share = ready_period_share()
     html_parts.append('<table data-section="kpis" role="presentation" class="kpis"><tr>')
     for metric, caption in (('kwh', tr('Zmierzona energia', 'Measured energy')),
@@ -527,6 +548,11 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         value = exact(('totals', metric)) if metric else unknown
         units = unit(('totals', metric)) if metric else ''
         context = ''
+        if metric == 'total_cost' and native_ready:
+            caption = label('period_cost')
+            value = exact(('native_pricing', 'period_cost', 'amount'))
+            units = unit(('native_pricing', 'period_cost', 'amount'))
+            context = native_note
         if metric is None:
             if share is not None:
                 ratio = Decimal(str(share['ratio']))
@@ -760,11 +786,25 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         if isinstance(groups.get('unmeasured'), Mapping):
             entries.append((label('unmeasured'), ('groups', 'unmeasured'), groups['unmeasured']))
         ranking(caption, entries, section=kind)
-    table(tr('Koszt i stawki', 'Cost and rates'), selected(('totals',),
-        ('energy_cost', 'variable_cost', 'legacy_combined_cost', 'usage_cost', 'fixed_cost',
-         'total_cost', 'effective_price', 'price_basis')))
-    table(label('fees'), selected(('fees', 'components'),
-        ('subscription', 'capacity', 'distribution', 'other', 'legacy_combined')))
+    if native:
+        table(label('period_cost'), selected(('native_pricing', 'period_cost'),
+            ('status', 'amount', 'recorded_amount', 'components_status', 'fixed_fees_status', 'reason'))
+            + [(tr('Informacja', 'Note'), native_note, '', None)], section='native-recorded-cost')
+        price_rows = []
+        for index, price in enumerate(native.get('current_prices', [])):
+            price_rows += selected(('native_pricing', 'current_prices', index),
+                ('source_id', 'price', 'observed_at', 'status', 'reason'))
+        if price_rows:
+            price_rows.append((tr('Informacja', 'Note'), tr(
+                'Odczytane teraz; nie są cenami za wybrany okres. Nie obliczamy z nich kosztu historycznego.',
+                'Observed now; not prices for the selected period. No historical cost is calculated from them.'), '', None))
+            table(label('current_prices'), price_rows, section='native-current-prices')
+    else:
+        table(tr('Koszt i stawki', 'Cost and rates'), selected(('totals',),
+            ('energy_cost', 'variable_cost', 'legacy_combined_cost', 'usage_cost', 'fixed_cost',
+             'total_cost', 'effective_price', 'price_basis')))
+        table(label('fees'), selected(('fees', 'components'),
+            ('subscription', 'capacity', 'distribution', 'other', 'legacy_combined')))
     rate_rows = []
     for index, rate in enumerate(snapshot.get('rates') or []):
         rp = ('rates', index)
