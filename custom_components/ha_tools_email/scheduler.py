@@ -465,7 +465,7 @@ async def async_send_report(
             report_preferences=report_preferences,before_send=before_send,
             attempt_schedule_id=attempt_schedule_id,recipients=recipients)
     from .composer import async_build_report_payload
-    from .history import async_dispatch_attempt
+    from .history import async_dispatch_attempt, report_attempt_metadata
 
     now = _aware(now or datetime.now(timezone.utc))
     bucket = hass.data[DOMAIN]
@@ -477,6 +477,7 @@ async def async_send_report(
     load_config, send = bucket[DATA_LOAD_CONFIG], bucket[DATA_SEND_EMAIL]
     smtp_revision = storage.current_smtp_revision if energy else None
     schedule_revision = storage.current_schedule_revision if energy else None
+    report_metadata = {}
     if energy:
         if service is None:
             raise RuntimeError('energy_analysis_not_ready')
@@ -487,6 +488,8 @@ async def async_send_report(
             bounds=report_window)
         report_window = tuple(datetime.fromisoformat(x) for x in (request.start,request.end))
         period_semantics = request.semantics
+        if request.semantics == 'previous_completed_calendar_period':
+            report_metadata = report_attempt_metadata(cadence, request.period(now), now=now)
         if actor is None and expected_schedule is not None:
             actor = service._schedule_actor(expected_schedule,schedule_generation)
         service._actor_signature(actor)
@@ -552,7 +555,8 @@ async def async_send_report(
         hass, storage, send, prepare,
         source="schedule" if schedule_id is not None else "manual",
         kind=kind, cadence=cadence,
-        period=fire_period_key({"cadence": cadence}, now),
+        period=report_metadata.get('period', fire_period_key({"cadence": cadence}, now)),
+        **({'report_period':report_metadata['report_period']} if 'report_period' in report_metadata else {}),
         schedule_id=attempt_schedule_id if attempt_schedule_id is not None else schedule_id, now=now,
     )
     if kind == KIND_LOG_DIGEST and period_semantics is None:

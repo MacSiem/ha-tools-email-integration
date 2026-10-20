@@ -4,7 +4,8 @@ No recipient inference, SMTP reads, automatic retry or delivery claim. The calle
 owns source/actor authorization and revalidates context immediately before IO.
 """
 import re
-from .history import async_dispatch_channel_attempt, async_dispatch_attempt
+import uuid
+from .history import async_dispatch_channel_attempt, async_dispatch_attempt, report_attempt_metadata
 
 _NOTIFY = re.compile(r'notify\.[a-z0-9_]{1,128}')
 
@@ -62,7 +63,8 @@ async def async_dispatch_notification(hass,storage,target,compose,validate,**att
     async def handoff(payload):
         domain,service=('persistent_notification','create') if normalized=='persistent_notification' else normalized.split('.',1)
         await hass.services.async_call(domain,service,payload,blocking=True)
-    return await async_dispatch_channel_attempt(storage,prepare,handoff,**attempt)
+    # The actual validated target owns this field, never caller metadata.
+    return await async_dispatch_channel_attempt(storage,prepare,handoff,**{**attempt, 'channel':normalized})
 
 
 async def async_send_energy_channels(hass,storage,*,channels,cadence,actor=None,
@@ -115,12 +117,16 @@ async def async_send_energy_channels(hass,storage,*,channels,cadence,actor=None,
         fence()
     await validate()
     results=[]
-    for target in selected:
+    batch_id = str(uuid.uuid4()) if len(selected) > 1 else None
+    report_metadata = report_attempt_metadata(cadence, payload.get('period'), now=now)
+    for index, target in enumerate(selected, start=1):
         metadata={'source':'schedule' if schedule_id is not None else 'manual',
             'kind':'energy_report','cadence':cadence,
             'period':('daily:'+now.date().isoformat() if cadence=='daily' else
                 'weekly:'+f'{now.isocalendar().year}-W{now.isocalendar().week:02d}' if cadence=='weekly' else 'monthly:'+now.strftime('%Y-%m')),
-            'schedule_id':attempt_schedule_id if attempt_schedule_id is not None else schedule_id,'now':now}
+            'schedule_id':attempt_schedule_id if attempt_schedule_id is not None else schedule_id,'now':now,
+            'channel':target, **report_metadata,
+            **({'batch_id':batch_id,'batch_size':len(selected),'batch_index':index} if batch_id else {})}
         if target=='email':
             load,send=bucket['load_config'],bucket['send_email']
             smtp_revision=storage.current_smtp_revision

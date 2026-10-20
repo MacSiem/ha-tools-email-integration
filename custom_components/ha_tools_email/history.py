@@ -12,6 +12,7 @@ import ssl
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 HISTORY_SCHEMA = 1
 HISTORY_LIMIT = 128
@@ -34,6 +35,80 @@ def _stamp(value: Any) -> datetime | None:
         return None
 
 
+def _report_period(value, timestamp):
+    if (not isinstance(value, dict) or len(value) != 4 or set(value) != {'start', 'end', 'timezone', 'semantics'}
+            or value.get('semantics') not in ('previous_completed_calendar_period', 'rolling_completed_hours')):
+        return None
+    zone = value.get('timezone')
+    if (not isinstance(zone, str) or not 1 <= len(zone) <= 128 or zone in ('localtime', 'posixrules')
+            or zone.startswith(('posix/', 'right/'))):
+        return None
+    zone = str(zone)
+    try:
+        ZoneInfo(zone)
+    except (ValueError, ZoneInfoNotFoundError):
+        return None
+    start, end = _stamp(value.get('start')), _stamp(value.get('end'))
+    if (start is None or end is None or not start < end <= timestamp or end-start > timedelta(days=366)
+            or start.timestamp() % 3600 or end.timestamp() % 3600):
+        return None
+    return {'start': start.isoformat(), 'end': end.isoformat(), 'timezone': zone,
+            'semantics': value['semantics']}
+
+
+def _optional_metadata(value, timestamp):
+    """Add fields only when supplied and valid; legacy dict order stays exact."""
+    result = {}
+    channel = value.get('channel')
+    if isinstance(channel, str) and len(channel) <= 135 and (channel in ('email', 'persistent_notification')
+            or re.fullmatch(r'notify\.[a-z0-9_]{1,128}', channel)):
+        result['channel'] = str(channel)
+    batch = value.get('batch_id')
+    size, index = value.get('batch_size'), value.get('batch_index')
+    if type(batch) is str and len(batch) == 36:
+        try:
+            canonical = str(uuid.UUID(batch))
+        except (ValueError, TypeError, AttributeError):
+            canonical = None
+        if (canonical == batch and type(size) is int and 2 <= size <= 32
+                and type(index) is int and 1 <= index <= size):
+            result.update(batch_id=batch, batch_size=size, batch_index=index)
+    bounds = _report_period(value.get('report_period'), timestamp)
+    if bounds is not None:
+        result['report_period'] = bounds
+    return result
+
+
+def report_attempt_metadata(cadence, period, *, now):
+    """Use the real prepared/frozen report bounds, never an invented send clock."""
+    if not isinstance(period, dict):
+        return {}
+    bounds = _report_period({key: period.get(key) for key in ('start', 'end', 'timezone', 'semantics')}, now)
+    if bounds is None:
+        return {}
+    result = {'report_period': bounds}
+    if bounds['semantics'] == 'previous_completed_calendar_period':
+        start = _stamp(bounds['start']).astimezone(ZoneInfo(bounds['timezone']))
+        if cadence == 'daily':
+            result['period'] = 'daily:' + start.date().isoformat()
+        elif cadence == 'weekly':
+            year, week, _ = start.isocalendar()
+            result['period'] = f'weekly:{year}-W{week:02d}'
+        elif cadence == 'monthly':
+            result['period'] = 'monthly:' + start.strftime('%Y-%m')
+    return result
+
+
+def _dispatch_metadata(channel, batch_id, batch_size, batch_index, report_period, *, now, smtp):
+    supplied = {key: value for key, value in (
+        ('channel', channel), ('batch_id', batch_id), ('batch_size', batch_size),
+        ('batch_index', batch_index), ('report_period', report_period)) if value is not None}
+    clean = _optional_metadata(supplied, now)
+    if set(clean) != set(supplied) or (channel is not None and (channel == 'email') != smtp):
+        raise ValueError('invalid_attempt_delivery_metadata')
+    return clean
+
+
 def clean_attempt(value: Any) -> dict[str, Any] | None:
     """Allowlist even persisted metadata; never expose arbitrary stored text."""
     if not isinstance(value, dict):
@@ -48,7 +123,7 @@ def clean_attempt(value: Any) -> dict[str, Any] | None:
     period = value.get('period')
     ref = value.get('schedule_ref')
     count = value.get('recipient_count')
-    return {
+    result = {
         'id': attempt_id,
         'timestamp': timestamp.isoformat(),
         'source': value.get('source') if value.get('source') in ('manual', 'schedule') else 'unknown',
@@ -59,6 +134,8 @@ def clean_attempt(value: Any) -> dict[str, Any] | None:
         'recipient_count': count if type(count) is int and 0 <= count <= 100000 else None,
         'outcome': value.get('outcome') if isinstance(value.get('outcome'), str) and value.get('outcome') in _OUTCOMES else 'outcome_unknown',
     }
+    result.update(_optional_metadata(value, timestamp))
+    return result
 
 
 def retained_attempts(section: Any, now: datetime) -> list[dict[str, Any]]:
@@ -108,7 +185,8 @@ def failure_outcome(error: BaseException, *, prepared: bool) -> str:
 
 async def async_dispatch_attempt(hass, storage, send, prepare, *, source='manual',
                                  kind='manual', cadence=None, period=None,
-                                 schedule_id=None, now=None) -> dict[str, Any]:
+                                 schedule_id=None, now=None, channel=None, batch_id=None,
+                                 batch_size=None, batch_index=None, report_period=None) -> dict[str, Any]:
     """Exactly one logical record around the shared actual executor send path.
 
     Store failure never escapes a successful SMTP handoff. The original transport
@@ -122,6 +200,7 @@ async def async_dispatch_attempt(hass, storage, send, prepare, *, source='manual
         'schedule_ref': hashlib.sha256(str(schedule_id).encode()).hexdigest() if schedule_id is not None else None,
         'recipient_count': None, 'outcome': 'preparation_failed',
     }
+    attempt.update(_dispatch_metadata(channel, batch_id, batch_size, batch_index, report_period, now=now, smtp=True))
     prepared = False
     history_status = 'unavailable'
     try:
@@ -145,7 +224,8 @@ async def async_dispatch_attempt(hass, storage, send, prepare, *, source='manual
 
 
 async def async_dispatch_channel_attempt(storage, prepare, handoff, *, source='manual',
-        kind='energy_report', cadence=None, period=None, schedule_id=None, now=None):
+        kind='energy_report', cadence=None, period=None, schedule_id=None, now=None,
+        channel=None, batch_id=None, batch_size=None, batch_index=None, report_period=None):
     """One awaited native service handoff, preserving SMTP's no-retry lifecycle.
 
     A completed HA service call is acceptance, never evidence of a phone delivery.
@@ -156,6 +236,7 @@ async def async_dispatch_channel_attempt(storage, prepare, handoff, *, source='m
         'kind': kind, 'cadence': cadence, 'period': period,
         'schedule_ref': hashlib.sha256(str(schedule_id).encode()).hexdigest() if schedule_id is not None else None,
         'recipient_count': None, 'outcome': 'preparation_failed'}
+    attempt.update(_dispatch_metadata(channel, batch_id, batch_size, batch_index, report_period, now=now, smtp=False))
     prepared, history_status = False, 'unavailable'
     try:
         payload = await prepare()
