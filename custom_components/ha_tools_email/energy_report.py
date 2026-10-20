@@ -663,12 +663,12 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                 state = raw_share.get('status') if isinstance(raw_share, Mapping) else None
                 context = ((words['partial'] + ' · ') if state == 'partial' else '')
                 context += tr('Brak opublikowanego udziału za okres', 'No published period share')
-        text_parts.extend([caption + ': ' + value + (' ' + units if units else ''), context])
+        text_parts.extend([caption + ': ' + value + (('' if units == '%' else ' ') + units if units else ''), context])
         if metric == 'kwh':
             context = energy_context(compact=True)
         elif metric == 'total_cost' and snapshot.get('active_tariff_id'):
             context = amount(('totals', 'effective_price'))
-        kpis.append((caption, value, units, context))
+        kpis.append((caption, value + '%' if units == '%' else value, '' if units == '%' else units, context))
     # Shared rows align all three numbers even when a translated label or note
     # wraps. No fixed height, clipping or flex/grid support is required in mail.
     html_parts.append('<table data-section="kpis" role="presentation" class="kpis">')

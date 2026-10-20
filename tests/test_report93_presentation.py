@@ -105,8 +105,8 @@ class Report93PresentationTests(unittest.TestCase):
         html = self.render(self.fixture())['html']
         css = re.search(r'<style>(.*?)</style>', html, re.S).group(1)
         light, dark = css.split('@media(prefers-color-scheme:dark)', 1)
-        for styles, green, blue, neutral in ((light, '#25824b', '#2877cb', '#7b8595'),
-                                           (dark, '#65ce8c', '#68aaff', '#a6afbc')):
+        for styles, green, blue, neutral in ((light, '#1baf7a', '#2a78d6', '#9ca3af'),
+                                           (dark, '#199e70', '#3987e5', '#6b7280')):
             self.assertIn('.zone-cheap{background:' + green + '}', styles)
             self.assertIn('.zone-expensive{background:' + blue + '}', styles)
             self.assertIn('.zone-unknown,.unmeasured{background:' + neutral + '}', styles)

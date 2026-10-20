@@ -53,14 +53,14 @@ class Report89PeriodFactsTests(unittest.TestCase):
         value=self.fixture();before=deepcopy(value)
         self.assertEqual('0.232',value['period_summary']['cheap_zone_share']['ratio'])
         self.assertEqual('247.00',value['totals']['total_cost'])
-        for language,percent,energy in [('en','23.2','58.0'),('pl','23,2','58,0')]:
+        for language,percent,energy in [('en','23','58.0'),('pl','23','58,0')]:
             with self.subTest(language=language):
                 result=self.render(value,language);card=self.section(result,'kpis')
-                self.assertEqual(percent,self.kpi(result))
+                self.assertEqual(percent+'%',self.kpi(result))
                 self.assertIn('%',card.text());self.assertIn(energy+' kWh',card.text())
                 self.assertIn(energy+' kWh',card.text())
                 self.assertIn('period_summary.cheap_zone_share.known_cheap_kwh',result['csv'])
-                self.assertIn(percent+' %',result['text'])
+                self.assertIn(percent+'%',result['text'])
                 self.assertIn('250',card.text());self.assertIn('247',card.text())
         self.assertEqual(before,value)
 
@@ -107,7 +107,7 @@ class Report89PeriodFactsTests(unittest.TestCase):
         value=self.fixture();value['totals'].update(currency=None,total_cost=None)
         value['pricing_status']='partial'
         value['period_summary']['zone_breakdown'].update(status='partial',reason='currency_or_basis_mismatch')
-        self.assertEqual('23.2',self.kpi(self.render(value)))
+        self.assertEqual('23%',self.kpi(self.render(value)))
 
     def test_share_is_not_inferred_from_zone_names_prices_or_chart_bin_sums(self):
         value=self.fixture();value.pop('period_summary')
@@ -152,7 +152,7 @@ class Report89PeriodFactsTests(unittest.TestCase):
         self.assertEqual('49.9999999999995450',rows['groups.devices.sensor.device.kwh']['value'])
 
     def test_unknown_small_and_negative_rank_values_remain_distinct_and_labels_are_escaped(self):
-        for quantity,expected in [(None,'Unknown'),('0','0'),('0.00001','<0.01'),('-0.00001','>−0.01')]:
+        for quantity,expected in [(None,'Unknown'),('0','0'),('0.00001','<0.1'),('-0.00001','>−0.1')]:
             value=self.fixture();value['groups']['devices']['sensor.device'].update(kwh=quantity,name='QA <img src=x>&')
             result=self.render(value);section=self.section(result,'device-ranking')
             self.assertIn(expected,section.text());self.assertIn('QA <img src=x>&',section.text())

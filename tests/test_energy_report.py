@@ -270,7 +270,7 @@ class EnergyReportTest(unittest.TestCase):
         result=self.render(language='pl');rows=self.rows(result)
         self.assertEqual('-0,1250',rows['totals.kwh']['value'])
         self.assertEqual('EUR/miesiąc',rows['rates.0.legacy_combined_monthly']['unit'])
-        self.assertIn('-0,13',result['text']);self.assertIn('-0,13',result['html'])
+        self.assertIn('-0,1',result['text']);self.assertIn('-0,1',result['html'])
         self.assertFalse(rows['totals.kwh']['value'].startswith("'"))
 
     def test_readable_report_hides_implementation_paths_while_csv_keeps_source_columns(self):
@@ -412,7 +412,7 @@ class EnergyReportTest(unittest.TestCase):
             separator = ',' if language == 'pl' else '.'
             for raw in values.values():
                 self.assertNotIn(raw.replace('.', separator), text)
-            for short in ('1.23', '12.35', '0.1235', '0.12', '48.12'):
+            for short in ('1.2', '12.35', '0.1235', '48.1'):
                 self.assertIn(short.replace('.', separator), text)
             rows = self.rows(result)
             for field, raw in values.items():
@@ -456,11 +456,9 @@ class EnergyReportTest(unittest.TestCase):
             self.assertNotIn('measured seconds', rendered[output])
             self.assertNotIn('missing seconds', rendered[output])
 
-    def test_kpi_labels_and_notes_keep_primary_foreground_for_client_dark_recoloring(self):
-        # Outlook Android recolors the light KPI background to rgb(72,77,84).
-        # Its muted #536274 foreground became rgb(142,157,177): only 3.09:1.
-        # The primary foreground retains 5.81:1 in that actual client. Keep
-        # labels/notes distinct by size rather than the failing muted color.
+    def test_kpi_labels_and_notes_follow_notion_secondary_foreground(self):
+        # Outlook is waived by Maciej; current Notion 5.3 defines secondary text.
+        # Actual Gmail light/dark contrast remains an artifact QA requirement.
         import re
         for language in ('pl', 'en'):
             html = self.render(language=language)['html']
@@ -468,7 +466,7 @@ class EnergyReportTest(unittest.TestCase):
             rules = dict(re.findall(r'([^{}]+)\{([^{}]*)\}', light_css))
             for selector in ('.kpi-label', '.note'):
                 with self.subTest(language=language, selector=selector):
-                    self.assertIn('color:#202a38', rules[selector])
+                    self.assertIn('color:#4b5563', rules[selector])
                     self.assertIn('font-size:12px', rules[selector])
             dom = ReportDOM(html).root
             self.assertEqual(3, len(dom.find(data_role='kpi-label')))
@@ -582,11 +580,11 @@ class EnergyReportTest(unittest.TestCase):
         compared['costs']['delta_cost'] = '13.37'
         compared['costs']['delta_total_cost'] = '-2.46'
         result = self.render()
-        self.assertIn('+17.25 kWh', ' '.join(Markup(result['html']).cells))
+        self.assertIn('+17.3 kWh', ' '.join(Markup(result['html']).cells))
         self.assertIn('+13.37', ' '.join(Markup(result['html']).cells))
         self.assertIn('-2.46', ' '.join(Markup(result['html']).cells))
-        self.assertIn('+7.1', ' '.join(Markup(result['html']).cells))
-        self.assertIn('+17.25 kWh', result['text'])
+        self.assertIn('+7%', ' '.join(Markup(result['html']).cells))
+        self.assertIn('+17.3 kWh', result['text'])
         rows = self.rows(result)
         self.assertEqual('17.2500', rows['comparisons.previous.delta_kwh']['value'])
         self.assertEqual('13.37', rows['comparisons.previous.costs.delta_cost']['value'])

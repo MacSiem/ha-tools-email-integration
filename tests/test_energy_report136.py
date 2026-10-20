@@ -81,7 +81,7 @@ class Mail136Test(unittest.TestCase):
         c.update(delta_kwh='12.3456', percent='5.4321')
         result = self.render()
         kpis = self.section(result, 'kpis').text()
-        for value in ('Previous period', '+12.35 kWh', '+5.4%', '1.00 EUR/kWh'):
+        for value in ('Previous period', '+12.3 kWh', '+5%', '1.00 EUR/kWh'):
             self.assertIn(value, kpis)
             self.assertIn(value, result['text'])
         self.assertIn('Effective price', result['text'])
@@ -111,7 +111,7 @@ class Mail136Test(unittest.TestCase):
         for text in ('From', 'To', '192.0 kWh', '58.0 kWh', '50.0 kWh', '200.0 kWh', 'Unmeasured'):
             self.assertIn(text, result['text'])
         self.assertNotIn('No area', destination.text())
-        self.assertIn('76.8%', source.text())
+        self.assertIn('77%', source.text())
         self.assertIn('23.2%', source.text())
         for forbidden in ('<svg', '<script', 'display:flex', 'display:grid'):
             self.assertNotIn(forbidden, result['html'])
@@ -207,8 +207,8 @@ class Mail136Test(unittest.TestCase):
         self.s['comparisons']['year_ago'] = dict(self.s['comparisons']['previous'], delta_kwh='-123.45')
         kpis = self.section(self.render(), 'kpis').text()
         self.assertIn('Same period last year', kpis)
-        self.assertIn('-123.45 kWh', kpis)
-        self.assertIn('Decrease -123.45 kWh', self.render()['text'])
+        self.assertIn('-123.5 kWh', kpis)
+        self.assertIn('Decrease -123.5 kWh', self.render()['text'])
         self.assertNotIn('Previous period', kpis)
 
     def test_mail137_all_mail_values_are_brief_and_csv_keeps_exact_producer_values(self):
