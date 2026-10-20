@@ -1,4 +1,4 @@
-"""Pure, lossless schema-2 energy report; authorization and delivery belong to callers.
+"""Readable schema-2 energy mail with lossless CSV; delivery belongs to callers.
 
 All three formats use the same ordered facts. Prices, deltas and fee proration
 are backend results, never recomputed here. Explicit source paths retain the
@@ -7,7 +7,7 @@ meaning of partial/common-measurement values and metadata in exported reports.
 from collections.abc import Mapping
 import csv
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation, localcontext
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 from html import escape
 from io import StringIO
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -67,7 +67,7 @@ _LABELS = {
     'comparison_scope': ('Zakres porównania', 'Comparison scope'),
     'currency': ('Waluta', 'Currency'), 'price_basis': ('Podstawa ceny', 'Price basis'),
 }
-_CSS = ('body{margin:0;background:#eef2f7;color:#202a38;font:14px Arial,sans-serif}'
+_CSS = ('body{margin:0;background:#eef2f7;color:#202a38;font:14px Arial,sans-serif;font-variant-numeric:tabular-nums}'
         'table{border-collapse:collapse;width:100%;table-layout:fixed}'
         '.report{max-width:640px;margin:0 auto;background:#fff}'
         'caption,th,td{text-align:left;padding:5px;vertical-align:top;overflow-wrap:anywhere}'
@@ -89,7 +89,7 @@ _CSS = ('body{margin:0;background:#eef2f7;color:#202a38;font:14px Arial,sans-ser
         '.device-0{background:#eb6834}.device-1{background:#6250d6}.device-2{background:#e87ba4}'
         '.device-3{background:#eda100}.device-4{background:#718096}'
         '[data-section="source-times"]{font-size:12px}'
-        '@media(max-width:420px){.kpi-card{display:block;width:100%!important;box-sizing:border-box}'
+        '@media(max-width:420px){.kpi-card{width:33.333%;padding:3px;box-sizing:border-box}'
         '.kpi-card table{table-layout:auto}.kpi-card .kpi-number{font-size:18px}'
         'caption,th,td{padding:4px}.header{font-size:19px}.axis td{font-size:12px}}'
         '@media(prefers-color-scheme:dark){body{background:#101318;color:#edf1f7}'
@@ -374,12 +374,34 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         key = row[0].rsplit('.', 1)[-1]
         if key in ('status', 'reason', 'comparison_scope', 'scope', 'price_basis', 'comparison_reason'):
             return words.get(row[2], unknown)
-        if row[4] and (key.startswith('delta_') or key == 'percent'):
-            # A sign is presentation, never a recalculated comparison. The
-            # lossless source fact and CSV keep the producer's original value.
-            if not row[2].startswith(('-', '+')) and Decimal(row[2].replace(',', '.')) > 0:
-                return '+' + row[2]
-        return row[2]
+        if not row[4]:
+            return row[2]
+        # Display rounding applies to the entire mail, including the lower
+        # tables. Facts and the CSV projection below retain original precision.
+        value = Decimal(row[2].replace(',', '.'))
+        unit = row[3]
+        rate = '/kWh' in unit and key != 'effective_price'
+        money = bool(unit and unit != 'kWh' and unit != 's') or key.endswith('_cost')
+        places = 4 if rate else 1 if key == 'percent' else 2
+        minimum = 2 if rate or money else 1 if unit == 'kWh' or key == 'percent' else 0
+        quantum = Decimal(1).scaleb(-places)
+        with localcontext() as precision:
+            precision.prec = max(40, len(value.as_tuple().digits) + abs(value.adjusted()) + places + 4)
+            rounded = value.quantize(quantum, rounding=ROUND_HALF_UP)
+        if value != 0 and rounded == 0:
+            # A small confirmed measurement must never look like a true zero.
+            bound = format(quantum, 'f')
+            text = ('<' if value > 0 else '>−') + bound
+        else:
+            rounded = rounded.copy_abs() if rounded == 0 else rounded
+            text = format(rounded, 'f')
+            if '.' in text:
+                integer, fraction = text.split('.', 1)
+                fraction = fraction.rstrip('0').ljust(minimum, '0')
+                text = integer + ('.' + fraction if fraction else '')
+            if (key.startswith('delta_') or key == 'percent') and value > 0:
+                text = '+' + text
+        return text.replace('.', ',') if pl else text
 
     def table(title_text, rows, *, section=None):
         text_parts.append('\n' + title_text)
@@ -454,7 +476,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         return row[3] if row else ''
 
     def compact_number(value, fallback):
-        """Main-layer typography only; exact facts stay in details/text/CSV."""
+        """Short main-layer typography; complete precision stays in CSV."""
         try:
             if isinstance(value, bool):
                 return fallback
@@ -929,26 +951,26 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                 row = fact((*bp, 'fees', 'components', field))
                 if row:
                     comparison_details.append((caption + ' · ' + label('baseline') + ' · ' + label('fees')
-                                               + ' · ' + title(field), row[2], row[3], None))
+                                               + ' · ' + title(field), user_value(row), row[3], None))
             for ri, rate in enumerate(baseline.get('rates') or []):
                 rp = (*bp, 'rates', ri)
                 for field in ('valid_from', 'valid_to', 'legacy_combined_monthly'):
                     row = fact((*rp, field))
                     if row:
                         comparison_details.append((caption + ' · ' + label('baseline') + ' · ' + title(field),
-                                                   row[2], row[3], None))
+                                                   user_value(row), row[3], None))
                 for field in ('subscription', 'capacity', 'distribution', 'other'):
                     row = fact((*rp, 'fixed_monthly', field))
                     if row:
                         comparison_details.append((caption + ' · ' + label('baseline') + ' · '
-                                                   + label('fixed_monthly') + ' · ' + title(field), row[2], row[3], None))
+                                                   + label('fixed_monthly') + ' · ' + title(field), user_value(row), row[3], None))
                 for zi, zone_row in enumerate((rate.get('profile') or {}).get('zones') or []):
                     for field in ('energyRate', 'variableRate'):
                         row = fact((*rp, 'profile', 'zones', zi, field))
                         if row:
                             comparison_details.append((caption + ' · ' + label('baseline') + ' · '
                                 + str(zone_row.get('label') or tr('Strefa', 'Zone')) + ' · ' + title(field),
-                                row[2], row[3], None))
+                                user_value(row), row[3], None))
     matrix(tr('Wybrane porównania', 'Selected comparisons'),
         [tr('Porównanie', 'Comparison'), label('current'), label('baseline'), tr('Zmiana', 'Change'),
          tr('Zakres', 'Scope')], comparison_rows, section='comparisons')
@@ -989,20 +1011,20 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         for field in ('subscription', 'capacity', 'distribution', 'other'):
             row = fact((*rp, 'fixed_monthly', field))
             if row:
-                rate_rows.append((label('fixed_monthly') + ' · ' + title(field), row[2], row[3], None))
+                rate_rows.append((label('fixed_monthly') + ' · ' + title(field), user_value(row), row[3], None))
         for zi, zone_row in enumerate((rate.get('profile') or {}).get('zones') or []):
             for field in ('energyRate', 'variableRate'):
                 row = fact((*rp, 'profile', 'zones', zi, field))
                 if row:
                     rate_rows.append((str(zone_row.get('label') or tr('Strefa', 'Zone')) + ' · ' + title(field),
-                                      row[2], row[3], None))
+                                      user_value(row), row[3], None))
         for di, interval in enumerate(((rate.get('profile') or {}).get('dynamic') or {}).get('intervals') or []):
             dp = (*rp, 'profile', 'dynamic', 'intervals', di)
             context = exact((*dp, 'from')) + ' – ' + exact((*dp, 'to'))
             for field in ('energyRate', 'variableRate'):
                 row = fact((*dp, field))
                 if row:
-                    rate_rows.append((label('dynamic') + ' · ' + context + ' · ' + title(field), row[2], row[3], None))
+                    rate_rows.append((label('dynamic') + ' · ' + context + ' · ' + title(field), user_value(row), row[3], None))
     table(label('rates'), rate_rows)
     for index, alternative in enumerate(snapshot.get('alternatives') or []):
         table(label('alternatives') + ' · ' + str(alternative.get('tariff_name') or index+1),
@@ -1042,7 +1064,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
             full = fact((*bp, field))
             if known and (not full or known[2:4] != full[2:4]):
                 partial_costs.append((clock_label + ' · ' + label('known_costs') + ' · ' + title(field),
-                                      known[2], known[3], None))
+                                      user_value(known), known[3], None))
         # Keep proof of every captured offset/fold outside the main axis.
         source_times.append((tr('Pomiar ', 'Measurement ') + str(index+1), amount((*bp, 'start')), '', None))
     matrix(tr('Szczegóły · Zużycie godzinowe / dzienne', 'Details · Hourly / daily energy'),
@@ -1070,7 +1092,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                 full = fact((*zp, field))
                 if known and (not full or known[2:4] != full[2:4]):
                     zone_rows.append((caption + ' · ' + label('known_costs') + ' · ' + title(field),
-                                      known[2], known[3], None))
+                                      user_value(known), known[3], None))
         for field in ('status', 'reason'):
             row = fact(('chart', 'bins', index, 'zone_breakdown', field))
             if row and not (field == 'reason' and row[2] == unknown):
@@ -1079,19 +1101,19 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
             row = fact(('chart', 'bins', index, 'zone_breakdown', 'unattributed', field))
             if row:
                 zone_rows.append((str(index+1) + ' · ' + tr('Bez przypisania do strefy', 'Unattributed to zone')
-                                  + ' · ' + title(field), row[2], row[3], None))
+                                  + ' · ' + title(field), user_value(row), row[3], None))
         for field in ('energy_cost', 'variable_cost', 'legacy_combined_cost'):
             row = fact(('chart', 'bins', index, 'zone_breakdown', 'unattributed', 'known_costs', field))
             if row:
                 zone_rows.append((str(index+1) + ' · ' + tr('Bez przypisania do strefy', 'Unattributed to zone')
-                                  + ' · ' + label('known_costs') + ' · ' + title(field), row[2], row[3], None))
+                                  + ' · ' + label('known_costs') + ' · ' + title(field), user_value(row), row[3], None))
     if zone_rows:
         table(tr('Szczegóły · Zmierzone strefy', 'Details · Measured zones'), zone_rows)
     fee_rows = []
     for index, day in enumerate((snapshot.get('fees') or {}).get('days') or []):
         row = fact(('fees', 'days', index, 'day_fraction'))
         if row:
-            fee_rows.append((exact(('fees', 'days', index, 'day')), row[2], row[3], None))
+            fee_rows.append((exact(('fees', 'days', index, 'day')), user_value(row), row[3], None))
     if fee_rows:
         table(tr('Szczegóły · Naliczona część dnia', 'Details · Charged day fraction'), fee_rows)
     table(tr('Szczegóły · Czas i źródło', 'Details · Source times'), source_times, section='source-times')
