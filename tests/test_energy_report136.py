@@ -37,6 +37,11 @@ class Mail136Test(unittest.TestCase):
         self.assertNotIn('06:00–20:00', rates)
 
     def test_no_floor_name_is_shared_by_html_and_plaintext(self):
+        row = copy.deepcopy(next(iter(self.s['groups']['floors'].values())))
+        row.pop('name', None)
+        self.s['groups']['floors'] = {'__no_floor__': row}
+        for device in self.s['groups']['devices'].values():
+            device.update(floor_id=None, floor_name=None)
         result = self.render()
         self.assertIn('No floor', self.section(result, 'floors').text())
         self.assertIn('No floor', result['text'])

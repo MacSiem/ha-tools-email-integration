@@ -121,7 +121,7 @@ class Report93PresentationTests(unittest.TestCase):
             device.update(floor_id=None, floor_name=None)
         return value
 
-    def test_no_floor_is_localized_only_in_html_preserving_source_export_and_snapshot(self):
+    def test_no_floor_is_localized_in_html_and_text_preserving_source_export_and_snapshot(self):
         for language, caption, old_caption in (('pl', 'Bez piętra', 'Piętra 1'),
                                                ('en', 'No floor', 'Floors 1')):
             with self.subTest(language=language):
@@ -130,7 +130,8 @@ class Report93PresentationTests(unittest.TestCase):
                 result = self.render(value, language)
                 self.assertIn(caption, self.section(result, 'floors').text())
                 self.assertNotIn(old_caption, self.section(result, 'floors').text())
-                self.assertIn(old_caption + ':', result['text'])
+                self.assertIn(caption + ':', result['text'])
+                self.assertNotIn(old_caption + ':', result['text'])
                 rows = {row['field']: row for row in csv.DictReader(StringIO(result['csv']))}
                 key = 'groups.floors.__no_floor__.kwh'
                 self.assertIn(key, rows)
