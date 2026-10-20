@@ -63,12 +63,21 @@ async def test_real_hour_compile_after_boundary_or_next_hour_is_automatically_re
             return result
         except Exception as error:
             runtime_observations.append((at, type(error).__name__, str(error)))
+            print('READINESS_RUNTIME_ERROR', at, type(error).__name__, str(error), flush=True)
             raise
 
     monkeypatch.setattr(EnergyStatisticsPublisher, 'async_refresh_runtime', observe_runtime)
     from custom_components.ha_tools_email.analysis_service import EnergyAnalysisService
     real_assert_current = EnergyAnalysisService._assert_current
     context_changes = []
+    registry_events = []
+    from homeassistant.core import callback
+    @callback
+    def observe_registry(event):
+        registry_events.append({'action': event.data.get('action'),
+            'entity_id': event.data.get('entity_id'),
+            'changed_fields': sorted(event.data.get('changes', {}))})
+    hass.bus.async_listen(er.EVENT_ENTITY_REGISTRY_UPDATED, observe_registry)
 
     def observe_assert_current(self, context):
         try:
@@ -83,6 +92,8 @@ async def test_real_hour_compile_after_boundary_or_next_hour_is_automatically_re
                     'registry_revision_after': current.get('registry_revision'),
                     'normalization_changed': 'normalization_signature' in context
                         and context['normalization_signature'] != self._normalization})
+                import json
+                print('READINESS_CONTEXT', json.dumps(context_changes[-1]), 'REGISTRY_EVENTS', json.dumps(registry_events[-5:]), flush=True)
             raise
 
     monkeypatch.setattr(EnergyAnalysisService, '_assert_current', observe_assert_current)
