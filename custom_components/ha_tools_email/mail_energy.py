@@ -300,8 +300,9 @@ class _View:
                 bg = f'background-color:{color};' if color else ''
                 if key == 'tick':
                     # Gmail Android can retain dark fills while inverting the page.
-                    # Use the foreground colour that Gmail inverts for readable text.
-                    bg += 'border-top:1px solid currentColor;color:#111827;box-sizing:border-box;'
+                    # A neutral edge works independently of Gmail foreground inheritance;
+                    # the retained dark lower pixel still contrasts with coloured bars.
+                    bg += 'border-top:1px solid #737373;box-sizing:border-box;'
                 segments.append(f'<tr><td{attrs} height="{height}" style="height:{height}px;{bg}line-height:0;font-size:0">&nbsp;</td></tr>')
                 cursor = end
             date = starts[idx]
@@ -316,7 +317,7 @@ class _View:
             labels.append((idx, label)) if visible else None
             self.lines.append(f'- {tip}{"*" if p.get("zone") == "cheap" else ""} · {p.get("zone") or ""} · {self.tr("previous")}: {self.energy(previous)}')
         legend = ' '.join(f'<span class="{self.color(z.get("id"))}" style="display:inline-block;width:10px;height:10px;border-radius:3px;background-color:{L[self.color(z.get("id"))]}"></span>&nbsp;{E(self.zone_label(z))} {E(z.get("hours_label"))}' for z in self.zones)
-        legend += f' <span class="tick" style="display:inline-block;width:10px;height:2px;vertical-align:3px;border-top:1px solid currentColor;color:#111827;box-sizing:border-box;background-color:{L["tx"]}"></span>&nbsp;{E(self.comparison_label(self.comparisons[0]) if self.comparisons else self.tr("previous"))}'
+        legend += f' <span class="tick" style="display:inline-block;width:10px;height:2px;vertical-align:3px;border-top:1px solid #737373;box-sizing:border-box;background-color:{L["tx"]}"></span>&nbsp;{E(self.comparison_label(self.comparisons[0]) if self.comparisons else self.tr("previous"))}'
         axis = []
         for n, (idx, label) in enumerate(labels):
             following = labels[n + 1][0] if n + 1 < len(labels) else len(points)
