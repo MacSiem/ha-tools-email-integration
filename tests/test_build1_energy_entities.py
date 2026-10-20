@@ -137,6 +137,23 @@ class NativeSensorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('zone_options', entities['zone']._unrecorded_attributes)
         self.assertIn('measurement_through', entities['today']._unrecorded_attributes)
 
+    async def test_transient_unavailable_snapshot_keeps_enum_metadata_without_stale_value(self):
+        entities, coordinator = await self.sensors()
+        zone = entities['zone']
+        self.assertEqual(['day', 'night'], zone.options)
+        published = coordinator.data
+        coordinator.data = None
+        self.assertFalse(zone.available)
+        self.assertIsNone(zone.native_value)
+        self.assertEqual(['day', 'night'], zone.options)
+        coordinator.data = published
+        self.assertEqual(['day', 'night'], zone.options)
+        # An accepted removal really clears the allowed values.
+        coordinator.data = {'entity_facts': {'zone_options': []}, 'current': {'zone_id': None}}
+        self.assertEqual([], zone.options)
+        coordinator.data = None
+        self.assertEqual([], zone.options)
+
     async def test_stale_or_historical_snapshot_does_not_supply_today(self):
         entities, coordinator = await self.sensors(fresh=False)
         self.assertIsNone(entities['today'].native_value)

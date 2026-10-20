@@ -246,3 +246,32 @@ async def test_native_timestamp_and_cheap_transition_publish_aware_values(hass, 
     assert state('cheap', 'binary_sensor').state == 'on'
     assert float(state('price').state) == .5
     assert state('next_cheap').state == '2026-10-19T22:00:00+00:00'
+
+
+async def test_native_enum_metadata_does_not_invalidate_statistics_during_transient_snapshot_loss(hass, hass_storage):
+    entry, storage = await _setup(hass)
+    await storage.async_save_tariff(profile(), expected_revision=0)
+    coordinator = hass.data[DOMAIN]['energy_snapshot']
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    registry = er.async_get(hass)
+    zone_id = registry.async_get_entity_id('sensor', DOMAIN, f'{entry.entry_id}_energy_zone')
+    assert registry.async_get(zone_id).capabilities['options'] == ['day']
+    published = coordinator.data
+    membership = hass.data[DOMAIN]['energy_membership']
+    revision = membership.revision
+    coordinator._invalidate()
+    await hass.async_block_till_done()
+    assert hass.states.get(zone_id).state == 'unavailable'
+    assert registry.async_get(zone_id).capabilities['options'] == ['day']
+    assert membership.revision == revision
+    coordinator.data = published
+    for listener in tuple(coordinator._listeners):
+        listener()
+    await hass.async_block_till_done()
+    assert membership.revision == revision
+    await storage.async_save_tariff(None, expected_revision=1)
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    assert registry.async_get(zone_id).capabilities['options'] == []
+    assert hass.states.get(zone_id).state == 'unavailable'
