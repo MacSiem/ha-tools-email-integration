@@ -29,6 +29,28 @@ class Mail136Test(unittest.TestCase):
         for path in ('comparisons.previous.full_baseline_kwh', 'chart.bins.23.start'):
             self.assertIn(path, result['csv'])
 
+    def test_rate_hours_do_not_ignore_calendar_exceptions(self):
+        self.s['rates'][0]['profile']['exceptions'] = [{'zone': 'low', 'dates': ['2026-10-10'],
+            'intervals': [{'from': '00:00', 'to': '24:00'}]}]
+        rates = self.section(self.render(), 'rate-history-0').text()
+        self.assertIn('exceptions', rates)
+        self.assertNotIn('06:00–20:00', rates)
+
+    def test_no_floor_name_is_shared_by_html_and_plaintext(self):
+        result = self.render()
+        self.assertIn('No floor', self.section(result, 'floors').text())
+        self.assertIn('No floor', result['text'])
+        self.assertNotIn('Floors 1:', result['text'])
+
+    def test_incomplete_comparison_explains_current_and_baseline_coverage(self):
+        comparison = self.s['comparisons']['previous']
+        comparison.update(status='partial', reason='missing_measurement')
+        comparison['coverage'].update(current=0.5, baseline=0.8)
+        for output in (self.section(self.render(), 'comparisons').text(), self.render()['text']):
+            self.assertIn('50%', output)
+            self.assertIn('80%', output)
+            self.assertIn('Missing measurement', output)
+
     def test_mail136_kpi_uses_full_producer_comparison_and_effective_price(self):
         self.s = json.loads((fixture.ROOT / 'tests/fixtures/energy-report-schema2-v53.json').read_text())
         c = self.s['comparisons']['previous']
