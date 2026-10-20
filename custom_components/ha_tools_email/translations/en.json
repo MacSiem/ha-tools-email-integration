@@ -99,6 +99,8 @@
       "energy_next_cheap": {
         "name": "Next cheap period"
       },
+      "energy_today": {"name": "Grid energy imported today"},
+      "energy_cheap_share_today": {"name": "Cheap energy share today"},
       "energy_today_cost": {
         "name": "Usage cost today"
       },

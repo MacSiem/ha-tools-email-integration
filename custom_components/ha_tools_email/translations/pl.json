@@ -99,6 +99,8 @@
       "energy_next_cheap": {
         "name": "Następna tania strefa"
       },
+      "energy_today": {"name": "Import energii dziś"},
+      "energy_cheap_share_today": {"name": "Udział taniej energii dziś"},
       "energy_today_cost": {
         "name": "Koszt zużycia dziś"
       },

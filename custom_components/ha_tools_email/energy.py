@@ -209,8 +209,11 @@ def _price_query_job(queries, profile, revision, profile_source):
 class EnergySnapshotCoordinator:
     """Serialize refreshes; all five entities read one bounded public snapshot."""
 
-    def __init__(self, hass, storage, *, provider=None):
+    def __init__(self, hass, storage, *, provider=None, short_provider=None):
         self.hass, self.storage, self.provider = hass, storage, provider
+        self._short_provider = short_provider
+        self._short_state = None
+        self._short_measurement = []
         self.data = None
         self._lock = asyncio.Lock()
         data = getattr(hass, 'data', None)
@@ -243,10 +246,17 @@ class EnergySnapshotCoordinator:
 
     def tariff_context_is_current(self, result):
         """No-await guard for the final WS send after authorization IO."""
-        if self._stopped:
+        try:
+            self._check_running()
+        except RuntimeError:
             return False
         if result.get('profile_source') == 'shared':
             if self.storage.current_tariff_revision != result.get('tariff_revision'):
+                return False
+        # Native entity values end at an actual completed five-minute cutoff.
+        if 'entity_facts' in result:
+            from .energy_native_short import cutoff_at
+            if result['entity_facts'].get('measurement_through') != cutoff_at(datetime.now(timezone.utc)).isoformat():
                 return False
         # Historical price queries have no household measurement calendar.
         if 'today' in result:
@@ -364,6 +374,8 @@ class EnergySnapshotCoordinator:
 
     def _invalidate(self):
         self.data = None
+        self._short_state = None
+        self._short_measurement = []
         if not self._stopped:
             self._energy_update_invalidated = True
         for listener in tuple(self._listeners):
@@ -399,6 +411,8 @@ class EnergySnapshotCoordinator:
         self._listeners.clear()
         self.data = None
         self._measurement = None
+        self._short_state = None
+        self._short_measurement = []
 
     @contextmanager
     def _snapshot_admission(self):
@@ -429,6 +443,50 @@ class EnergySnapshotCoordinator:
             self._measurement_key = None
             self._invalidate()
             raise RuntimeError('energy_sources_changed')
+
+    async def _async_native_short(self, sensors, metadata, start, end, cutoff, tz, signature, guard):
+        """Read only newly completed real five-minute cells on this native lane.
+
+        A successful prefix is reused, including across tariff edits. Missing
+        evidence is unknown and attempted once per cutoff; the next cutoff may
+        retry that missing suffix. No user actor or last report DTO is involved.
+        """
+        from .energy_native_short import async_read_short_statistics, merge_raw, normalized_cells
+        ids = list(dict.fromkeys(row['entity_id'] for row in sensors))
+        if cutoff == end or not ids or start.timestamp() % 3600:
+            self._short_state = None
+            self._short_measurement = []
+            return
+        if len(ids) > 512 or not end < cutoff < end + timedelta(hours=1):
+            raise ValueError('invalid_native_short_window')
+        key = (end, tz, signature)
+        cache = self._short_state
+        if (cache is None or cache['key'] != key or cache['through'] > cutoff
+                or (cache['attempted'] is not None and cache['attempted'] > cutoff)):
+            cache = {'key': key, 'through': end, 'raw': {}, 'attempted': None, 'rows': []}
+        if cache['attempted'] == cutoff:
+            self._short_measurement = deepcopy(cache['rows'])
+            return
+        await self._async_check_source_access(guard, sensors)
+        self._check_running()
+        if self._short_provider is not None:
+            raw = await self._short_provider(self.hass, cache['through'], cutoff, ids)
+        elif self.provider is None:
+            raw = await async_read_short_statistics(self.hass, cache['through'], cutoff, ids)
+        else:
+            # Injected full-hour-only adapters cannot manufacture partial data.
+            raw = {}
+        self._check_running()
+        await self._async_check_source_access(guard, sensors)
+        merged = await self._async_run_cpu(partial(merge_raw, cache['raw'], raw, ids, cache['through'], cutoff))
+        self._check_running()
+        rows = await self._async_run_cpu(partial(normalized_cells, merged, metadata, ids, end, cutoff))
+        self._check_running()
+        await self._async_check_source_access(guard, sensors)
+        accepted = len(rows) == (cutoff - end).total_seconds() // 300 and all(row['kwh'] is not None for row in rows)
+        self._short_state = {'key': key, 'through': cutoff if accepted else cache['through'],
+            'raw': merged if accepted else cache['raw'], 'attempted': cutoff, 'rows': rows}
+        self._short_measurement = deepcopy(rows)
 
     async def async_refresh(self, *, now=None, guard=None):
         with self._snapshot_admission():
@@ -470,6 +528,10 @@ class EnergySnapshotCoordinator:
                     self._invalidate()
                     raise RuntimeError('energy_sources_changed')
                 self._measurement, self._measurement_key, self._measurement_at = measured, key, now
+            from .energy_native_short import cutoff_at
+            tail_cutoff = cutoff_at(now)
+            await self._async_native_short(sensors, metadata, start, end, tail_cutoff, tz, key[3], guard)
+            self._check_running()
             state = await self._async_snapshot_tariff()
             self._check_running()
             await self._async_check_source_access(guard, sensors)
@@ -496,7 +558,8 @@ class EnergySnapshotCoordinator:
             if (tz != self.hass.config.time_zone or _source_signature(latest, latest_meta) != key[3]
                     or latest_state['revision'] != state['revision']
                     or getattr(self.storage, 'current_tariff_revision', latest_state['revision']) != state['revision']
-                    or (real_time and measurement_window(datetime.now(timezone.utc), tz)[:2] != (start, end))):
+                    or (real_time and (measurement_window(datetime.now(timezone.utc), tz)[:2] != (start, end)
+                        or cutoff_at(datetime.now(timezone.utc)) != tail_cutoff))):
                 self._invalidate()
                 raise RuntimeError('energy_snapshot_changed')
             self.data = result
@@ -542,14 +605,12 @@ class EnergySnapshotCoordinator:
         return {'profile': state['legacy_profile'], 'revision': state['revision']}
 
     async def _async_build_snapshot(self, state, measurement, **kwargs):
-        if 'book' in state:
-            from .energy_book_snapshot import build_book_snapshot
-            result, boundaries = await self._async_run_cpu(partial(
-                build_book_snapshot, state, measurement, **kwargs))
-            self._model_boundaries = boundaries
-            return result
-        build = partial(build_snapshot, state, measurement, **kwargs)
-        return await self._async_run_cpu(build)
+        from .energy_entity_projection import build_entity_snapshot
+        result, boundaries = await self._async_run_cpu(partial(
+            build_entity_snapshot, state, measurement, _legacy_builder=build_snapshot,
+            _short_rows=deepcopy(self._short_measurement), **kwargs))
+        self._model_boundaries = boundaries
+        return result
 
     async def _async_run_cpu(self, job):
         if self._cpu_lane['pending'] >= MAX_PENDING_CPU_JOBS:
@@ -585,5 +646,9 @@ class EnergySnapshotCoordinator:
             self._cpu_lane['pending'] -= 1
 
     def _check_running(self):
-        if self._stopped:
+        data = getattr(self.hass, 'data', None)
+        bucket = data.get(DOMAIN, {}) if isinstance(data, dict) else {}
+        replaced = ('energy_snapshot' in bucket and bucket['energy_snapshot'] is not self
+                    or 'storage' in bucket and bucket['storage'] is not self.storage)
+        if self._stopped or replaced:
             raise RuntimeError('energy_snapshot_unloaded')
