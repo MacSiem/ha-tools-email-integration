@@ -198,7 +198,11 @@ class EnergyAnalysisService:
         if not configuration['grid_sensors']:
             raise ValueError('energy_analysis_unavailable')
         zone = self.hass.config.time_zone
-        resolved = resolve_analysis_periods(kind, self._clock(), zone, anchor=anchor)
+        if report_model:
+            from .energy_inputs import resolve_model_periods
+            resolved = resolve_model_periods(kind,self._clock(),zone,anchor=anchor)
+        else:
+            resolved = resolve_analysis_periods(kind, self._clock(), zone, anchor=anchor)
         if resolved['status'] != 'ready':
             raise ValueError(resolved['reason'])
         if comparison is not None and (not isinstance(comparison, str) or comparison not in resolved['comparisons']):
@@ -595,6 +599,20 @@ class EnergyAnalysisService:
                 membership = deepcopy(self.registry.capture(
                     [row['stat_consumption'] for row in configuration['consumers']]))
                 self._assert_current(context)
+                if _report_model and period['hours'] == 0:
+                    from .energy_inputs import async_collect_inputs, empty_completed_projection
+                    from types import SimpleNamespace
+                    initial = empty_completed_projection(state['book'],datetime.fromisoformat(period['start']))
+                    native = (SimpleNamespace(report_hours=lambda:{'hours':[],
+                        'currency':configuration['native_pricing']['currency']})
+                        if context.get('native_access') else None)
+                    model = await async_collect_inputs(self,configuration,period,context,initial,
+                        membership,state['book'],guard,native=native)
+                    result = {'schema':2,'period':deepcopy(period),'context':deepcopy(context),'report_model':model}
+                    result['snapshot_id'] = _digest(result)
+                    self._assert_current(context)
+                    self._cache = (key,monotonic(),deepcopy(result))
+                    return deepcopy(result)
                 accumulator = await self._cpu(partial(EnergyAnalysisAccumulator,
                     deepcopy(state['book']), deepcopy(period), deepcopy(context),
                     generated_at=self._clock(), consumers=deepcopy(configuration['consumers']),
