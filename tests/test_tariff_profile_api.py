@@ -43,7 +43,7 @@ class TariffProfileApiTest(unittest.IsolatedAsyncioTestCase):
         await s.async_save_tariff_book(dict((await s.async_get_tariff_book())['book'],
             archive_metadata={'immutable_reports': ['synthetic']}), expected_revision=1, now=NOW)
         await s.async_save_tariff_profile(profile(name='Alternative'), expected_revision=2,
-                                         tariff_id='alt', now=NOW)
+                                         tariff_id='alt', now=NOW, historical_edit_ack=True)
         old = (await s.async_get_tariff_book())['book']
         new = await s.async_save_tariff_profile(profile(validFrom='2026-11-01', name='Nowa umowa'),
                                                expected_revision=3, now=NOW)
@@ -96,7 +96,7 @@ class TariffProfileApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('invalid_tariff_profile', errors[-1][1])
         self.assertEqual(1, len(s._store.saved))
         await ws._ws_set_tariff_profile(hass, conn, {'id': 2, 'profile': p, 'expected_revision': 1,
-                                                  'legacy_combined': False})
+                                                  'legacy_combined': False, 'historical_edit_ack': True})
         self.assertEqual(2, results[-1][1]['revision'])
         saved = (await s.async_get_tariff_book())['book']
         self.assertEqual(p, saved['source_schema1'])
@@ -108,7 +108,7 @@ class TariffProfileApiTest(unittest.IsolatedAsyncioTestCase):
         await s.async_save_tariff_profile(profile(), expected_revision=0, now=NOW)
         before = (await s.async_get_tariff_book())['book']
         await s.async_save_tariff_profile(legacy_profile(), expected_revision=1, now=NOW,
-                                         tariff_id='imported', legacy_combined=False)
+                                         tariff_id='imported', legacy_combined=False, historical_edit_ack=True)
         after = (await s.async_get_tariff_book())['book']
         self.assertEqual(before['tariffs'][0], after['tariffs'][0])
         self.assertEqual('user', after['active_tariff_id'])

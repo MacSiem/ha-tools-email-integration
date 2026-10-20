@@ -15,6 +15,20 @@ UTC = timezone.utc
 
 
 class Build1ServiceTest(unittest.TestCase):
+    def test_grid_with_solar_keeps_import_but_does_not_price_site_consumers(self):
+        async def run():
+            h = Harness(); h.now = datetime(2026,1,11,12,tzinfo=UTC)
+            h.manager.data['energy_sources'].append({'type':'solar','stat_energy_from':'sensor.pv'})
+            with h.patches():
+                result = await h.subject.async_get_build1_model('day','user',date='2026-01-10')
+                model = result['report_model']
+                self.assertEqual(240,model['totals']['import_kwh'])
+                self.assertEqual(48,model['devices'][0]['kwh'])
+                self.assertIsNone(model['unmeasured']['kwh'])
+                self.assertIsNone(model['devices'][0]['cost'])
+                self.assertTrue(await h.subject.async_validate_result(result,'user'))
+        asyncio.run(run())
+
     def test_collector_supplies_actual_previous_ghosts_without_counting_them_as_import(self):
         async def run():
             h = Harness(); h.now = datetime(2026,1,11,12,tzinfo=UTC)

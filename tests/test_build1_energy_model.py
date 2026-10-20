@@ -34,6 +34,22 @@ def inputs_for(start='2026-10-17T00:00:00+02:00', end='2026-10-18T00:00:00+02:00
 
 
 class Build1ModelTests(unittest.TestCase):
+    def test_site_consumption_never_becomes_grid_residual_or_import_cost_share(self):
+        inputs = inputs_for()
+        inputs['consumer_domain'] = 'site_consumption'
+        for row in inputs['projection']['hours']:
+            row['devices']['parent']['kwh'] = '2'
+        result = model.build_report(inputs)
+        self.assertEqual(24,result['totals']['import_kwh'])
+        self.assertEqual(48,result['devices'][0]['kwh'])
+        self.assertIsNone(result['totals']['measured_kwh'])
+        self.assertIsNone(result['unmeasured']['kwh'])
+        self.assertIsNone(result['unmeasured']['cost'])
+        self.assertIsNone(result['devices'][0]['share'])
+        self.assertIsNone(result['devices'][0]['cost'])
+        self.assertNotIn('double_counting',[r['code'] for r in result['issues']])
+        self.assertIn('consumer_domain_mismatch',[r['code'] for r in result['issues']])
+
     def test_daily_chart_aggregates_real_dst_hours_and_keeps_missing_day_unknown(self):
         inputs = inputs_for('2026-10-25T00:00:00+02:00','2026-10-27T00:00:00+01:00')
         inputs['period']['kind'] = 'week'
