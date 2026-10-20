@@ -500,7 +500,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
             result = format(number, '.1f')
             # A small known nonzero must not become a measured zero.
             if Decimal(result) == 0 and number != 0:
-                result = format(number, 'f')
+                return ('<0,1' if pl else '<0.1') if number > 0 else ('>−0,1' if pl else '>−0.1')
             if '.' in result:
                 result = result.rstrip('0').rstrip('.')
             return result.replace('.', ',') if pl else result
@@ -774,7 +774,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
             text_parts.append(name + ': ' + energy + ' kWh; ' + money + ' ' + money_unit)
             ranking_values.append([caption + ' · ' + name, energy,
                 exact((*parts, 'recorded_kwh')), money + (' ' + money_unit if money_unit else '')])
-            brief = compact_number(item.get('kwh'), energy)
+            brief = energy
             html_name = name
             if parts[:2] == ('groups', 'floors'):
                 captured = item.get('name') or names['floors'].get(parts[-1])
@@ -955,7 +955,8 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         costs = comparison.get('costs') or {}
         if costs:
             cost_lines = [label(side) + ': ' + amount((*cp, 'costs', side, 'total_cost')) for side in ('current', 'baseline')]
-            cost_lines.append(tr('Zmiana kosztu', 'Cost change') + ': ' + amount((*cp, 'costs', 'delta_total_cost')))
+            cost_lines.append(tr('Zmiana kosztu zużycia', 'Usage cost change') + ': ' + amount((*cp, 'costs', 'delta_cost')))
+            cost_lines.append(tr('Zmiana całego kosztu', 'Total cost change') + ': ' + amount((*cp, 'costs', 'delta_total_cost')))
             # Each side keeps its own currency; no price/delta is reconstructed.
             text_parts.extend(cost_lines)
             html_parts.append('<tr><td colspan="3" class="note">' + escape(' · '.join(cost_lines)) + '</td></tr>')
@@ -1057,7 +1058,9 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         # An incomplete zone/hour must remain explainable. If no whole-period
         # summary exists, show the producer's individual zone measurements;
         # never add their rounded costs to manufacture a period total.
-        if proof.get('status') == 'ready' and snapshot.get('period_summary'):
+        if (proof.get('status') == 'ready' and snapshot.get('period_summary')
+                and all(zone_row.get('complete') is True for zone_row in proof.get('zones') or [])
+                and number((proof.get('unattributed') or {}).get('missing_seconds')) in (None, 0)):
             continue
         entries = [(('zones', zi), row) for zi, row in enumerate(proof.get('zones') or [])]
         unattributed = proof.get('unattributed')
@@ -1081,6 +1084,11 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     if exceptions:
         table(tr('Niepełne lub osobne pomiary stref', 'Incomplete or individual zone measurements'), exceptions,
             section='zone-measurement-notes')
+    raw_share = (snapshot.get('period_summary') or {}).get('cheap_zone_share')
+    if isinstance(raw_share, Mapping) and share is None:
+        table(tr('Pokrycie pomiarów stref', 'Zone measurement coverage'),
+            selected(('period_summary', 'cheap_zone_share'), ('status', 'reason', 'known_cheap_kwh', 'total_kwh')),
+            section='period-share-details')
     table(tr('Źródło i jakość danych', 'Source and data quality'),
         selected(('totals',), ('measurement_complete', 'pricing_complete'))
         + selected(('period',), ('start', 'end')), section='report-status')

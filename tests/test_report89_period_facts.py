@@ -58,8 +58,8 @@ class Report89PeriodFactsTests(unittest.TestCase):
                 result=self.render(value,language);card=self.section(result,'kpis')
                 self.assertEqual(percent,self.kpi(result))
                 self.assertIn('%',card.text());self.assertIn(energy+' kWh',card.text())
-                self.assertIn('Znana energia w taniej strefie' if language=='pl' else 'Known cheap-zone energy',
-                    self.section(result,'period-share-details').text())
+                self.assertIn(energy+' kWh',card.text())
+                self.assertIn('period_summary.cheap_zone_share.known_cheap_kwh',result['csv'])
                 self.assertIn(percent+' %',result['text'])
                 self.assertIn('250',card.text());self.assertIn('247',card.text())
         self.assertEqual(before,value)
@@ -133,8 +133,8 @@ class Report89PeriodFactsTests(unittest.TestCase):
             result=self.render(value,language)
             main=self.section(result,'device-ranking').text()
             self.assertIn('50',main);self.assertIn('200',main);self.assertNotIn(raw,main)
-            self.assertNotIn(raw,self.section(result,'ranking-values').text())
-            self.assertIn('50.0' if language=='en' else '50,0', self.section(result,'ranking-values').text())
+            self.assertFalse(report_fixture.ReportDOM(result['html']).root.find(data_section='ranking-values'))
+            self.assertIn('50.0' if language=='en' else '50,0', self.section(result,'device-ranking').text())
             self.assertNotIn(raw,result['text'])
             rows={r['field']:r for r in csv.DictReader(StringIO(result['csv']))}
             self.assertEqual(raw,rows['groups.devices.sensor.device.kwh']['value'])
@@ -147,12 +147,12 @@ class Report89PeriodFactsTests(unittest.TestCase):
         item.update(attribution='parent_residual',measured_kwh='99',kwh='49.9999999999995450')
         result=self.render(value)
         self.assertNotIn('99',[node.text() for node in self.section(result,'device-ranking').find() if node.tag=='td'])
-        self.assertIn('50.0',self.section(result,'ranking-values').text())
+        self.assertIn('50.0',self.section(result,'device-ranking').text())
         rows={r['field']:r for r in csv.DictReader(StringIO(result['csv']))}
         self.assertEqual('49.9999999999995450',rows['groups.devices.sensor.device.kwh']['value'])
 
     def test_unknown_small_and_negative_rank_values_remain_distinct_and_labels_are_escaped(self):
-        for quantity,expected in [(None,'Unknown'),('0','0'),('0.00001','0.00001'),('-0.00001','-0.00001')]:
+        for quantity,expected in [(None,'Unknown'),('0','0'),('0.00001','<0.01'),('-0.00001','>−0.01')]:
             value=self.fixture();value['groups']['devices']['sensor.device'].update(kwh=quantity,name='QA <img src=x>&')
             result=self.render(value);section=self.section(result,'device-ranking')
             self.assertIn(expected,section.text());self.assertIn('QA <img src=x>&',section.text())

@@ -304,7 +304,7 @@ class EnergyReportTest(unittest.TestCase):
             self.assertIn('No published period share', result[kind])
             self.assertNotIn('source signature', result[kind])
             self.assertNotIn('calculator version', result[kind])
-            self.assertLess(result[kind].index('Cost and rates'), result[kind].index('Details ·'))
+            self.assertLess(result[kind].index('Cost and rates'), result[kind].index('Chart data'))
         self.assertIn('max-width:640px', result['html'])
         self.assertIn('class="bar-fill', result['html'])
         self.assertIn('width="100%"', result['html'])
@@ -518,7 +518,7 @@ class EnergyReportTest(unittest.TestCase):
         self.assertNotIn('Europe/Warsaw', period.text())
         self.assertNotIn('+0200', period.text())
         self.assertNotIn(':00:00', period.text())
-        source, = dom.find(data_section='source-times')
+        source, = dom.find(data_section='report-status')
         self.assertIn('+0200 [Europe/Warsaw]', source.text())
         self.assertIn('02:00:00', source.text())
         self.assertIn('Oct 10, 2026', self.rows(self.render())['period.start']['value'])
@@ -529,16 +529,19 @@ class EnergyReportTest(unittest.TestCase):
         self.assertEqual(1, len(dom.find(data_section='timeline')))
         self.assertEqual(1, len(dom.find(data_section='device-ranking')))
         self.assertEqual(1, len(dom.find(data_section='measurement-values')))
-        self.assertEqual(1, len(dom.find(data_section='comparison-details')))
+        self.assertEqual(1, len(dom.find(data_section='comparisons')))
+        self.assertFalse(dom.find(data_section='comparison-details'))
         for kind in ('html', 'text'):
             self.assertNotIn('sensor.device', report[kind])
             self.assertNotIn('mask source seconds', report[kind])
             self.assertNotIn('priced source seconds', report[kind])
         self.assertIn('sensor.device', report['csv'])
         self.assertIn('comparisons.previous.baseline_analysis.chart.bins.0', report['csv'])
-        details, = dom.find(data_section='comparison-groups')
-        for value in ('46', '48', 'Unknown'):
-            self.assertIn(value, details.text())
+        self.assertFalse(dom.find(data_section='comparison-groups'))
+        rows = self.rows(report)
+        self.assertEqual('46', rows['comparisons.previous.groups.devices.sensor.device.current_kwh']['value'])
+        self.assertEqual('48', rows['comparisons.previous.groups.devices.sensor.device.own_current_kwh']['value'])
+        self.assertEqual('Unknown', rows['comparisons.previous.groups.devices.sensor.device.full_baseline_kwh']['value'])
 
     def test_negative_timeline_measurement_stays_textual_without_a_positive_bar(self):
         self.snapshot['chart']['bins'][0]['kwh'] = '-0.0000123400'
@@ -578,10 +581,10 @@ class EnergyReportTest(unittest.TestCase):
         compared['costs']['delta_cost'] = '13.37'
         compared['costs']['delta_total_cost'] = '-2.46'
         result = self.render()
-        self.assertIn('+17.25 kWh', Markup(result['html']).cells)
-        self.assertIn('+13.37', Markup(result['html']).cells)
-        self.assertIn('-2.46', Markup(result['html']).cells)
-        self.assertIn('+7.1', Markup(result['html']).cells)
+        self.assertIn('+17.25 kWh', ' '.join(Markup(result['html']).cells))
+        self.assertIn('+13.37', ' '.join(Markup(result['html']).cells))
+        self.assertIn('-2.46', ' '.join(Markup(result['html']).cells))
+        self.assertIn('+7.1', ' '.join(Markup(result['html']).cells))
         self.assertIn('+17.25 kWh', result['text'])
         rows = self.rows(result)
         self.assertEqual('17.2500', rows['comparisons.previous.delta_kwh']['value'])

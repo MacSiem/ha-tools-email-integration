@@ -72,15 +72,15 @@ class Mail136Test(unittest.TestCase):
 
     def test_lower_tables_keep_phone_reading_width_and_avoid_empty_zone_audit_rows(self):
         result = self.render()
-        zones = self.section(result, 'measured-zone-values')
+        zones = self.section(result, 'period-zone-costs')
         rows = [node for node in zones.children if isinstance(node, fixture.ReportNode) and node.tag == 'tr']
-        self.assertLessEqual(len(rows), 49)
-        self.assertEqual(24, len(zones.find(data_role='zone-heading')))
+        self.assertEqual(3, len(rows))  # Header and the producer's two period zones.
         self.assertNotIn('Unattributed to zone', zones.text())
-        self.assertIn('10.0 kWh', zones.text())
-        groups = self.section(result, 'comparison-groups')
-        for row in [n for n in groups.children if isinstance(n, fixture.ReportNode) and n.tag == 'tr']:
+        self.assertIn('58.0 kWh', zones.text())
+        comparisons = self.section(result, 'comparisons')
+        for row in [n for n in comparisons.children if isinstance(n, fixture.ReportNode) and n.tag == 'tr']:
             self.assertLessEqual(len(row.children), 3)
+        self.assertFalse(fixture.ReportDOM(result['html']).root.find(data_section='measured-zone-values'))
 
     def test_mail136_partition_proof_rejects_mismatch_overlap_negative_and_stale(self):
         base = copy.deepcopy(self.s)
