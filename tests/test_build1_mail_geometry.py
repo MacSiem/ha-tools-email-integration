@@ -170,5 +170,5 @@ class Build1MailGeometryTests(unittest.TestCase):
         self.assertIn('My G12 &lt;label&gt;', block(html, 6))
         self.assertIn('My G12 &lt;label&gt;', block(html, 9))
         self.assertNotIn('My g12', html)
-        self.assertIn('Stawki brutto: energia + dystrybucja', html)
+        self.assertIn('Stawki brutto: energia + dystrybucja zmienna', html)
         self.assertIn(' — o 1,05 zł więcej.', html)

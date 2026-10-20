@@ -363,7 +363,7 @@ class _View:
                 hours = ' ' + hours
             legend_groups.append(f'<span class="legend-group" style="display:inline-block;max-width:100%;white-space:normal;overflow-wrap:anywhere;margin-right:8px">{dot}&nbsp;{E(label)}{E(hours)}</span>')
         previous_label = self.comparison_label(self.comparisons[0]) if self.comparisons else self.tr('previous')
-        legend_groups.append(f'<span class="legend-group" style="display:inline-block;max-width:100%;white-space:normal;overflow-wrap:anywhere;margin-right:8px">{_previous_tick(legend=True)}&nbsp;{E(previous_label)}</span>')
+        legend_groups.append(f'<span class="legend-group" style="display:inline-block;max-width:100%;white-space:normal;overflow-wrap:anywhere;margin-right:0">{_previous_tick(legend=True)}&nbsp;{E(previous_label)}</span>')
         legend = ' '.join(legend_groups)
         axis = []
         for n, (idx, label) in enumerate(labels):
@@ -480,7 +480,7 @@ class _View:
             self.lines.append(f'- {label}: {value}')
         basis = self.tariff.get('price_basis', self.m.get('price_basis'))
         basis_label = self.tr(basis) if basis in ('gross', 'net') else self.tr('basis_unknown')
-        rate_note = f'{basis_label}: {"energia + dystrybucja" if self.lang == "pl" else "energy + distribution"} · {self.tr("tariff")} {self.tariff.get("name") or self.tr("no_data")} {self.tr("from")} {self.tariff.get("valid_from") or self.tr("no_data")}'
+        rate_note = f'{basis_label}: {"energia + dystrybucja zmienna" if self.lang == "pl" else "energy + variable distribution"} · {self.tr("tariff")} {self.tariff.get("name") or self.tr("no_data")} {self.tr("from")} {self.tariff.get("valid_from") or self.tr("no_data")}'
         extras = paragraph(rate_note, line_height=16)
         self.lines.append(rate_note)
         for alt in _items(self.m.get('alternatives')):

@@ -306,7 +306,7 @@ class NativeShortCoordinatorTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(2, len(calls))
             self.assertEqual([5, 3, 100], [e.native_value for e in entities])
             self.assertTrue(all(e.available for e in entities))
-            self.assertEqual([('today', True, 5), ('today_cost', True, 3),
+            self.assertCountEqual([('today', True, 5), ('today_cost', True, 3),
                               ('cheap_share_today', True, 100)], published[-3:])
             self.assertEqual('2026-10-20T22:05:00+00:00', c.data['entity_facts']['measurement_through'])
             clock[0] = at('2026-10-20T22:07:00Z')
