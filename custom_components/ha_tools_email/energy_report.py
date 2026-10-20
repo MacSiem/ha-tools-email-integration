@@ -161,6 +161,8 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         pair = _LABELS.get(key)
         return pair[0 if pl else 1] if pair else key.replace('_', ' ')
 
+    ambiguous_instants = set()
+
     def instant(value):
         if isinstance(value, bool):
             raise ValueError('invalid_report_instant')
@@ -179,7 +181,12 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         clock = stamp.strftime('%I:%M:%S %p' if str(hour_cycle) == '12' else '%H:%M:%S')
         # Numeric offset disambiguates repeated DST hours; never trust local_start
         # or fold as a substitute for converting the actual aware instant.
-        return f'{day} {clock} {stamp.strftime("%z")} [{timezone_name}]'
+        formatted = f'{day} {clock} {stamp.strftime("%z")} [{timezone_name}]'
+        # Classify the converted aware instant in its display zone. Both folds
+        # of a repeated hour need an offset, even when only one is in the report.
+        if stamp.replace(fold=0).utcoffset() != stamp.replace(fold=1).utcoffset():
+            ambiguous_instants.add(formatted)
+        return formatted
 
     def calendar_date(value):
         day = date.fromisoformat(value)
@@ -312,12 +319,20 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     def fact(parts):
         return facts.get(path_of(parts))
 
-    def shown_unit(value):
+    def shown_unit(value, *, amount=None):
+        # Missing value plus missing currency is one absence, not two. Keep
+        # known units and the lossless fact/CSV unit exactly as captured.
+        if amount == unknown and value.split('/', 1)[0] == unknown:
+            return ''
         return value.replace('PLN', 'zł').replace('/miesiąc', '/mies.') if pl else value
 
     def amount(parts):
         row = fact(parts)
-        return user_value(row) + (' ' + shown_unit(row[3]) if row[3] else '') if row else unknown
+        if not row:
+            return unknown
+        value = user_value(row)
+        units = shown_unit(row[3], amount=value)
+        return value + (' ' + units if units else '')
 
     # Known status/scope values get human explanations. Future codes remain in
     # CSV; no technical code is promoted to a user-facing diagnosis or price.
@@ -435,7 +450,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         if not rows:
             rows = [(tr('Dane', 'Data'), unknown, '', None)]
         for caption, value, unit, bar in rows:
-            unit = shown_unit(unit)
+            unit = shown_unit(unit, amount=value)
             text_parts.append(caption + ': ' + value + (' ' + unit if unit else ''))
             numeric = value.lstrip('+-<>−').replace('\u00a0', '').replace(',', '').replace('.', '').isdigit()
             value_attrs = (' class="number"' if numeric else '') + (' colspan="2"' if not unit else '')
@@ -485,16 +500,16 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         row = fact(parts)
         if not row or row[2] == unknown:
             return unknown
-        # instant() already owns language, calendar, zone and explicit clock.
-        # Removing only its source suffix and zero seconds cannot move a day.
-        value = row[2].rsplit(' [', 1)[0].rsplit(' ', 1)[0]
+        # instant() owns language, calendar, zone and explicit clock. Preserve
+        # its offset only for an ambiguous local hour; full audit stays in CSV.
+        value, offset = row[2].rsplit(' [', 1)[0].rsplit(' ', 1)
         value = value.replace(':00 AM', ' AM').replace(':00 PM', ' PM') if hour_cycle == '12' else value
         if hour_cycle == '24' and value.endswith(':00'):
             value = value[:-3]
         if clock_only:
             pieces = value.rsplit(' ', 2 if hour_cycle == '12' else 1)
-            return ' '.join(pieces[-2:]) if hour_cycle == '12' else pieces[-1]
-        return value
+            value = ' '.join(pieces[-2:]) if hour_cycle == '12' else pieces[-1]
+        return value + (' ' + offset if row[2] in ambiguous_instants else '')
 
     def exact(parts):
         row = fact(parts)
@@ -502,7 +517,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
 
     def unit(parts):
         row = fact(parts)
-        return shown_unit(row[3]) if row else ''
+        return shown_unit(row[3], amount=user_value(row)) if row else ''
 
     def compact_number(value, fallback, places=1):
         """Short main-layer typography; complete precision stays in CSV."""
