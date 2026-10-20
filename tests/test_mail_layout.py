@@ -73,6 +73,28 @@ class MailLayoutTest(unittest.IsolatedAsyncioTestCase):
         self.assertLess(doc.nodes.index(status[0]),doc.nodes.index(footer))
         self.assertFalse(any(n.tag in {'script','img','iframe'} for n in doc.nodes))
 
+    def assert_build1_coherent(self,payload,*,polish=False):
+        doc=Document(payload['html']);body=next(n for n in doc.nodes if n.tag=='body')
+        column=next(n for n in doc.nodes if n.tag=='table' and n.parent is body)
+        def visible(node):
+            while node:
+                if 'display:none' in node.attrs.get('style','').replace(' ',''):return False
+                node=node.parent
+            return True
+        text=[n for n in doc.nodes if n.tag=='#text' and n.inside(body) and visible(n)]
+        self.assertTrue(all(n.inside(column) for n in text))
+        footer=('Wysłano z HA Tools · zmień harmonogram lub odbiorców: HA → HA Tools → Raporty' if polish else
+                'Sent by HA Tools · change schedule or recipients: HA → HA Tools → Reports')
+        self.assertEqual(footer,text[-1].text)
+        self.assertEqual(1,sum(n.text==footer for n in text))
+        markers=['<!-- block:'+str(i)+' -->' for i in range(13)]
+        self.assertEqual(sorted(payload['html'].index(m) for m in markers),[payload['html'].index(m) for m in markers])
+        identity='<!-- ha-tools-snapshot:'+payload['snapshot_id']+' -->'
+        self.assertEqual(1,payload['html'].count(identity))
+        self.assertFalse(any(payload['snapshot_id'] in n.text for n in text))
+        self.assertFalse(any(n.tag in {'script','img','iframe'} for n in doc.nodes))
+        self.assertIn('name="color-scheme" content="light dark"',payload['html'])
+
     async def test_energy_builder_keeps_its_charts_before_footer_in_same_column(self):
         p=c.build_energy_report_payload([{'name':'Meter <safe>', 'kwh':2}],cadence='daily',currency='EUR')
         self.assert_coherent(p)
@@ -93,14 +115,14 @@ class MailLayoutTest(unittest.IsolatedAsyncioTestCase):
                 for i in range(int((b-a).total_seconds()/3600))]}
         fx=ComposerFixture(end,points=points)
         with fx.patches():p=await fx.compose(start=start,end=end)
-        self.assert_schema2_coherent(p)
-        self.assertIn('Selected comparisons',p['html'])
-        self.assertIn('data-section="measurement-values"',p['html'])
+        self.assert_build1_coherent(p)
+        self.assertIn('Comparison',p['html'])
+        self.assertIn('<!-- block:5 -->',p['html'])
         doc=Document(p['html'])
-        self.assertEqual(1,sum(n.attrs.get('data-section')=='report-status' for n in doc.nodes))
+        self.assertEqual(1,p['html'].count('<!-- block:12 -->'))
         self.assertEqual(Decimal('24'),Decimal(p['summary']['total_kwh']))
         self.assertEqual(Decimal('12'),Decimal(csv_facts(p)['comparisons.previous.baseline_kwh']))
-        self.assertLess(p['html'].index('Selected comparisons'),p['html'].index(p['snapshot_id']))
+        self.assertLess(p['html'].index('Comparison'),p['html'].index(p['snapshot_id']))
 
     async def test_log_runtime_retention_context_stays_in_complete_column(self):
         class Store:
@@ -164,14 +186,17 @@ class MailLayoutTest(unittest.IsolatedAsyncioTestCase):
         a,b=scheduler.calendar_report_window({'cadence':'daily','timezone':'America/New_York'},now)
         fx=ComposerFixture(now,measurement_zone='Europe/Warsaw',display_zone='Europe/Warsaw',language='pl')
         with fx.patches():payload=await fx.compose(start=a,end=b,report_zone='America/New_York')
-        self.assert_schema2_coherent(payload,polish=True)
+        self.assert_build1_coherent(payload,polish=True)
         self.assertEqual('America/New_York',fx.snapshot['chart']['timezone'])
         self.assertEqual(a.isoformat(),payload['summary']['period']['from'])
         self.assertEqual(b.isoformat(),payload['summary']['period']['to'])
         stamp='18 paź 2026 01:03:00 +0200 [Europe/Warsaw]'
         self.assertEqual(stamp,csv_facts(payload)['generated_at'])
-        self.assertIn(stamp,payload['body']);self.assertIn(stamp,payload['html'])
-        self.assertIn('Okres raportu',payload['body'])
+        # Generated timestamp remains an exact download fact; presentation uses the
+        # selected report calendar date and the user's display timezone.
+        self.assertIn('Europe/Warsaw',payload['body']);self.assertIn('Europe/Warsaw',payload['html'])
+        self.assertIn('Energia',payload['subject'])
+        self.assertNotIn(payload['snapshot_id'],payload['body'])
 
     async def test_polish_dst_fold_keeps_same_wall_clock_with_distinct_offsets(self):
         presentation=c._presentation('pl','Europe/Warsaw')
