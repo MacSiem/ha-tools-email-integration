@@ -37,7 +37,10 @@ a {{ text-decoration:none; }}
   .kpigap {{ display:none !important; }}
   .h1 {{ font-size:20px !important; line-height:26px !important; }}
   .hm {{ display:none !important; }}
-  .bar {{ width:20% !important; }}
+  .bar {{ width:14% !important; }}
+  .rank-name {{ width:42% !important; }}
+  .rank-value {{ width:24% !important; font-size:12px !important; padding-left:4px !important; }}
+  .rank-cost {{ width:20% !important; font-size:12px !important; padding-left:4px !important; }}
 }}
 @media (prefers-color-scheme: dark) {{
 {dark}

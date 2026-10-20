@@ -368,8 +368,8 @@ class _View:
                 unit = fmt.plural(count, 'urządzenie' if self.lang == 'pl' else 'device', 'urządzenia' if self.lang == 'pl' else 'devices', 'urządzeń' if self.lang == 'pl' else 'devices', language=self.lang)
                 name += f' ({self.n(count, 0)} {unit})'
             values = [self.tr('double') if blocked else self.energy(value), '—' if blocked else self.share(i.get('share')), '—' if blocked else self.money(i.get('cost'))]
-            cells = f'<td class="tx bd" style="width:34%;padding:8px 8px 8px 0;border-top:1px solid {L["bd"]};font:400 14px/20px {FONT};color:{L["tx"]}">{E(name)}</td><td class="bd bar" style="width:24%;padding:8px 8px 8px 0;border-top:1px solid {L["bd"]}">{bar}</td>'
-            for value, width_, extra, weight in zip(values, (18, 9, 15), ('', ' hm', ''), (700, 400, 400)):
+            cells = f'<td class="tx bd rank-name" style="width:34%;padding:8px 8px 8px 0;border-top:1px solid {L["bd"]};font:400 14px/20px {FONT};color:{L["tx"]}">{E(name)}</td><td class="bd bar" style="width:24%;padding:8px 8px 8px 0;border-top:1px solid {L["bd"]}">{bar}</td>'
+            for value, width_, extra, weight in zip(values, (18, 9, 15), (' rank-value', ' hm', ' rank-cost'), (700, 400, 400)):
                 cells += f'<td class="tx bd{extra}" align="right" style="width:{width_}%;padding:8px 0 8px 8px;border-top:1px solid {L["bd"]};font:{weight} 14px/20px {FONT};color:{L["tx"]}">{E(value)}</td>'
             rows.append('<tr>' + cells + '</tr>')
             self.lines.append(f'- {name}: {" · ".join(values)}')
