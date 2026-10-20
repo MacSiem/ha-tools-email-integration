@@ -2,6 +2,8 @@
 
 ## 2.4.0 (Unreleased)
 
+- Add selected-baseline context and published effective price to report summaries, explicit chart-zone legends, and table-only From/To composition bars with matching stable device colors. Require complete non-overlapping producer partitions; retain exact text/CSV values beside brief visual labels.
+
 - Read the import cost already recorded by HA Energy when no tariff book exists, with explicit currency and source-hour coverage. Return the same native fact in analysis and HTML/text/CSV reports; keep current price observations separate from history and components/fixed fees unknown. Recheck the complete published source set after native IO, including cached responses.
 
 - Share schema-2 calendar analysis, historical tariff-book versions, measured source/group comparisons and HTML/text/CSV reports across all Energy cards. Reports can be read inside HA without SMTP; email delivery remains an explicit separate action.

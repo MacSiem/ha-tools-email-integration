@@ -1,0 +1,14 @@
+{
+  "captured_at": "2026-10-20",
+  "frontend": "123a527e72d9231d030deef6707b6ed0f3bea85f",
+  "backend": "337bd1102e747e968f27ce98791edd3a743d677b",
+  "file": "energy-report-flow-pl-dark.png",
+  "sha256": "a1002ed5bf50bb43ee0480dbe879eb9442b224535f394cebafbaa04c2b930c1c",
+  "pixels": [
+    390,
+    844
+  ],
+  "capture": "email-day10-pl390-dark-flow.png",
+  "snapshot_id": "92f1d887cb2b64c0d2d3ada04a3c329051f30e0d5bd427bb5398ed54f65f4853",
+  "qualification": "Unedited actual HA Core2026.9.4 embedded report preview, PL390Dark. Synthetic250kWh247EUR. Source192+58 and devices50+Unmeasured200; explicit zone legend, stable device colors and compact visual labels. Exact raw values preserved in text/CSV from same snapshot. No email client or inbox-delivery claim."
+}
