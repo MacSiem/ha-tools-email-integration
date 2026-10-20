@@ -15,6 +15,21 @@ UTC = timezone.utc
 
 
 class Build1ServiceTest(unittest.TestCase):
+    def test_collector_supplies_actual_previous_ghosts_without_counting_them_as_import(self):
+        async def run():
+            h = Harness(); h.now = datetime(2026,1,11,12,tzinfo=UTC)
+            with h.patches():
+                result = await h.subject.async_get_build1_model('day','user')
+                model = result['report_model']
+                self.assertEqual(120,model['totals']['import_kwh'])
+                self.assertEqual(10,model['hourly'][12]['prev_kwh'])
+                self.assertIsNone(model['hourly'][12]['kwh'])
+                self.assertTrue(model['hourly'][12]['future'])
+                self.assertEqual(120,model['daily'][0]['kwh'])
+                self.assertEqual(240,model['daily'][0]['prev_kwh'])
+                self.assertTrue(await h.subject.async_validate_result(result,'user'))
+        asyncio.run(run())
+
     def test_default_dto_unchanged_opt_in_envelope_calendar_and_actor(self):
         async def run():
             h = Harness(); h.now = datetime(2026, 1, 11, 12, tzinfo=UTC)
