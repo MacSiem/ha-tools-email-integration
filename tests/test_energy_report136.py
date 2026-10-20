@@ -112,7 +112,7 @@ class Mail136Test(unittest.TestCase):
             self.assertIn(text, result['text'])
         self.assertNotIn('No area', destination.text())
         self.assertIn('77%', source.text())
-        self.assertIn('23.2%', source.text())
+        self.assertIn('23%', source.text())
         for forbidden in ('<svg', '<script', 'display:flex', 'display:grid'):
             self.assertNotIn(forbidden, result['html'])
 

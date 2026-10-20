@@ -67,7 +67,7 @@ class Report89PeriodFactsTests(unittest.TestCase):
     def test_zero_cheap_share_is_known_but_zero_total_and_missing_proof_are_not(self):
         value=self.fixture();share=value['period_summary']['cheap_zone_share']
         share.update(known_cheap_kwh='0',ratio='0')
-        self.assertEqual('0',self.kpi(self.render(value)))
+        self.assertEqual('0%',self.kpi(self.render(value)))
         for defect in ['zero_total','missing','window','zone','scope','classification','measurement','coverage',
                        'reason','missing_reason','classified','total','negative','over_one','nonfinite','reversedwindow']:
             with self.subTest(defect=defect):

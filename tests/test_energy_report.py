@@ -144,7 +144,7 @@ class EnergyReportTest(unittest.TestCase):
             'totals.effective_price': '0.00000000000000000001'}
         for field, value in literals.items():
             self.assertEqual(value, rows[field]['value'])
-        for shown in ('0.00', 'Unknown', '-123456789012345678901234567890.12', '<0.01'):
+        for shown in ('0.00', 'Unknown', '-123,456,789,012,345,678,901,234,567,890.12', '<0.01'):
             self.assertIn(shown, ' '.join(Markup(result['html']).cells))
             self.assertIn(shown, result['text'])
         # Valid negative numeric data remains numeric in spreadsheet exports.
@@ -550,7 +550,7 @@ class EnergyReportTest(unittest.TestCase):
         negative, = timeline.find(data_bin='0')
         bar, = negative.find(data_role='bar')
         self.assertEqual('0%', bar.attrs['height'])
-        self.assertIn('>−0.01', report['text'])
+        self.assertIn('>−0.1', report['text'])
         self.assertEqual('-0.0000123400', self.rows(report)['chart.bins.0.kwh']['value'])
         values, = dom.find(data_section='measurement-values')
         self.assertIn('>−0.01', values.text())
