@@ -28,7 +28,8 @@ class Build1MailEnergyTests(unittest.TestCase):
             row['classification'] = None
         result = self.render(language='en')
         self.assertNotIn('33%',result['preheader'])
-        self.assertNotIn('33%',result['text'])
+        # The zone's measured share remains valid even when its cheapness is unknown.
+        self.assertIn('33%',result['text'])
         self.assertNotIn('class="cheap" bgcolor=',result['html'])
 
     def setUp(self):

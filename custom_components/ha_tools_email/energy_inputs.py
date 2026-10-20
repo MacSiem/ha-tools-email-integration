@@ -174,6 +174,7 @@ def short_projection(values, configuration, tariff, start, end):
     return {'from': start.isoformat(), 'to': end.isoformat(), 'kwh': kwh,
         'currency': rate.get('currency') if known else None,
         'price_basis': rate.get('price_basis') if known else None,
+        'classification': rate.get('classification') if known else None,
         'zone': rate.get('zone') if known and rate.get('zone_attribution') == 'single' else None,
         'costs': costs(kwh), 'devices': {row['stat_consumption']: {
             'kwh': values.get(row['stat_consumption']),

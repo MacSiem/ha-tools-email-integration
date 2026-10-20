@@ -467,7 +467,7 @@ class HistoricalTariffRates:
         if probe['available']:
             result.update(energy_rate=probe['energyRate'], variable_rate=probe['variableRate'],
                           zone=probe['zone'], zones=list(probe['zones']),
-                          zone_attribution=probe['zoneAttribution'])
+                          zone_attribution=probe['zoneAttribution'], classification=probe.get('classification'))
         return result
 
 

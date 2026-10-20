@@ -209,10 +209,11 @@ class _View:
         return self.period_label()
 
     def color(self, zone_id):
-        if zone_id in ('cheap', 'exp'):
-            return zone_id
-        palette = ('cheap', 'exp', 'd1', 'd2', 'd3', 'd4', 'other')
-        return next((palette[i % len(palette)] for i, z in enumerate(self.zones) if z.get('id') == zone_id), 'other')
+        zone = next((z for z in self.zones if z.get('id') == zone_id), {})
+        if 'classification' in zone:
+            return {'cheap':'cheap','expensive':'exp'}.get(zone['classification'],'other')
+        # Reference model/1 fixtures predate the explicit classification field.
+        return zone_id if zone_id in ('cheap','exp') else 'other'
 
     def item_name(self, i):
         if i.get('id') == '_other_measured' or i.get('color') == 'other':
@@ -431,10 +432,10 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
     first = v.comparisons[0] if v.comparisons else {}
     change = v.change(first)
     comparison = f'{change} vs {v.comparison_label(first)}' if change else v.coverage_label() if not v.complete else ''
-    cheap = next((z for z in v.zones if z.get('id') == 'cheap'), None)
+    cheap = next((z for z in v.zones if z.get('classification') == 'cheap' or
+        'classification' not in z and z.get('id') == 'cheap'), None)
     if cheap is None:
-        priced = [z for z in v.zones if _numeric(z.get('rate'))]
-        cheap = min(priced, key=lambda z: z['rate']) if len(priced) > 1 else v.zones[0] if v.zones else {}
+        cheap = v.zones[0] if len(v.zones)==1 else {}
     zone_label = v.tr('cheap') if len(v.zones) > 1 else f'{v.tr("zone")}: {v.zone_label(cheap)}'
     pre_parts = [summary, comparison]
     if cheap and v.complete and _numeric(cheap.get('share')):
