@@ -274,4 +274,8 @@ class ActualRecorderComparisonTest(unittest.IsolatedAsyncioTestCase):
                 if cadence=='monthly':self.assertEqual((743,336,407),(current,previous,comparison['delta_kwh']))
                 for body in (payload['body'],payload['html']):
                     self.assertIn('Selected comparisons',body);self.assertIn('Europe/Warsaw',body)
-                    self.assertNotIn('9999',body)
+                    # The random snapshot hash can contain these digits; inspect
+                    # rendered measurements, while retaining the exact-source IO proof.
+                    numeric_body = body.replace(payload['summary']['snapshot_id'], '')
+                    self.assertNotRegex(numeric_body, r'(?<![0-9A-Za-z])(?:9999|9[,\u00a0 ]999)(?![0-9A-Za-z])')
+                    self.assertNotIn('sensor.unrelated', body)
