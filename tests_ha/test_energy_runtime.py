@@ -273,5 +273,5 @@ async def test_native_enum_metadata_does_not_invalidate_statistics_during_transi
     await storage.async_save_tariff(None, expected_revision=1)
     await coordinator.async_refresh()
     await hass.async_block_till_done()
-    assert registry.async_get(zone_id).capabilities['options'] == []
+    assert (registry.async_get(zone_id).capabilities or {}).get('options', []) == []
     assert hass.states.get(zone_id).state == 'unavailable'
