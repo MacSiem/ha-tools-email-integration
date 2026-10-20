@@ -913,89 +913,57 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         'unmeasured' if parts[-1] == 'unmeasured' else device_colors[parts[-1]]) for name, parts, item in device_entries], group_ready)
     ranking(tr('Z sieci do urządzeń', 'From the grid to devices'), device_entries, section='device-ranking')
 
+    # The mail follows the six reading sections of the approved mockup.
+    # Raw comparison masks, repeated per-bin prices and provenance stay in CSV.
     comparisons = snapshot.get('comparisons') or {}
-    comparison_names = {'previous': tr('Poprzedni okres', 'Previous period'),
-        'same_weekday': tr('Ten sam dzień tygodnia', 'Same weekday'), 'mean7': tr('Średnia 7 dni', '7-day mean'),
-        'year_ago': tr('Ten sam okres rok temu', 'Same period last year')}
-    comparison_rows, comparison_details, comparison_group_rows = [], [], []
+    comparison_title = tr('Wybrane porównania', 'Selected comparisons')
+    html_parts.append('<table data-section="comparisons"><caption>' + escape(comparison_title) + '</caption>')
+    text_parts.append('\n' + comparison_title)
     for kind, comparison in comparisons.items():
         caption = comparison_names.get(kind, tr('Wybrany okres bazowy', 'Selected baseline'))
         cp = ('comparisons', kind)
-        scope = fact((*cp, 'comparison_scope'))
-        status = fact((*cp, 'status'))
-        comparison_rows.append([caption, amount((*cp, 'current_kwh')), amount((*cp, 'baseline_kwh')),
-            amount((*cp, 'delta_kwh')), user_value(scope) if scope else unknown])
-        if status and user_value(status) != words['ready']:
-            comparison_rows.append([user_value(status), '', '', '', ''])
-        # Comparison costs keep each side's own currency; published deltas are
-        # echoed, never derived from the displayed current and baseline amounts.
-        for side in ('current', 'baseline'):
-            for field in ('usage_cost', 'fixed_cost', 'total_cost', 'effective_price', 'price_basis'):
-                row = fact((*cp, 'costs', side, field))
-                if row:
-                    comparison_details.append((caption + ' · ' + label(side) + ' · ' + title(field),
-                                               user_value(row), row[3], None))
-        for field in ('percent', 'full_current_kwh', 'full_baseline_kwh'):
-            row = fact((*cp, field))
-            if row:
-                comparison_details.append((caption + ' · ' + title(field), user_value(row), row[3], None))
-        for field in ('delta_cost', 'delta_total_cost', 'percent', 'status', 'reason', 'comparison_scope'):
-            row = fact((*cp, 'costs', field))
-            if row and not (field == 'reason' and row[2] == unknown):
-                comparison_details.append((caption + ' · ' + title(field), user_value(row), row[3], None))
-        for group in ('devices', 'areas', 'floors', 'unassigned', 'unmeasured'):
-            entries = (comparison.get('groups') or {}).get(group) or {}
-            entries = {None: entries} if group in ('unassigned', 'unmeasured') else entries
-            for index, (identity, item) in enumerate(entries.items()):
-                group_name = label(group) if identity is None else friendly_name(group, identity, index)
-                parts = (*cp, 'groups', group) + (() if identity is None else (identity,))
-                group_scope = fact((*parts, 'comparison_scope'))
-                group_status = fact((*parts, 'status'))
-                group_label = caption + ' · ' + group_name
-                if group_scope:
-                    group_label += ' · ' + user_value(group_scope)
-                if group_status and user_value(group_status) != words['ready']:
-                    group_label += ' · ' + user_value(group_status)
-                comparison_group_rows.append([group_label] + [exact((*parts, field)) for field in
-                    ('current_kwh', 'baseline_kwh', 'delta_kwh', 'own_current_kwh',
-                     'own_baseline_kwh', 'full_current_kwh', 'full_baseline_kwh')])
-        # Historical totals/rates are useful. Duplicated baseline hour streams,
-        # masks and registry projections are the CSV audit, not another report.
-        if isinstance(comparison.get('baseline_analysis'), Mapping):
-            bp = (*cp, 'baseline_analysis')
-            for field in ('kwh', 'usage_cost', 'fixed_cost', 'total_cost', 'effective_price', 'price_basis'):
-                row = fact((*bp, 'totals', field))
-                if row:
-                    comparison_details.append((caption + ' · ' + label('baseline_analysis') + ' · ' + title(field),
-                                               user_value(row), row[3], None))
-            baseline = comparison['baseline_analysis']
-            for field in ('subscription', 'capacity', 'distribution', 'other', 'legacy_combined'):
-                row = fact((*bp, 'fees', 'components', field))
-                if row:
-                    comparison_details.append((caption + ' · ' + label('baseline') + ' · ' + label('fees')
-                                               + ' · ' + title(field), user_value(row), row[3], None))
-            for ri, rate in enumerate(baseline.get('rates') or []):
-                rp = (*bp, 'rates', ri)
-                for field in ('valid_from', 'valid_to', 'legacy_combined_monthly'):
-                    row = fact((*rp, field))
-                    if row:
-                        comparison_details.append((caption + ' · ' + label('baseline') + ' · ' + title(field),
-                                                   user_value(row), row[3], None))
-                for field in ('subscription', 'capacity', 'distribution', 'other'):
-                    row = fact((*rp, 'fixed_monthly', field))
-                    if row:
-                        comparison_details.append((caption + ' · ' + label('baseline') + ' · '
-                                                   + label('fixed_monthly') + ' · ' + title(field), user_value(row), row[3], None))
-                for zi, zone_row in enumerate((rate.get('profile') or {}).get('zones') or []):
-                    for field in ('energyRate', 'variableRate'):
-                        row = fact((*rp, 'profile', 'zones', zi, field))
-                        if row:
-                            comparison_details.append((caption + ' · ' + label('baseline') + ' · '
-                                + str(zone_row.get('label') or tr('Strefa', 'Zone')) + ' · ' + title(field),
-                                user_value(row), row[3], None))
-    matrix(tr('Wybrane porównania', 'Selected comparisons'),
-        [tr('Porównanie', 'Comparison'), label('current'), label('baseline'), tr('Zmiana', 'Change'),
-         tr('Zakres', 'Scope')], comparison_rows, section='comparisons')
+        current, baseline = [number(comparison.get(key)) for key in ('current_kwh', 'baseline_kwh')]
+        ceiling = max((v for v in (current, baseline) if v is not None), default=Decimal(0))
+        scope = exact((*cp, 'comparison_scope'))
+        html_parts.append('<tr><th colspan="3" scope="colgroup">' + escape(caption) + '</th></tr>')
+        text_parts.append(caption + ' · ' + scope)
+        for key, name, value in (('current_kwh', label('current'), current), ('baseline_kwh', label('baseline'), baseline)):
+            shown = amount((*cp, key))
+            width = geometry(value, ceiling) if value is not None else None
+            text_parts.append(name + ': ' + shown)
+            bar = ('<table role="presentation" class="bar-track"><tr><td class="bar-fill" width="'
+                + str(width) + '%">&#160;</td><td width="' + str(100-width) + '%"></td></tr></table>') if width is not None else ''
+            html_parts.append('<tr><th class="field-label" scope="row">' + escape(name)
+                + '</th><td>' + bar + '</td><td class="number">' + escape(shown) + '</td></tr>')
+        delta = number(comparison.get('delta_kwh'), signed=True)
+        direction = (tr('Spadek', 'Decrease') if delta is not None and delta < 0 else
+            tr('Wzrost', 'Increase') if delta is not None and delta > 0 else
+            tr('Bez zmian', 'No change') if delta == 0 else tr('Zmiana', 'Change'))
+        change = direction + ': ' + amount((*cp, 'delta_kwh'))
+        coverage = comparison.get('coverage') or {}
+        covered = [coverage.get('current'), *(coverage.get('baselines') or [coverage.get('baseline')])]
+        comparable = (comparison.get('status') == 'ready' and comparison.get('reason') is None
+            and all(number(value) is not None and number(value) >= Decimal('0.9') for value in covered))
+        if comparable and number(comparison.get('percent'), signed=True) is not None:
+            change += ' · ' + exact((*cp, 'percent')) + '%'
+        else:
+            change += ' · ' + tr('Brak porównywalnego procentu', 'No comparable percentage')
+        if comparison.get('status') != 'ready':
+            change += ' · ' + exact((*cp, 'status'))
+        text_parts.append(change)
+        html_parts.append('<tr><td colspan="3" class="note">' + escape(change + ' · ' + scope) + '</td></tr>')
+        costs = comparison.get('costs') or {}
+        if costs:
+            cost_lines = [label(side) + ': ' + amount((*cp, 'costs', side, 'total_cost')) for side in ('current', 'baseline')]
+            cost_lines.append(tr('Zmiana kosztu', 'Cost change') + ': ' + amount((*cp, 'costs', 'delta_total_cost')))
+            # Each side keeps its own currency; no price/delta is reconstructed.
+            text_parts.extend(cost_lines)
+            html_parts.append('<tr><td colspan="3" class="note">' + escape(' · '.join(cost_lines)) + '</td></tr>')
+    if not comparisons:
+        text_parts.append(unknown)
+        html_parts.append('<tr><td>' + escape(unknown) + '</td></tr>')
+    html_parts.append('</table>')
+
     for kind, caption in (('areas', tr('Pokoje', 'Rooms')), ('floors', tr('Piętra', 'Floors'))):
         entries = [(friendly_name(kind, identity, index), ('groups', kind, identity), item)
                    for index, (identity, item) in enumerate(sorted((groups.get(kind) or {}).items(), key=rank))]
@@ -1004,14 +972,14 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         if isinstance(groups.get('unmeasured'), Mapping):
             entries.append((label('unmeasured'), ('groups', 'unmeasured'), groups['unmeasured']))
         ranking(caption, entries, section=kind)
+
     if native:
         table(label('period_cost'), selected(('native_pricing', 'period_cost'),
             ('status', 'amount', 'recorded_amount', 'components_status', 'fixed_fees_status', 'reason'))
             + [(tr('Informacja', 'Note'), native_note, '', None)], section='native-recorded-cost')
         price_rows = []
         for index, price in enumerate(native.get('current_prices', [])):
-            price_rows += selected(('native_pricing', 'current_prices', index),
-                ('source_id', 'price', 'observed_at', 'status', 'reason'))
+            price_rows += selected(('native_pricing', 'current_prices', index), ('price', 'observed_at', 'status', 'reason'))
         if price_rows:
             price_rows.append((tr('Informacja', 'Note'), tr(
                 'Odczytane teraz; nie są cenami za wybrany okres. Nie obliczamy z nich kosztu historycznego.',
@@ -1021,153 +989,112 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         table(tr('Koszt i stawki', 'Cost and rates'), selected(('totals',),
             ('energy_cost', 'variable_cost', 'legacy_combined_cost', 'usage_cost', 'fixed_cost',
              'total_cost', 'effective_price', 'price_basis')))
+        zone_costs = []
+        for index, zone_row in enumerate(((snapshot.get('period_summary') or {}).get('zone_breakdown') or {}).get('zones') or []):
+            zp = ('period_summary', 'zone_breakdown', 'zones', index)
+            name = str(zone_row.get('label') or tr('Strefa', 'Zone'))
+            zone_costs.append([name, amount((*zp, 'kwh')), amount((*zp, 'usage_cost'))])
+        if zone_costs:
+            matrix(tr('Koszt w strefach', 'Cost by zone'), [tr('Strefa', 'Zone'), 'kWh', label('usage_cost')],
+                zone_costs, section='period-zone-costs')
         table(label('fees'), selected(('fees', 'components'),
             ('subscription', 'capacity', 'distribution', 'other', 'legacy_combined')))
-    rate_rows = []
+
     for index, rate in enumerate(snapshot.get('rates') or []):
         rp = ('rates', index)
-        for field in ('valid_from', 'valid_to', 'price_basis', 'legacy_combined_monthly'):
-            row = fact((*rp, field))
-            if row:
-                rate_rows.append((str(index+1) + ' · ' + title(field), user_value(row), row[3], None))
-        for field in ('subscription', 'capacity', 'distribution', 'other'):
-            row = fact((*rp, 'fixed_monthly', field))
-            if row:
-                rate_rows.append((label('fixed_monthly') + ' · ' + title(field), user_value(row), row[3], None))
-        for zi, zone_row in enumerate((rate.get('profile') or {}).get('zones') or []):
-            for field in ('energyRate', 'variableRate'):
-                row = fact((*rp, 'profile', 'zones', zi, field))
-                if row:
-                    rate_rows.append((str(zone_row.get('label') or tr('Strefa', 'Zone')) + ' · ' + title(field),
-                                      user_value(row), row[3], None))
-        for di, interval in enumerate(((rate.get('profile') or {}).get('dynamic') or {}).get('intervals') or []):
+        rate_caption = label('rates') + ' · ' + exact((*rp, 'valid_from'))
+        if rate.get('valid_to') is not None:
+            rate_caption += ' – ' + exact((*rp, 'valid_to'))
+        rate_caption += ' · ' + str(rate.get('currency') or unknown) + '/kWh · ' + exact((*rp, 'price_basis'))
+        profile = rate.get('profile') or {}
+        rate_rows = []
+        for zi, zone_row in enumerate(profile.get('zones') or []):
+            name = str(zone_row.get('label') or tr('Strefa', 'Zone'))
+            schedules = []
+            for rule in profile.get('rules') or []:
+                if rule.get('zone') != zone_row.get('id'):
+                    continue
+                if set(rule).issubset({'zone', 'intervals'}):
+                    schedules.extend(str(interval.get('from') or unknown) + '–' + str(interval.get('to') or unknown)
+                                     for interval in rule.get('intervals') or [])
+                else:
+                    schedules.append(tr('Godziny według reguł taryfy; szczegóły w CSV', 'Hours follow tariff rules; details in CSV'))
+            if not schedules and zone_row.get('id') == profile.get('defaultZone'):
+                schedules.append(tr('Pozostałe godziny', 'Other hours'))
+            if schedules:
+                name += '\n' + ', '.join(schedules)
+            rate_rows.append([name, exact((*rp, 'profile', 'zones', zi, 'energyRate')),
+                exact((*rp, 'profile', 'zones', zi, 'variableRate'))])
+        matrix(rate_caption, [tr('Strefa i godziny', 'Zone and hours'), tr('Energia', 'Energy'),
+            tr('Składnik zmienny', 'Variable component')], rate_rows, section='rate-history-' + str(index))
+        monthly = selected((*rp, 'fixed_monthly'), ('subscription', 'capacity', 'distribution', 'other'))
+        if rate.get('legacy_combined_monthly') is not None:
+            monthly += selected(rp, ('legacy_combined_monthly',))
+        if monthly:
+            table(label('fixed_monthly') + ' · ' + exact((*rp, 'valid_from')), monthly)
+        dynamic_rows = []
+        for di, interval in enumerate((profile.get('dynamic') or {}).get('intervals') or []):
             dp = (*rp, 'profile', 'dynamic', 'intervals', di)
-            context = exact((*dp, 'from')) + ' – ' + exact((*dp, 'to'))
-            for field in ('energyRate', 'variableRate'):
-                row = fact((*dp, field))
-                if row:
-                    rate_rows.append((label('dynamic') + ' · ' + context + ' · ' + title(field), user_value(row), row[3], None))
-    table(label('rates'), rate_rows)
+            dynamic_rows.append([short_stamp((*dp, 'from')) + ' – ' + short_stamp((*dp, 'to')),
+                amount((*dp, 'energyRate')), amount((*dp, 'variableRate'))])
+        if dynamic_rows:
+            matrix(label('dynamic'), [label('period'), tr('Energia', 'Energy'), tr('Składnik zmienny', 'Variable component')],
+                dynamic_rows, section='dynamic-rates-' + str(index))
     for index, alternative in enumerate(snapshot.get('alternatives') or []):
         table(label('alternatives') + ' · ' + str(alternative.get('tariff_name') or index+1),
-              selected(('alternatives', index), ('kwh', 'usage_cost', 'fixed_cost', 'total_cost',
-                       'effective_price', 'delta_cost', 'comparison_reason')))
+            selected(('alternatives', index), ('kwh', 'usage_cost', 'fixed_cost', 'total_cost',
+                'effective_price', 'delta_cost', 'comparison_reason')))
 
-    # Intentional secondary sections, with no recursive fact/path dump.
-    table(tr('Szczegóły · Jakość pomiarów i wyceny', 'Details · Measurement and pricing quality'),
-          selected(('totals',), ('measurement_complete', 'pricing_complete', 'components_complete'))
-          + selected(('coverage',), ('complete', 'ratio')), section='report-status')
-    table(tr('Szczegóły · Udział taniej strefy', 'Details · Cheap-zone share'),
-          selected(('period_summary', 'cheap_zone_share'),
-              ('status', 'reason', 'known_cheap_kwh', 'classified_kwh', 'total_kwh', 'ratio')),
-          section='period-share-details')
-    matrix(tr('Szczegóły · Energia odbiorników', 'Details · Consumer energy'),
-        [tr('Widok i odbiornik', 'View and consumer'), 'kWh', tr('Zapisane kWh', 'Recorded kWh'),
-         label('usage_cost')], ranking_values, section='ranking-values')
-    table(tr('Szczegóły · Porównania', 'Details · Comparisons'), comparison_details,
-          section='comparison-details')
-    group_title = tr('Szczegóły · Porównanie odbiorników (kWh)', 'Details · Consumer comparison (kWh)')
-    text_parts.append('\n' + group_title)
-    html_parts.append('<table data-section="comparison-groups"><caption>' + escape(group_title) + '</caption>')
-    for values in comparison_group_rows:
-        html_parts.append('<tr><th colspan="3" scope="colgroup">' + escape(values[0]) + '</th></tr>')
-        text_parts.append(values[0])
-        for offset, names in ((1, (label('current'), label('baseline'), tr('Zmiana', 'Change'))),
-                (4, (title('own_current_kwh'), title('own_baseline_kwh'))),
-                (6, (title('full_current_kwh'), title('full_baseline_kwh')))):
-            cells = [name + ': ' + values[offset+i] for i, name in enumerate(names)]
-            text_parts.append(' · '.join(cells))
-            html_parts.append('<tr>' + ''.join('<td' + (' colspan="2"' if len(cells) == 2 and i == 1 else '')
-                + '>' + escape(value) + '</td>' for i, value in enumerate(cells)) + '</tr>')
-    if not comparison_group_rows:
-        html_parts.append('<tr><td colspan="3">' + escape(unknown) + '</td></tr>')
-        text_parts.append(unknown)
-    html_parts.append('</table>')
-    measurement_values, bin_costs, partial_costs = [], [], []
-    source_times = selected(('period',), ('start', 'end'))
+    # One explicit data table backs the time chart. It is not another stream of
+    # status, mask, source-time and cost rows for each already displayed hour.
+    measurement_values = []
+    exceptions = []
     for index, item in enumerate(bins):
         bp = ('chart', 'bins', index)
-        row = [short_stamp((*bp, 'start'), clock_only=chart.get('grain') == 'hour'),
-               exact((*bp, 'kwh')), exact((*bp, 'recorded_kwh')), exact((*bp, 'usage_cost')), unit((*bp, 'usage_cost'))]
-        measurement_values.append(row)
-        clock_label = short_stamp((*bp, 'start'), clock_only=chart.get('grain') == 'hour')
-        component_fields = ('energy_cost', 'variable_cost', 'legacy_combined_cost')
-        bin_costs.append([clock_label] + [amount((*bp, field)) for field in component_fields])
-        for field in component_fields:
-            known = fact((*bp, 'known_costs', field))
-            full = fact((*bp, field))
-            if known and (not full or known[2:4] != full[2:4]):
-                partial_costs.append((clock_label + ' · ' + label('known_costs') + ' · ' + title(field),
-                                      user_value(known), known[3], None))
-        # Keep proof of every captured offset/fold outside the main axis.
-        source_times.append((tr('Pomiar ', 'Measurement ') + str(index+1), amount((*bp, 'start')), '', None))
-    matrix(tr('Szczegóły · Zużycie godzinowe / dzienne', 'Details · Hourly / daily energy'),
-        [tr('Czas', 'Time'), 'kWh', tr('Zapisane kWh', 'Recorded kWh'), label('usage_cost'), label('currency')],
-        measurement_values, section='measurement-values', row_role='measurement')
-    matrix(tr('Szczegóły · Koszty pomiarów', 'Details · Measurement costs'),
-        [tr('Czas', 'Time'), label('energy_cost'), label('variable_cost'), label('legacy_combined_cost')],
-        bin_costs, section='measurement-costs')
-    if partial_costs:
-        table(tr('Szczegóły · Znane częściowe koszty', 'Details · Known partial costs'), partial_costs)
-    # One row per measured hour/zone. Keep partial values and their provenance;
-    # empty unattributed audit placeholders do not imply missing measurements.
-    zone_rows = []
-    for index, item in enumerate(bins):
+        clock = short_stamp((*bp, 'start'), clock_only=chart.get('grain') == 'hour')
+        measurement_values.append([clock, exact((*bp, 'kwh')), amount((*bp, 'usage_cost'))])
         proof = item.get('zone_breakdown') or {}
-        clock = short_stamp(('chart', 'bins', index, 'start'), clock_only=chart.get('grain') == 'hour')
-        entries = [(zi, zone_row) for zi, zone_row in enumerate(proof.get('zones') or [])]
+        # An incomplete zone/hour must remain explainable. If no whole-period
+        # summary exists, show the producer's individual zone measurements;
+        # never add their rounded costs to manufacture a period total.
+        if proof.get('status') == 'ready' and snapshot.get('period_summary'):
+            continue
+        entries = [(('zones', zi), row) for zi, row in enumerate(proof.get('zones') or [])]
         unattributed = proof.get('unattributed')
-        if isinstance(unattributed, Mapping):
-            empty = (proof.get('status') == 'ready' and unattributed.get('recorded_kwh') is None
-                and number(unattributed.get('measured_seconds')) == 0
-                and number(unattributed.get('missing_seconds')) == 0
-                and all(value is None for value in (unattributed.get('known_costs') or {}).values()))
-            if not empty:
-                entries.append((None, unattributed))
-        for zi, zone_row in entries:
-            zp = ('chart', 'bins', index, 'zone_breakdown') + (('zones', zi) if zi is not None else ('unattributed',))
-            caption = clock + ' · ' + (str(zone_row.get('label') or tr('Strefa', 'Zone')) if zi is not None
-                else tr('Bez przypisania do strefy', 'Unattributed to zone'))
-            energy, costs = [], []
-            for field in ('kwh', 'recorded_kwh', 'complete', 'measured_seconds', 'missing_seconds'):
+        if isinstance(unattributed, Mapping) and (unattributed.get('recorded_kwh') is not None
+                or number(unattributed.get('missing_seconds')) not in (None, 0)
+                or any(value is not None for value in (unattributed.get('known_costs') or {}).values())):
+            entries.append((('unattributed',), unattributed))
+        for suffix, item_zone in entries:
+            zp = (*bp, 'zone_breakdown', *suffix)
+            name = clock + ' · ' + str(item_zone.get('label') or tr('Bez przypisania do strefy', 'Unattributed to zone'))
+            for field in ('kwh', 'recorded_kwh', 'usage_cost', 'energy_cost', 'variable_cost', 'complete', 'measured_seconds', 'missing_seconds'):
                 row = fact((*zp, field))
-                if row and not (field == 'recorded_kwh' and zone_row.get('recorded_kwh') == zone_row.get('kwh')):
-                    energy.append(title(field) + ': ' + amount((*zp, field)))
-            for field in ('usage_cost', 'energy_cost', 'variable_cost', 'legacy_combined_cost'):
-                row, known = fact((*zp, field)), fact((*zp, 'known_costs', field))
                 if row:
-                    costs.append(title(field) + ': ' + amount((*zp, field)))
-                if known and (not row or known[2:4] != row[2:4]):
-                    costs.append(label('known_costs') + ' · ' + title(field) + ': ' + amount((*zp, 'known_costs', field)))
-            zone_rows.append([caption, '\n'.join(energy) or unknown, '\n'.join(costs) or unknown])
-        if proof.get('status') not in (None, 'ready') or proof.get('reason') is not None:
-            status = selected(('chart', 'bins', index, 'zone_breakdown'), ('status', 'reason'))
-            if status:
-                zone_rows.append([clock, '\n'.join(caption + ': ' + value for caption, value, _, _ in status), ''])
-    if zone_rows:
-        zone_title = tr('Szczegóły · Zmierzone strefy', 'Details · Measured zones')
-        text_parts.append('\n' + zone_title)
-        html_parts.append('<table data-section="measured-zone-values"><caption>' + escape(zone_title) + '</caption>')
-        for caption, measurements, costs in zone_rows:
-            text_parts.extend([caption, measurements, costs])
-            html_parts.append('<tr><th colspan="2" scope="colgroup" data-role="zone-heading">' + escape(caption)
-                + '</th></tr><tr><td>' + escape(measurements) + '</td><td>' + escape(costs) + '</td></tr>')
-        html_parts.append('</table>')
-    fee_rows = []
-    for index, day in enumerate((snapshot.get('fees') or {}).get('days') or []):
-        row = fact(('fees', 'days', index, 'day_fraction'))
-        if row:
-            fee_rows.append((exact(('fees', 'days', index, 'day')), user_value(row), row[3], None))
-    if fee_rows:
-        table(tr('Szczegóły · Naliczona część dnia', 'Details · Charged day fraction'), fee_rows)
-    table(tr('Szczegóły · Czas i źródło', 'Details · Source times'), source_times, section='source-times')
-    table(tr('O raporcie', 'About this report'), [
-        (label('snapshot_id'), snapshot_id, '', None),
-        (tr('Wygenerowano', 'Generated'), amount(('generated_at',)), '', None),
-        (tr('Sposób odczytu', 'How to read'), tr(
-            'Brak pomiaru nie oznacza zera. Opłaty domu nie są kosztami urządzeń ani godzin. Pełne dane źródłowe i dokładność są w CSV.',
-            'Missing measurements are not zero. Household fees are not device or hourly costs. Full source data and precision are in CSV.'), '', None),
-        (tr('Informacja', 'Note'), note, '', None)])
+                    exceptions.append((name + ' · ' + title(field), user_value(row), row[3], None))
+            for field in ('energy_cost', 'variable_cost', 'legacy_combined_cost'):
+                row, full = fact((*zp, 'known_costs', field)), fact((*zp, field))
+                if row and (not full or row[2:4] != full[2:4]):
+                    exceptions.append((name + ' · ' + label('known_costs') + ' · ' + title(field), user_value(row), row[3], None))
+    matrix(tr('Dane wykresu', 'Chart data'), [tr('Czas', 'Time'), 'kWh', label('usage_cost')],
+        measurement_values, section='measurement-values', row_role='measurement')
+    if exceptions:
+        table(tr('Niepełne lub osobne pomiary stref', 'Incomplete or individual zone measurements'), exceptions,
+            section='zone-measurement-notes')
+    table(tr('Źródło i jakość danych', 'Source and data quality'),
+        selected(('totals',), ('measurement_complete', 'pricing_complete'))
+        + selected(('period',), ('start', 'end')), section='report-status')
+    # Snapshot identity remains in markup and exact CSV rather than becoming a
+    # 64-character cell in the user's reading flow.
+    html_parts.append('<table data-section="report-footer" data-snapshot-id="' + escape(snapshot_id, quote=True)
+        + '"><tr><td class="note">' + escape(tr(
+            'Jak czytać te liczby: brak pomiaru nie oznacza zera. Opłaty domu nie są kosztami urządzeń ani godzin. Pełne pomiary, porównania i dokładne stawki są w eksporcie CSV raportu w HA.',
+            'How to read: missing measurements are not zero. Household fees are not device or hourly costs. Full measurements, comparisons and exact rates are in the report CSV export in HA.'))
+        + '</td></tr><tr><td class="note">' + escape(note) + '</td></tr><tr><td class="note">'
+        + escape(tr('Wygenerowano: ', 'Generated: ') + amount(('generated_at',))) + '</td></tr></table>')
+    text_parts.extend([tr('Jak czytać te liczby: brak pomiaru nie oznacza zera. Opłaty domu nie są kosztami urządzeń ani godzin. Pełne dane i dokładność są w eksporcie CSV raportu w HA.',
+        'How to read: missing measurements are not zero. Household fees are not device or hourly costs. Full data and precision are in the report CSV export in HA.'), note,
+        tr('Wygenerowano: ', 'Generated: ') + amount(('generated_at',)), snapshot_id])
     output = StringIO(newline='')
     writer = csv.writer(output, lineterminator='\r\n')
     writer.writerow(('snapshot_id', 'section', 'field', 'label', 'value', 'unit'))
