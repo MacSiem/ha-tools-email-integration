@@ -398,6 +398,24 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         keys = await hass.async_add_executor_job(_list_secrets, hass)
         return {"secrets": keys}
 
+    async def handle_send_energy_report(call: ServiceCall) -> ServiceResponse:
+        from .scheduler import async_send_now
+        from .delivery import normalize_channels
+        # HA supplies this identity; action data cannot inject an actor.
+        actor = call.context.user_id
+        if not actor:
+            raise ServiceValidationError('Authenticated report actor required')
+        result = await async_send_now(hass,kind='energy_report',
+            cadence=call.data.get('cadence','daily'),actor=actor,
+            channels=normalize_channels(call.data.get('targets')),
+            period_mode='calendar',report_timezone=hass.config.time_zone)
+        return {'result':result['status'],'channel':result['channel'],
+                'attempt_id':result['attempt_id']}
+
+    _register_admin_response_service(hass,DOMAIN,'send_energy_report',handle_send_energy_report,
+        schema=vol.Schema({vol.Optional('cadence',default='daily'):vol.In(['daily','weekly','monthly']),
+            vol.Optional('targets'):[cv.string]}),supports_response=SupportsResponse.OPTIONAL)
+
     # Register services
     async_register_admin_service(
         hass, DOMAIN, "send", handle_send,
@@ -453,6 +471,7 @@ def _register_admin_response_service(
     handler: Callable[[ServiceCall], Awaitable[ServiceResponse]],
     *,
     schema: vol.Schema,
+    supports_response=SupportsResponse.ONLY,
 ) -> None:
     """Register an admin response service across supported HA versions."""
     if "supports_response" in inspect.signature(
@@ -464,7 +483,7 @@ def _register_admin_response_service(
             service,
             handler,
             schema=schema,
-            supports_response=SupportsResponse.ONLY,
+            supports_response=supports_response,
         )
         return
 
@@ -483,5 +502,5 @@ def _register_admin_response_service(
         service,
         admin_handler,
         schema=schema,
-        supports_response=SupportsResponse.ONLY,
+        supports_response=supports_response,
     )

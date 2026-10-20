@@ -686,6 +686,12 @@ class EmailStorage:
             raise ValueError("recipients must be a list or comma-separated string")
         recipients = [str(item).strip() for item in recipients if str(item).strip()]
 
+        channel_fields = {}
+        if 'channels' in schedule:
+            from .delivery import normalize_channels
+            if kind != 'energy_report':
+                raise ValueError('native_channels_require_energy_report')
+            channel_fields['channels'] = normalize_channels(schedule['channels'])
         return {
             **normalize_schedule_calendar(schedule),
             "id": str(existing_id or schedule.get("id") or uuid.uuid4()),
@@ -693,6 +699,7 @@ class EmailStorage:
             "cadence": cadence,
             "time": time_value,
             "recipients": recipients,
+            **channel_fields,
             "enabled": bool(schedule.get("enabled", True)),
         }
 

@@ -344,6 +344,7 @@ async def async_send_schedule(
         kind=schedule["kind"],
         cadence=schedule["cadence"],
         recipients=schedule.get("recipients") or [],
+        **({"channels":schedule["channels"]} if "channels" in schedule else {}),
         now=now,
         schedule_id=schedule.get("id"),
         expected_schedule=schedule,
@@ -366,6 +367,7 @@ async def async_send_now(
     report_preferences=None,
     before_send=None,
     attempt_schedule_id=None,
+    channels=None,
 ) -> dict[str, Any]:
     """Compose and send a report immediately."""
     bucket = hass.data[DOMAIN]
@@ -390,6 +392,7 @@ async def async_send_now(
         **({'before_send': before_send} if before_send is not None else {}),
         **({'attempt_schedule_id': attempt_schedule_id} if attempt_schedule_id is not None else {}),
         **({"actor":actor,"report_preferences":report_preferences} if kind == KIND_ENERGY_REPORT else {}),
+        **({"channels":channels} if channels is not None else {}),
         **options,
     )
 
@@ -412,8 +415,19 @@ async def async_send_report(
     report_preferences=None,
     before_send=None,
     attempt_schedule_id=None,
+    channels=None,
 ) -> dict[str, Any]:
     """Compose and send one report through the existing SMTP send path."""
+    if channels is not None:
+        if kind != KIND_ENERGY_REPORT:
+            raise ValueError('native_channels_require_energy_report')
+        from .delivery import async_send_energy_channels
+        return await async_send_energy_channels(hass,storage,channels=channels,
+            cadence=cadence,actor=actor,now=now,schedule_id=schedule_id,
+            expected_schedule=expected_schedule,report_window=report_window,
+            report_timezone=report_timezone,period_semantics=period_semantics,
+            report_preferences=report_preferences,before_send=before_send,
+            attempt_schedule_id=attempt_schedule_id,recipients=recipients)
     from .composer import async_build_report_payload
     from .history import async_dispatch_attempt
 

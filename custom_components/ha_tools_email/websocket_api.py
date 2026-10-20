@@ -1032,6 +1032,22 @@ async def _async_preview_mail(hass, connection, msg, kind) -> None:
     })
 
 
+@websocket_api.websocket_command({vol.Required('type'): f'{DOMAIN}/list_delivery_targets'})
+@websocket_api.async_response
+async def _ws_list_delivery_targets(hass,connection,msg):
+    token = await _feature_authorized(hass,connection,'energy_reports','execute')
+    if not token:
+        connection.send_error(msg['id'],'unauthorized','Report access required.')
+        return
+    from .delivery import list_delivery_targets
+    cfg = await _safe_smtp_config(hass)
+    if not await _feature_authorized(hass,connection,'energy_reports','execute',token=token):
+        connection.send_error(msg['id'],'unauthorized','Report access required.')
+        return
+    connection.send_result(msg['id'],list_delivery_targets(hass.services.async_services(),
+        smtp_configured=cfg['smtp_configured']))
+
+
 def async_register_commands(hass: HomeAssistant) -> None:
     """Register all websocket commands."""
     async_register_statistics_commands(hass)
@@ -1048,6 +1064,7 @@ def async_register_commands(hass: HomeAssistant) -> None:
         _ws_energy_analysis,
         _ws_energy_patterns,
         _ws_energy_report,
+        _ws_list_delivery_targets,
         _ws_energy_price_queries,
         _ws_set_tariff,
         _ws_get_config,
