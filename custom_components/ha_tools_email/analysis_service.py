@@ -408,8 +408,13 @@ class EnergyAnalysisService:
                 self._assert_current(context)
         ids = [row['entity_id'] for row in self._sensors(configuration)]
         feature, operation = _ACCESS_PURPOSES[context['access_purpose']]
+        extra = {}
+        if context.get('native_access'):
+            extra['additional_source_ids'] = list(dict.fromkeys(source[key]
+                for source in configuration['native_pricing']['sources']
+                for key in ('cost_statistic_id', 'price_entity_id') if source[key] is not None))
         await async_require_energy_source_access(self.hass, user_id, ids,
-            feature_policy=state['policy'], feature=feature, operation=operation)
+            feature_policy=state['policy'], feature=feature, operation=operation, **extra)
         self._assert_current(context)
 
     async def _native_access(self, context, configuration, user_id):
@@ -430,6 +435,18 @@ class EnergyAnalysisService:
         context['native_access'] = allowed
         return allowed
 
+    def _native_states_now(self, native):
+        states = {}
+        for source in native['sources']:
+            sid = source['price_entity_id']
+            if sid is None:
+                continue
+            state = self.hass.states.get(sid)
+            states[sid] = None if state is None else {'state': state.state,
+                'unit_of_measurement': state.attributes.get('unit_of_measurement'),
+                'last_updated': state.last_updated.isoformat()}
+        return states
+
     async def _guard_native(self, context, configuration, user_id):
         if not context.get('native_requested'):
             return
@@ -442,15 +459,7 @@ class EnergyAnalysisService:
         self._assert_current(context)
         # Reauthorize after metadata awaits and before reading current states.
         await self._native_access(context, configuration, user_id)
-        states = {}
-        for source in native['sources']:
-            sid = source['price_entity_id']
-            if sid is None:
-                continue
-            state = self.hass.states.get(sid)
-            states[sid] = None if state is None else {'state': state.state,
-                'unit_of_measurement': state.attributes.get('unit_of_measurement'),
-                'last_updated': state.last_updated.isoformat()}
+        states = self._native_states_now(native)
         normalization = {}
         for sid in ids:
             meta = metadata.get(sid)
@@ -487,6 +496,16 @@ class EnergyAnalysisService:
         await self._require_access(context, configuration, user_id)
         self._assert_current(context)
         await self._guard_native(context, configuration, user_id)
+        if context.get('native_requested'):
+            # Native IO introduced awaits after the previous base-source check.
+            # Evaluate the union with one fresh principal as the final await.
+            await self._require_access(context, configuration, user_id)
+            self._assert_current(context)
+            if context.get('native_access'):
+                states = self._native_states_now(configuration['native_pricing'])
+                if states != self._native_states:
+                    self._cache = None
+                    raise RuntimeError('energy_analysis_context_changed')
 
     async def _cpu(self, job, guard):
         await guard()

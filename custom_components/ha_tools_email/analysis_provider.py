@@ -117,7 +117,7 @@ def capture_energy_configuration(preferences, *, currency=None, cost_sensors=Non
 
 
 async def async_require_energy_source_access(hass, user_id, source_ids, *, feature_policy=None,
-                                             feature='energy_analysis', operation='read'):
+                                             feature='energy_analysis', operation='read', additional_source_ids=None):
     """Fresh detailed-analysis access, including entity-restricted HA users.
 
     External statistics have no entity policy target. They require admin or
@@ -131,7 +131,13 @@ async def async_require_energy_source_access(hass, user_id, source_ids, *, featu
     if (not isinstance(source_ids, list) or len(source_ids) > 2 * MAX_SOURCES
             or any(not isinstance(sid, str) or not sid for sid in source_ids)):
         raise ValueError('invalid_energy_configuration')
-    ids = tuple(source_ids)
+    additional = [] if additional_source_ids is None else additional_source_ids
+    if (not isinstance(additional, list) or len(additional) > 2 * MAX_SOURCES
+            or any(not isinstance(sid, str) or not sid for sid in additional)):
+        raise ValueError('invalid_energy_configuration')
+    # One fresh principal and no intervening await for the complete published set.
+    # Base grid/consumers and optional cost/price each retain their source budgets.
+    ids = tuple(dict.fromkeys([*source_ids, *additional]))
     user = await hass.auth.async_get_user(user_id)
     if user is None or not user.is_active:
         raise PermissionError('energy_sources_unauthorized')
