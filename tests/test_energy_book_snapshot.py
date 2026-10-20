@@ -114,3 +114,9 @@ class BookSnapshotTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(RuntimeError,'snapshot_changed'):
                 await c.async_refresh(now=at('2026-10-18T12:34Z'))
         self.assertIsNone(c.data)
+
+    async def test_private_clock_extensions_never_reach_public_snapshot(self):
+        b=book();b['tariffs'][0]['versions'][0]['profile']['clock']['private']='PRIVATE'
+        _, r=await self.refresh(b)
+        self.assertNotIn('PRIVATE',str(r))
+        self.assertEqual({'mode':'civil'},r['tariff_clock'])
