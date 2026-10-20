@@ -129,6 +129,35 @@ class NativePricingServiceTest(unittest.TestCase):
                 self.assertEqual([], h.state_reads)
         asyncio.run(run())
 
+    def test_base_entity_revocation_during_last_native_await_blocks_publish_and_cache_hit(self):
+        async def run():
+            for mode in ('publish','cache'):
+                h = NativeHarness()
+                h.permissions.access_all_entities = lambda _: False
+                allowed = {'sensor.grid','sensor.device','sensor.grid_cost'}
+                h.permissions.check_entity = lambda sid, _: sid in allowed
+                armed = False
+                with self.subTest(mode=mode), h.native_patches():
+                    if mode == 'cache':
+                        await h.subject.async_get_analysis('day', 'user')
+                        armed = True
+                    def after_cpu(job):
+                        nonlocal armed
+                        if getattr(getattr(job, 'func', None), '__name__', '') == '_finish_native':
+                            armed = True
+                    h.on_cpu = after_cpu
+                    original = service.async_get_energy_metadata
+                    async def metadata(hass, ids):
+                        value = await original(hass, ids)
+                        if armed and ids == ['sensor.grid_cost']:
+                            allowed.discard('sensor.grid')
+                        return value
+                    with patch.object(service, 'async_get_energy_metadata', metadata):
+                        with self.assertRaises((PermissionError, RuntimeError)):
+                            await h.subject.async_get_analysis('day', 'user')
+                    self.assertIsNone(h.subject._cache)
+        asyncio.run(run())
+
     def test_explicit_core_cost_mapping_without_guessing_sensor_suffix(self):
         async def run():
             h = NativeHarness(); row = h.manager.data['energy_sources'][0]
