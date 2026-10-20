@@ -96,3 +96,31 @@ get_config:
 list_secrets:
   name: List secrets
   description: Returns available secrets.yaml keys without secret values (admin only)
+
+
+send_energy_report:
+  name: Send energy report
+  description: Send one completed calendar report through the selected channels. Acceptance is not proof of delivery. An unknown result is never replayed automatically.
+  fields:
+    cadence:
+      name: Period
+      description: Send a daily, weekly or monthly calendar report.
+      default: daily
+      selector:
+        select:
+          options:
+            - daily
+            - weekly
+            - monthly
+    date:
+      name: Date in the report period
+      description: Optional YYYY-MM-DD in the Home Assistant time zone. The whole selected day, week or month must be complete. When omitted, the previous completed period is selected.
+      example: '2026-10-17'
+      selector:
+        date:
+    targets:
+      name: Channels
+      description: List of persistent_notification, notify.mobile_app_name or email. The default is persistent_notification. Email uses the configured SMTP recipients.
+      example: '["persistent_notification"]'
+      selector:
+        object:

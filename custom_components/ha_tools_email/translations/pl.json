@@ -77,6 +77,10 @@
     "email_native_failures": {
       "title": "Trzy nieudane próby wysyłki z rzędu",
       "description": "Historia potwierdza trzy kolejne błędy. Sprawdź ustawienia integracji. Nie ponawiamy wysyłki automatycznie. Problem znika po potwierdzonym przyjęciu wiadomości przez SMTP."
+    },
+    "reports_delivery_problem": {
+      "title": "Próba wysyłki raportu wymaga uwagi",
+      "description": "Próba wysyłki raportu zakończyła się błędem, częściową akceptacją albo jej wynik jest nieustalony. Przed ponowną wysyłką sprawdź stan raportów i ustawienia integracji. Nieustalony wynik może oznaczać, że wiadomość została już przyjęta: nie ponawiaj jej automatycznie. To powiadomienie znika po późniejszej akceptacji raportu przez SMTP lub usługę powiadomień. Akceptacja nie potwierdza dostarczenia do odbiorcy."
     }
   },
   "entity": {
@@ -129,6 +133,9 @@
     "binary_sensor": {
       "energy_cheap": {
         "name": "Tania strefa"
+      },
+      "reports_problem": {
+        "name": "Problem z wysyłką raportów"
       }
     },
     "button": {
@@ -154,6 +161,26 @@
     "calendar": {
       "email_schedule": {
         "name": "Terminy raportu"
+      }
+    }
+  },
+  "services": {
+    "send_energy_report": {
+      "name": "Wyślij raport energii",
+      "description": "Wyślij raport za zakończony okres kalendarzowy. Odpowiedź zawiera at, result, channel i attempt_id. Akceptacja nie potwierdza dostarczenia; nieustalonego wyniku nie ponawiamy automatycznie.",
+      "fields": {
+        "cadence": {
+          "name": "Okres",
+          "description": "Dzienny (daily), tygodniowy (weekly) albo miesięczny (monthly). Domyślnie daily."
+        },
+        "date": {
+          "name": "Data w okresie raportu",
+          "description": "Opcjonalna data YYYY-MM-DD w strefie Home Assistant. Wybrany dzień, tydzień lub miesiąc musi być w całości zakończony. Bez daty używany jest poprzedni zakończony okres."
+        },
+        "targets": {
+          "name": "Kanały",
+          "description": "Lista persistent_notification, notify.mobile_app_name lub email. Domyślnie persistent_notification. Email korzysta z odbiorców zapisanych w ustawieniach SMTP."
+        }
       }
     }
   }

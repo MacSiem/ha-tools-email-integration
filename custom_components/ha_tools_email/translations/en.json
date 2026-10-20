@@ -77,6 +77,10 @@
     "email_native_failures": {
       "title": "Three consecutive failed email attempts",
       "description": "Confirmed history records three consecutive failures. Check integration settings. No automatic retry is performed. This issue clears after an SMTP-accepted attempt."
+    },
+    "reports_delivery_problem": {
+      "title": "A report delivery attempt needs attention",
+      "description": "A report attempt failed, was partially accepted, or its outcome is unknown. Check report status and integration settings before sending again. An unknown outcome can mean that a message was already accepted: do not replay it automatically. This notice clears after a later report is accepted by SMTP or a notification service. Acceptance does not confirm delivery to the recipient."
     }
   },
   "entity": {
@@ -129,6 +133,9 @@
     "binary_sensor": {
       "energy_cheap": {
         "name": "Cheap tariff"
+      },
+      "reports_problem": {
+        "name": "Report delivery problem"
       }
     },
     "button": {
@@ -154,6 +161,26 @@
     "calendar": {
       "email_schedule": {
         "name": "Report schedule"
+      }
+    }
+  },
+  "services": {
+    "send_energy_report": {
+      "name": "Send energy report",
+      "description": "Send one completed calendar energy report. The response contains at, result, channel and attempt_id. Acceptance is not proof of delivery; unknown outcomes are never replayed automatically.",
+      "fields": {
+        "cadence": {
+          "name": "Period",
+          "description": "Daily, weekly or monthly. The default is daily."
+        },
+        "date": {
+          "name": "Date in the report period",
+          "description": "Optional YYYY-MM-DD in the Home Assistant time zone. The whole selected day, week or month must be complete. Omit to use the previous completed period."
+        },
+        "targets": {
+          "name": "Channels",
+          "description": "List of persistent_notification, notify.mobile_app_name or email. The default is persistent_notification. Email uses the configured SMTP recipients."
+        }
       }
     }
   }

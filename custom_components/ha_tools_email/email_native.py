@@ -23,6 +23,11 @@ class EmailNativeCoordinator:
         self._seen = None
         self._task = None
         self._requested = False
+        self.report_problem = None
+        self.report_outcome = None
+        self.report_outcome_unknown = None
+        self._report_problem_latched = False
+        self._report_problem_timestamp = None
 
     async def async_start(self):
         self.running = True
@@ -31,6 +36,7 @@ class EmailNativeCoordinator:
         except Exception:
             # Metadata IO/schema failure cannot break existing Energy entities.
             self.data = {}
+            self.report_problem = None
         changed = callback(lambda event: self.async_request_refresh())
         self._unsubscribers = [self.hass.bus.async_listen(EVENT_REPORT_STATUS_UPDATED, changed),
             async_track_time_interval(self.hass, changed, timedelta(seconds=30))]
@@ -74,6 +80,9 @@ class EmailNativeCoordinator:
             except Exception:
                 if self.running:
                     self.data = {}
+                    self.report_problem = None
+                    self.report_outcome = None
+                    self.report_outcome_unknown = None
                     for listener in tuple(self._listeners):
                         listener({})
 
@@ -118,10 +127,47 @@ class EmailNativeCoordinator:
                     severity=ir.IssueSeverity.WARNING, translation_key=issue)
             elif active is False:
                 ir.async_delete_issue(self.hass, DOMAIN, issue)
+        self._update_report_problem(result.get('delivery_problem', {}))
         for slot in self._platforms:
             self._add_new(slot)
         for listener in tuple(self._listeners):
             listener(fresh)
+
+    def _update_report_problem(self, facts):
+        """Publish only this lifecycle owner's confirmed scalar delivery facts."""
+        bucket = self.hass.data.get(DOMAIN, {})
+        if (not self.running or bucket.get('email_native') is not self
+                or bucket.get('storage') is not self.storage):
+            return
+        if facts.get('history_ready') is not True:
+            self.report_problem = None
+            self.report_outcome = None
+            self.report_outcome_unknown = None
+            return  # Unknown history never deletes a known issue.
+        problem = facts.get('problem')
+        if type(problem) is not bool:
+            # Initial empty history is off. After a known problem, retention or
+            # history deletion is not a successful handoff and cannot clear it.
+            self.report_problem = self._report_problem_latched
+            return
+        stamp = facts['at']
+        if self._report_problem_timestamp is not None and (stamp < self._report_problem_timestamp
+                or self._report_problem_latched and not problem and stamp == self._report_problem_timestamp):
+            self.report_problem = self._report_problem_latched
+            return  # An older accepted record or same-time batch is not recovery.
+        self._report_problem_timestamp = stamp
+        self._report_problem_latched = self.report_problem = problem
+        self.report_outcome = facts['outcome']
+        self.report_outcome_unknown = facts['outcome_unknown']
+        issue = 'reports_delivery_problem'
+        registry = ir.async_get(self.hass)
+        old = registry.async_get_issue(DOMAIN, issue)
+        if problem and old is None:
+            ir.async_create_issue(self.hass, DOMAIN, issue, is_fixable=False,
+                is_persistent=False, severity=ir.IssueSeverity.WARNING,
+                translation_key=issue)
+        elif not problem and old is not None:
+            ir.async_delete_issue(self.hass, DOMAIN, issue)
 
     async def async_send(self, key, user_id, entity_id):
         if not isinstance(user_id, str) or not user_id:
@@ -172,6 +218,14 @@ class EmailNativeCoordinator:
             self.async_request_refresh()
 
     def async_stop(self):
+        # Unload is cleanup, not successful delivery. An old owner cannot erase
+        # a replacement owner's issue, including after an awaited refresh.
+        current = self.hass.data.get(DOMAIN, {}).get('email_native')
+        if current is None or current is self:
+            registry = ir.async_get(self.hass)
+            if registry.async_get_issue(DOMAIN, 'reports_delivery_problem') is not None:
+                ir.async_delete_issue(self.hass, DOMAIN, 'reports_delivery_problem')
+        self.report_problem = None
         self.running = False
         for remove in self._unsubscribers:
             remove()

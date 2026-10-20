@@ -36,6 +36,33 @@ def repair_facts(attempts):
     return {'email_native_auth': auth, 'email_native_failures': three}
 
 
+def report_delivery_fact(attempts, *, history_ready):
+    """One scalar fact from confirmed, bounded report attempts, not SMTP data.
+
+    UNKNOWN raises attention without claiming failure or permitting replay.
+    An empty/expired history cannot prove recovery from a previous problem.
+    """
+    result = {'history_ready': history_ready is True, 'problem': None,
+              'outcome': None, 'outcome_unknown': None, 'at': None}
+    if not history_ready:
+        return result
+    reports = [row for row in attempts if row['kind'] in PURPOSE_FEATURES]
+    if not reports:
+        return result
+    stamp = max(row['timestamp'] for row in reports)
+    group = sorted((row for row in reports if row['timestamp'] == stamp), key=lambda row: row['id'])
+    pending = [row for row in group if row['outcome'] not in ('accepted_by_smtp', 'accepted_by_notify')]
+    unknown = [row for row in pending if row['outcome'] in ('transport_outcome_unknown',
+        'cancelled_outcome_unknown', 'outcome_unknown', 'partial_acceptance')]
+    # Multi-channel attempts share a dispatch timestamp. A random UUID tie
+    # cannot let one accepted channel hide another channel's failure/UNKNOWN.
+    outcome = (unknown or pending or group)[-1]['outcome']
+    result.update(problem=bool(pending), outcome=outcome, at=stamp,
+                  outcome_unknown=outcome in ('transport_outcome_unknown',
+                      'cancelled_outcome_unknown', 'outcome_unknown', 'partial_acceptance'))
+    return result
+
+
 def project_native_reports(data, _purpose=None, *, now, local_timezone, consumed=None, schedule_id_resolver):
     if now.utcoffset() is None:
         raise ValueError('invalid_native_report_clock')
@@ -53,7 +80,8 @@ def project_native_reports(data, _purpose=None, *, now, local_timezone, consumed
         attempts = retained_attempts({'schema': 1, 'attempts': [row for row in clean if row]}, now)
     result = {'schema': 1, 'schedules': {}, 'identities': {},
               'repairs': repair_facts(attempts) if history_ready else {}, 'attempts': {},
-              'history_ids': [row['id'] for row in attempts] if history_ready else None}
+              'history_ids': [row['id'] for row in attempts] if history_ready else None,
+              'delivery_problem': report_delivery_fact(attempts, history_ready=history_ready)}
     for raw in rows:
         if (not isinstance(raw, dict) or not isinstance(raw.get('kind'), str)
                 or len(raw['kind']) > 32 or raw['kind'] not in PURPOSE_FEATURES):
