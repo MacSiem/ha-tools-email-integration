@@ -34,7 +34,18 @@ class Build1MailEnergyTests(unittest.TestCase):
         self.assertGreaterEqual(len(doc.images),25)
         sources={a['src'] for a in doc.images}
         self.assertEqual(1,len(sources))
-        self.assertTrue(next(iter(sources)).startswith('data:image/png;base64,'))
+        source=next(iter(sources))
+        self.assertTrue(source.startswith('data:image/png;base64,'))
+        import base64,struct,zlib
+        png=base64.b64decode(source.split(',',1)[1],validate=True)
+        self.assertEqual(b'\x89PNG\r\n\x1a\n',png[:8])
+        self.assertEqual((2,2),struct.unpack('!II',png[16:24]))
+        at=8;compressed=b''
+        while at<len(png):
+            size=int.from_bytes(png[at:at+4],'big');kind=png[at+4:at+8]
+            if kind==b'IDAT':compressed+=png[at+8:at+8+size]
+            at+=12+size
+        self.assertEqual(b'\x00'+bytes.fromhex('e5e7ebe5e7eb')+b'\x00'+bytes.fromhex('111827111827'),zlib.decompress(compressed))
         for a in doc.images:
             self.assertEqual('2',a['height'])
             self.assertEqual('',a['alt'])
@@ -73,7 +84,10 @@ class Build1MailEnergyTests(unittest.TestCase):
         self.assertEqual(markers, [str(i) for i in range(13)])
         for text in ('width="600"', 'max-width:600px', 'max-width: 480px', 'prefers-color-scheme: dark', 'supported-color-schemes', 'mso-hide:all', 'height="4"'):
             self.assertIn(text, html)
-        self.assertNotIn('<img', html)
+        # Only the fixed local marker is allowed; no network images or trackers.
+        from importlib import import_module
+        asset=import_module(PACKAGE+'.mail_frame').ENERGY_MARKER_DATA_URI
+        self.assertEqual({asset},set(re.findall(r'<img[^>]+src="([^"]+)"',html)))
         self.assertNotIn('<svg', html)
         self.assertEqual(html.count('Jak czytać te liczby.'), 1)
         self.assertNotIn('href=', html)
