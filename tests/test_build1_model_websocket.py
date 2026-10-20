@@ -22,7 +22,7 @@ class ModelWebsocketTest(unittest.IsolatedAsyncioTestCase):
     await ws._ws_energy_report(hass,connection,{'id':1,'representation':'model','period':'day','mode':'so_far'})
    self.assertEqual([],results);self.assertTrue(errors)
  async def test_legacy_document_request_keeps_language_and_exact_report_route(self):
-  ws,_=load_websocket();report={'html':'<p>document</p>','text':'document','csv':'raw'};service=types.SimpleNamespace(async_get_report=AsyncMock(return_value=report),async_validate_result=AsyncMock(return_value=True),context_is_current=Mock(return_value=True))
+  ws,_=load_websocket();report={'html':'<p>document</p>','text':'document','csv':'raw','context':{'access_purpose':'report_read'}};service=types.SimpleNamespace(async_get_report=AsyncMock(return_value=report),async_validate_result=AsyncMock(return_value=True),context_is_current=Mock(return_value=True))
   results=[];hass=types.SimpleNamespace(data={'ha_tools_email':{'energy_analysis':service}});connection=types.SimpleNamespace(user=types.SimpleNamespace(id='owner'),send_result=lambda *a:results.append(a),send_error=Mock())
   with patch.object(ws,'_feature_authorized',AsyncMock(return_value=True)):
    await ws._ws_energy_report(hass,connection,{'id':2,'period':'day','language':'en','timezone':'UTC','hour_cycle':'24'})
