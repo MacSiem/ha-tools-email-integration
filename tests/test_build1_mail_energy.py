@@ -23,6 +23,14 @@ GOLDEN = json.loads((ROOT / 'tests/fixtures/build1/golden-energy-2026-10-17.json
 
 
 class Build1MailEnergyTests(unittest.TestCase):
+    def test_unknown_zone_classification_never_infers_cheap_from_rate_or_order(self):
+        for row in self.model['zones']:
+            row['classification'] = None
+        result = self.render(language='en')
+        self.assertNotIn('33%',result['preheader'])
+        self.assertNotIn('33%',result['text'])
+        self.assertNotIn('class="cheap" bgcolor=',result['html'])
+
     def setUp(self):
         self.model = copy.deepcopy(GOLDEN['model'])
 
