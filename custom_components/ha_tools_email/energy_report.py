@@ -546,7 +546,8 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                      'Source: Home Assistant Energy. Cost breakdown and fixed fees are unknown; this is not a complete bill.')
     share = ready_period_share()
     comparison_names = {'previous': tr('Poprzedni okres', 'Previous period'),
-        'same_weekday': tr('Ten sam dzień tygodnia', 'Same weekday'), 'mean7': tr('Średnia 7 dni', '7-day mean')}
+        'same_weekday': tr('Ten sam dzień tygodnia', 'Same weekday'), 'mean7': tr('Średnia 7 dni', '7-day mean'),
+        'year_ago': tr('Ten sam okres rok temu', 'Same period last year')}
 
     def number(value, *, signed=False):
         if value is None or isinstance(value, bool):
@@ -560,7 +561,9 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     def energy_context():
         totals = snapshot.get('totals') or {}
         if totals.get('measurement_complete') is True and snapshot.get('coverage', {}).get('complete') is True:
-            for kind in comparison_names:
+            for kind in [(snapshot.get('context') or {}).get('comparison_kind') or 'previous']:
+                if kind not in comparison_names:
+                    continue
                 c = (snapshot.get('comparisons') or {}).get(kind) or {}
                 coverage = c.get('coverage') or {}
                 baselines = coverage.get('baselines') if kind == 'mean7' else [coverage.get('baseline')]
@@ -866,7 +869,8 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
 
     comparisons = snapshot.get('comparisons') or {}
     comparison_names = {'previous': tr('Poprzedni okres', 'Previous period'),
-        'same_weekday': tr('Ten sam dzień tygodnia', 'Same weekday'), 'mean7': tr('Średnia 7 dni', '7-day mean')}
+        'same_weekday': tr('Ten sam dzień tygodnia', 'Same weekday'), 'mean7': tr('Średnia 7 dni', '7-day mean'),
+        'year_ago': tr('Ten sam okres rok temu', 'Same period last year')}
     comparison_rows, comparison_details, comparison_group_rows = [], [], []
     for kind, comparison in comparisons.items():
         caption = comparison_names.get(kind, tr('Wybrany okres bazowy', 'Selected baseline'))
