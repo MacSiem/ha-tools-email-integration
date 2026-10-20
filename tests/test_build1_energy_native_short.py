@@ -183,9 +183,10 @@ class NativeShortCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         statistics_module = types.ModuleType('homeassistant.components.recorder.statistics')
         statistics_module.statistics_during_period = statistics
         util_module = types.ModuleType('homeassistant.components.recorder.util')
-        util_module.get_instance = lambda hass: Recorder()
+        recorder_module = types.ModuleType('homeassistant.components.recorder')
+        recorder_module.get_instance = lambda hass: Recorder()
         hass = object()
-        with patch.dict(sys.modules, {statistics_module.__name__: statistics_module, util_module.__name__: util_module}):
+        with patch.dict(sys.modules, {statistics_module.__name__: statistics_module, util_module.__name__: util_module, recorder_module.__name__: recorder_module}):
             result = await short.async_read_short_statistics(hass, at('2026-10-18T19:00Z'), at('2026-10-18T19:05Z'), [SID])
         self.assertIs(expected, result)
         self.assertEqual((hass, at('2026-10-18T19:00Z'), at('2026-10-18T19:05Z'), {SID}, '5minute', {}, {'change'}), calls[0])
