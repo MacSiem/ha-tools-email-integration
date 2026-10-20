@@ -541,13 +541,50 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     native_note = tr('Źródło: Home Assistant Energy. Rozbicie kosztu i opłaty stałe są nieznane; to nie jest pełny rachunek.',
                      'Source: Home Assistant Energy. Cost breakdown and fixed fees are unknown; this is not a complete bill.')
     share = ready_period_share()
+    comparison_names = {'previous': tr('Poprzedni okres', 'Previous period'),
+        'same_weekday': tr('Ten sam dzień tygodnia', 'Same weekday'), 'mean7': tr('Średnia 7 dni', '7-day mean')}
+
+    def number(value, *, signed=False):
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            value = Decimal(str(value))
+            return value if value.is_finite() and (signed or value >= 0) else None
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+
+    def energy_context():
+        totals = snapshot.get('totals') or {}
+        if totals.get('measurement_complete') is True and snapshot.get('coverage', {}).get('complete') is True:
+            for kind in comparison_names:
+                c = (snapshot.get('comparisons') or {}).get(kind) or {}
+                coverage = c.get('coverage') or {}
+                baselines = coverage.get('baselines') if kind == 'mean7' else [coverage.get('baseline')]
+                if (c.get('status') != 'ready' or c.get('reason') is not None
+                        or c.get('comparison_scope') != 'calendar_totals'
+                        or number(coverage.get('current')) != 1 or not isinstance(baselines, list)
+                        or len(baselines) != (7 if kind == 'mean7' else 1)
+                        or any(number(v) != 1 for v in baselines)):
+                    continue
+                current, full, main = [number(v) for v in (c.get('current_kwh'), c.get('full_current_kwh'), totals.get('kwh'))]
+                baseline, full_baseline = [number(c.get(key)) for key in ('baseline_kwh', 'full_baseline_kwh')]
+                if (None in (current, full, main, baseline, full_baseline) or current != full or full != main
+                        or baseline != full_baseline or number(c.get('delta_kwh'), signed=True) is None):
+                    continue
+                result = comparison_names[kind] + ': ' + amount(('comparisons', kind, 'delta_kwh'))
+                result += ' · ' + exact(('comparisons', kind, 'percent')) + '%'
+                return result
+        return tr('Brak porównywalnego pełnego okresu bazowego', 'No comparable full-period baseline')
+
     html_parts.append('<table data-section="kpis" role="presentation" class="kpis"><tr>')
     for metric, caption in (('kwh', tr('Zmierzona energia', 'Measured energy')),
                             ('total_cost', tr('Koszt okresu', 'Period cost')),
                             (None, tr('Udział taniej strefy', 'Cheap-zone share'))):
         value = exact(('totals', metric)) if metric else unknown
         units = unit(('totals', metric)) if metric else ''
-        context = ''
+        context = energy_context() if metric == 'kwh' else ''
+        if metric == 'total_cost' and snapshot.get('active_tariff_id'):
+            context = label('effective_price') + ': ' + amount(('totals', 'effective_price'))
         if metric == 'total_cost' and native_ready:
             caption = label('period_cost')
             value = exact(('native_pricing', 'period_cost', 'amount'))
@@ -593,6 +630,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                      and profile.get('dynamic') is None else 'zone-unknown')
             colors[identity] = color if identity not in colors or colors[identity] == color else 'zone-unknown'
     timeline_title = tr('Pomiary w czasie', 'Measured timeline')
+    chart_legend = {}
     text_parts.append('\n' + timeline_title)
     html_parts.append('<table data-section="timeline" class="timeline" role="presentation"><caption>'
                       + escape(timeline_title) + '</caption><tr data-role="plot">')
@@ -602,8 +640,14 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         proof = item.get('zone_breakdown') or {}
         zones = proof.get('zones') or []
         color = 'zone-unknown'
+        zone_label = tr('Nieznana strefa', 'Unknown zone')
         if proof.get('status') == 'ready' and len(zones) == 1 and zones[0].get('complete') is True:
             color = colors.get((zones[0].get('version_id'), zones[0].get('zone_id')), 'zone-unknown')
+            zone_label = str(zones[0].get('label') or zone_label)
+        elif len(zones) > 1:
+            zone_label = tr('Mieszane strefy', 'Mixed zones') + ': ' + ', '.join(
+                str(row.get('label') or tr('Nieznana strefa', 'Unknown zone')) for row in zones)
+        chart_legend[(zone_label, color)] = None
         full_label = amount(('chart', 'bins', index, 'start'))
         point_value = amount(('chart', 'bins', index, 'kwh'))
         html_parts.append('<td class="chart-column" data-bin="' + str(index) + '" title="'
@@ -631,6 +675,18 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         span = min(stride, len(bins)-index)
         html_parts.append('<td colspan="' + str(span) + '">' + escape(point) + '</td>')
     html_parts.append('</tr></table>')
+
+    text_parts.append('\n' + tr('Legenda stref wykresu', 'Chart zone legend'))
+    html_parts.append('<table data-section="chart-zone-legend"><caption>'
+                      + tr('Legenda stref wykresu', 'Chart zone legend') + '</caption>')
+    for zone_label, color in chart_legend:
+        text_parts.append(zone_label)
+        html_parts.append('<tr><td data-role="zone-swatch" class="' + color + '" width="12" aria-hidden="true">&#160;</td><td>'
+                          + escape(zone_label) + '</td></tr>')
+    if not chart_legend:
+        text_parts.append(unknown)
+        html_parts.append('<tr><td>' + escape(unknown) + '</td></tr>')
+    html_parts.append('</table>')
 
     groups = snapshot.get('groups') or {}
     def friendly_name(kind, identity, index, item=None):
@@ -694,6 +750,106 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     # exclusive device. Consumer kwh already contains any parent residual.
     if isinstance(groups.get('unmeasured'), Mapping):
         device_entries.append((label('unmeasured'), ('groups', 'unmeasured'), groups['unmeasured']))
+
+    # Same energy-conservation proof as shared analysis flow: complete current
+    # registry device partition + residual, never areas/floors/unassigned again.
+    def partition(values, total):
+        values = [number(value) for value in [*values, total]]
+        if any(value is None for value in values):
+            return False
+        low = min(v.as_tuple().exponent for v in values)
+        high = max(v.adjusted() for v in values)
+        if high - low > 4096:
+            return False
+        with localcontext() as precision:
+            precision.prec = max(40, high - low + len(str(len(values))) + 2)
+            return sum(values[:-1], Decimal(0)) == values[-1]
+
+    totals = snapshot.get('totals') or {}
+    total = number(totals.get('kwh'))
+    complete = (totals.get('measurement_complete') is True and snapshot.get('coverage', {}).get('complete') is True
+                and total is not None and total == number(totals.get('recorded_household_kwh')))
+    revision = groups.get('revision')
+    group_ready = (complete and groups.get('energy_domain') == 'grid_import'
+        and groups.get('partition_complete') is True and groups.get('membership_mode') == 'current_snapshot'
+        and type(revision) is int and abs(revision) <= 9007199254740991 and groups.get('registry_revision') == revision
+        and bool(device_entries) and all(item.get('measurement_complete') is True
+            and number(item.get('kwh')) is not None and number(item.get('kwh')) == number(item.get('recorded_kwh'))
+            for _, _, item in device_entries)
+        and partition([item.get('kwh') for _, _, item in device_entries], totals.get('kwh')))
+
+    def source_partition():
+        summary, period = snapshot.get('period_summary') or {}, snapshot.get('period') or {}
+        window, proof = summary.get('window') or {}, summary.get('zone_breakdown') or {}
+        if (not complete or groups.get('energy_domain') != 'grid_import'
+                or any(window.get(key) != period.get(key) for key in ('start', 'end', 'timezone'))
+                or proof.get('status') != 'ready' or proof.get('reason') is not None
+                or proof.get('scope') != 'complete_household_hours' or proof.get('fixed_fee_scope') != 'household_period_only'
+                or proof.get('reconciles_recorded_kwh') is not True or proof.get('reconciles_known_costs') is not True
+                or proof.get('currency') != totals.get('currency') or proof.get('price_basis') != totals.get('price_basis')
+                or proof.get('price_basis') not in ('gross', 'net')):
+            return []
+        try:
+            start = datetime.fromisoformat(period['start'].replace('Z', '+00:00'))
+            end = datetime.fromisoformat(period['end'].replace('Z', '+00:00'))
+            ZoneInfo(period['timezone'])
+            if start.utcoffset() is None or end.utcoffset() is None or end <= start:
+                return []
+            seconds = Decimal(str((end - start).total_seconds()))
+        except (KeyError, TypeError, ValueError, ZoneInfoNotFoundError):
+            return []
+        u = proof.get('unattributed') or {}
+        if (u.get('recorded_kwh') is not None or u.get('measured_seconds') != 0
+                or u.get('missing_seconds') != 0 or u.get('reasons') != []):
+            return []
+        rows, keys = proof.get('zones'), set()
+        if not isinstance(rows, list) or not rows:
+            return []
+        for row in rows:
+            key = (row.get('version_id'), row.get('zone_id'))
+            if not all(isinstance(v, str) and v for v in key) or key in keys:
+                return []
+            keys.add(key)
+            rates = [r for r in snapshot.get('rates') or [] if r.get('version_id') == key[0]]
+            matches = [z for z in rates[0].get('profile', {}).get('zones', []) if z.get('id') == key[1]] if len(rates) == 1 else []
+            duration = number(row.get('measured_seconds'))
+            if (len(matches) != 1 or row.get('label') != matches[0].get('label')
+                    or not isinstance(row.get('label'), str) or not snapshot.get('active_tariff_id')
+                    or row.get('tariff_id') != snapshot.get('active_tariff_id')
+                    or rates[0].get('currency') != proof.get('currency') or rates[0].get('price_basis') != proof.get('price_basis')
+                    or duration is None or duration > seconds or row.get('complete') is not True
+                    or number(row.get('kwh')) is None or number(row.get('kwh')) != number(row.get('recorded_kwh'))):
+                return []
+        return rows if partition([row.get('kwh') for row in rows], totals.get('kwh')) else []
+
+    source_rows = source_partition()
+
+    def composition(side, caption, entries, ready):
+        text_parts.append('\n' + caption)
+        html_parts.append('<table data-section="flow-' + side + '-composition"><caption>' + escape(caption) + '</caption>')
+        if ready and total is not None and total > 0:
+            positive = [(name, parts, item, color) for name, parts, item, color in entries if number(item.get('kwh')) > 0]
+            html_parts.append('<tr><td><table role="presentation" class="bar-track" aria-hidden="true"><tr>')
+            for name, parts, item, color in positive:
+                width = format(number(item['kwh']) / total * 100, '.6f').rstrip('0').rstrip('.')
+                html_parts.append('<td data-role="flow-segment" class="' + color + '" width="' + width
+                    + '%" style="width:' + width + '%">&#160;</td>')
+            html_parts.append('</tr></table></td></tr>')
+            for name, parts, item, color in positive:
+                share = compact_number(number(item['kwh']) / total * 100, unknown) + '%'
+                value = name + ': ' + amount((*parts, 'kwh')) + ' · ' + share
+                text_parts.append(value)
+                html_parts.append('<tr><td>' + escape(value) + '</td></tr>')
+        else:
+            note = tr('Zerowe zużycie w okresie', 'No energy recorded in this period') if ready and total == 0 else unknown
+            text_parts.append(note)
+            html_parts.append('<tr><td>' + escape(note) + '</td></tr>')
+        html_parts.append('</table>')
+
+    composition('source', tr('Skąd', 'From'), [(row['label'], ('period_summary', 'zone_breakdown', 'zones', i), row,
+        colors.get((row['version_id'], row['zone_id']), 'zone-unknown')) for i, row in enumerate(source_rows)], bool(source_rows))
+    composition('destination', tr('Dokąd', 'To'), [(name, parts, item,
+        'unmeasured' if parts[-1] == 'unmeasured' else 'zone-expensive') for name, parts, item in device_entries], group_ready)
     ranking(tr('Z sieci do urządzeń', 'From the grid to devices'), device_entries, section='device-ranking')
 
     comparisons = snapshot.get('comparisons') or {}
