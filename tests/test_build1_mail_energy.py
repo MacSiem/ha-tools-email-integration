@@ -23,6 +23,28 @@ GOLDEN = json.loads((ROOT / 'tests/fixtures/build1/golden-energy-2026-10-17.json
 
 
 class Build1MailEnergyTests(unittest.TestCase):
+    def test_previous_period_ticks_keep_a_visible_edge_when_gmail_retains_dark_fill(self):
+        from html.parser import HTMLParser
+        class Markers(HTMLParser):
+            def __init__(self):super().__init__();self.styles=[]
+            def handle_starttag(self,tag,attrs):
+                a=dict(attrs)
+                if 'tick' in a.get('class','').split():self.styles.append(a.get('style',''))
+        doc=Markers();doc.feed(self.render(language='en')['html'])
+        self.assertGreaterEqual(len(doc.styles),25)  # actual 24-hour chart and legend
+        for style in doc.styles:
+            self.assertIn('border-top:1px solid #9ca3af',style)
+            self.assertIn('box-sizing:border-box',style)
+            self.assertIn('height:2px',style)
+        # Gmail Android can retain #111827 cells while inverting the page.
+        # The gray edge remains distinguishable against the actual dark page.
+        def lum(value):
+            rgb=[int(value[i:i+2],16)/255 for i in (1,3,5)]
+            rgb=[v/12.92 if v<=.04045 else ((v+.055)/1.055)**2.4 for v in rgb]
+            return sum(a*b for a,b in zip(rgb,(.2126,.7152,.0722)))
+        edge=lum('#9ca3af');dark=lum('#111111')
+        self.assertGreater((edge+.05)/(dark+.05),3)
+
     def test_unknown_zone_classification_never_infers_cheap_from_rate_or_order(self):
         for row in self.model['zones']:
             row['classification'] = None
