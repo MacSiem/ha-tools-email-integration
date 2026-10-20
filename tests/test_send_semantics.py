@@ -45,6 +45,39 @@ class SendSemanticsTests(unittest.TestCase):
         exec(compile(ast.Module(body=[node], type_ignores=[]), str(SOURCE), "exec"), namespace)
         return namespace["_send_email"], fake_smtp
 
+    def test_local_marker_is_one_related_inline_part_and_legacy_html_stays_alternative(self):
+        from email import message_from_string
+        frame = {}
+        exec(compile(SOURCE.with_name('mail_frame.py').read_text(), 'mail_frame.py', 'exec'), frame)
+        marker=frame.get('ENERGY_MARKER_DATA_URI')
+        self.assertIsInstance(marker,str)
+        send,smtp=self._send_function({})
+        send.__globals__['_energy_marker_mime']=frame['_energy_marker_mime']
+        html='<html><body>'+('<img src="'+marker+'" alt="">')*25+'</body></html>'
+        cfg={"server":"smtp.example.com","username":"user@example.com","password":"secret"}
+        send(object(),cfg,'to@example.com','Subject','Body',html)
+        msg=message_from_string(smtp.sendmail.call_args.args[2])
+        self.assertEqual('multipart/alternative',msg.get_content_type())
+        self.assertEqual('text/plain',msg.get_payload(0).get_content_type())
+        related=msg.get_payload(1)
+        self.assertEqual('multipart/related',related.get_content_type())
+        self.assertEqual(2,len(related.get_payload()))
+        image=related.get_payload(1)
+        self.assertEqual('image/png',image.get_content_type())
+        self.assertEqual('<ha-tools-energy-previous@local>',image['Content-ID'])
+        self.assertEqual('inline',image['Content-Disposition'])
+        import base64
+        self.assertEqual(base64.b64decode(marker.split(',',1)[1]),image.get_payload(decode=True))
+        sent=related.get_payload(0).get_payload(decode=True).decode()
+        self.assertEqual(25,sent.count('cid:ha-tools-energy-previous@local'))
+        self.assertNotIn('data:image',sent)
+        smtp.sendmail.assert_called_once()
+        smtp.reset_mock()
+        send(object(),cfg,'to@example.com','Subject','Body','<p>Legacy HTML</p>')
+        legacy=message_from_string(smtp.sendmail.call_args.args[2])
+        self.assertEqual(['text/plain','text/html'],[part.get_content_type() for part in legacy.get_payload()])
+        self.assertEqual(b'<p>Legacy HTML</p>',legacy.get_payload(1).get_payload(decode=True))
+
     def test_all_recipients_accepted_is_successful_handoff(self):
         send, smtp = self._send_function({})
         send(object(), {"server": "smtp.example.com", "username": "user@example.com", "password": "secret"}, "to@example.com", "Subject", "Body")
