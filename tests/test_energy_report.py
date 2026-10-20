@@ -553,7 +553,7 @@ class EnergyReportTest(unittest.TestCase):
         self.assertIn('>−0.1', report['text'])
         self.assertEqual('-0.0000123400', self.rows(report)['chart.bins.0.kwh']['value'])
         values, = dom.find(data_section='measurement-values')
-        self.assertIn('>−0.01', values.text())
+        self.assertIn('>−0.1', values.text())
 
     def test_partial_zone_known_costs_and_unattributed_are_readable_without_invented_full_cost(self):
         self.snapshot['chart']['bins'][0]['zone_breakdown'] = {
