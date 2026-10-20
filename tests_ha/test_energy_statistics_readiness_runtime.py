@@ -66,6 +66,27 @@ async def test_real_hour_compile_after_boundary_or_next_hour_is_automatically_re
             raise
 
     monkeypatch.setattr(EnergyStatisticsPublisher, 'async_refresh_runtime', observe_runtime)
+    from custom_components.ha_tools_email.analysis_service import EnergyAnalysisService
+    real_assert_current = EnergyAnalysisService._assert_current
+    context_changes = []
+
+    def observe_assert_current(self, context):
+        try:
+            return real_assert_current(self, context)
+        except RuntimeError as error:
+            if str(error) == 'energy_analysis_context_changed':
+                _, _, current = self._recapture(context)
+                changed = sorted(key for key, value in current.items()
+                                 if context.get(key) != value)
+                context_changes.append({'changed_keys': changed,
+                    'registry_revision_before': context.get('registry_revision'),
+                    'registry_revision_after': current.get('registry_revision'),
+                    'normalization_changed': 'normalization_signature' in context
+                        and context['normalization_signature'] != self._normalization})
+            raise
+
+    monkeypatch.setattr(EnergyAnalysisService, '_assert_current', observe_assert_current)
+
 
     await hass.config.async_set_time_zone('UTC')
     entry,storage=await _setup(hass)
@@ -105,7 +126,7 @@ async def test_real_hour_compile_after_boundary_or_next_hour_is_automatically_re
     refresh_token=await hass.auth.async_create_refresh_token(hass_admin_user,client_id='http://localhost/')
     client=await hass_ws_client(hass,hass.auth.async_create_access_token(refresh_token))
     membership_revision = hass.data[DOMAIN]['energy_membership'].revision
-    prepared=await command(client,'prepare');assert prepared['success'],(prepared,prepare_failures)
+    prepared=await command(client,'prepare');assert prepared['success'],(prepared,prepare_failures,context_changes)
     assert hass.data[DOMAIN]['energy_membership'].revision == membership_revision
     enabled=await command(client,'enable',proposal=prepared['result']['proposal'],expected_revision=prepared['result']['revision'],
         acknowledge_global=True,acknowledge_current_membership=True)
@@ -133,7 +154,7 @@ async def test_real_hour_compile_after_boundary_or_next_hour_is_automatically_re
         freezer.move_to(datetime.now(UTC)+timedelta(seconds=15))
         async_fire_time_changed(hass,datetime.now(UTC))
         await hass.async_block_till_done();await drain(runtime)
-    assert publisher._state['runtime']['last_end'] is not None, (runtime_observations, publisher._state['runtime'], publisher._state['pending'], runtime._paused, runtime._retry_after)
+    assert publisher._state['runtime']['last_end'] is not None, (runtime_observations, context_changes, publisher._state['runtime'], publisher._state['pending'], runtime._paused, runtime._retry_after)
     sid=next(sid for sid,row in publisher._state['series'].items() if row['identity']['kind']=='area')
     result=await recorder_mock.async_add_executor_job(partial(statistics_during_period,
         hass,END-timedelta(hours=1),END,{sid},'hour',None,{'sum','change'}))
