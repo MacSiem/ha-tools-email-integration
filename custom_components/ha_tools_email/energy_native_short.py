@@ -16,7 +16,7 @@ def cutoff_at(now):
 async def async_read_short_statistics(hass, start, end, ids):
     """Exactly the real Recorder 5minute/change API used by energy_inputs."""
     from homeassistant.components.recorder.statistics import statistics_during_period
-    from homeassistant.components.recorder.util import get_instance
+    from homeassistant.components.recorder import get_instance
     return await get_instance(hass).async_add_executor_job(
         statistics_during_period, hass, start, end, set(ids), '5minute', {}, {'change'})
 
