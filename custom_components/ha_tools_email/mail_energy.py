@@ -338,9 +338,9 @@ class _View:
         for z in self.zones:
             color = self.color(z.get('id'))
             dot = f'<span class="{color}" style="display:inline-block;width:10px;height:10px;border-radius:3px;background-color:{L[color]}"></span>'
-            legend_groups.append(f'<span class="legend-group" style="display:inline-block;white-space:nowrap;margin-right:8px">{dot}&nbsp;{E(self.zone_label(z))} {E(z.get("hours_label"))}</span>')
+            legend_groups.append(f'<span class="legend-group" style="display:inline-block;max-width:100%;white-space:normal;overflow-wrap:anywhere;margin-right:8px">{dot}&nbsp;{E(self.zone_label(z))} {E(z.get("hours_label"))}</span>')
         previous_label = self.comparison_label(self.comparisons[0]) if self.comparisons else self.tr('previous')
-        legend_groups.append(f'<span class="legend-group" style="display:inline-block;white-space:nowrap;margin-right:8px">{_previous_tick(legend=True)}&nbsp;{E(previous_label)}</span>')
+        legend_groups.append(f'<span class="legend-group" style="display:inline-block;max-width:100%;white-space:normal;overflow-wrap:anywhere;margin-right:8px">{_previous_tick(legend=True)}&nbsp;{E(previous_label)}</span>')
         legend = ' '.join(legend_groups)
         axis = []
         for n, (idx, label) in enumerate(labels):

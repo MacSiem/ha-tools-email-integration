@@ -121,7 +121,9 @@ class Build1MailPolishTests(unittest.TestCase):
                 self.assertEqual(len(groups), len(self.model['zones']) + 1)
                 for group in groups:
                     self.assertIn('display:inline-block', group.attrs['style'])
-                    self.assertIn('white-space:nowrap', group.attrs['style'])
+                    self.assertIn('max-width:100%', group.attrs['style'])
+                    self.assertIn('white-space:normal', group.attrs['style'])
+                    self.assertIn('overflow-wrap:anywhere', group.attrs['style'])
                     self.assertIn('margin-right:', group.attrs['style'])
                 previous = groups[-1]
                 self.assertIn(date, previous.text)
