@@ -2,7 +2,10 @@
 
 ## 2.4.0 (Unreleased)
 
-- Polish the complete Energy mail layout, including aligned lower tables, contextual KPIs, consistent units and light/dark surfaces. Localize grouped numbers with one decimal for energy, two for amounts and whole percentages; retain meaningful rate precision and bound tiny nonzero values without changing CSV facts. Distinguish both repeated daylight-saving hours and show missing amounts/currencies once.
+- Add native daily import and cheap-energy-share sensors from completed five-minute Recorder evidence plus non-overlapping full hours. Today’s usage-cost sensor uses the same cutoff. Current-zone states now identify the actual zone; classification remains an attribute. Preserve stable entity IDs and explicitly reject stale or incomplete measurements.
+- Add explicit native/mobile/email delivery targets, channel-aware schedules and attempt history with batch/period metadata. Unconfirmed handoffs are not automatically retried; report delivery problems surface through native status and Repairs.
+
+- Polish the complete Energy mail layout, including aligned lower tables, contextual KPIs, consistent units and light/dark surfaces. Localize numbers with one kWh decimal in tiles, two in daily tables (one for longer periods), two for amounts/rates, whole shares and one-decimal percentage changes; retain exact source precision and bound tiny nonzero values without changing CSV facts. Distinguish both repeated daylight-saving hours and show missing amounts/currencies once.
 
 - Add selected-baseline context and published effective price to report summaries, explicit chart-zone legends, and table-only From/To composition bars with matching stable device colors. Require complete non-overlapping producer partitions; retain exact CSV values beside readable HTML and plain-text labels.
 

@@ -144,11 +144,11 @@ action:
 
 ## Shared Energy snapshot and entities
 
-From **2.4.0**, install/update the integration in HACS, then add **HA Tools Email** under **Settings → Devices & services**. Configure Energy Dashboard grid import and save a shared tariff from Energy Optimizer **4.0+ → Tariff settings**. Select an optional zone classification for cheap-zone and next-cheap values. Open the Energy device under this integration to use the five entities. SMTP is not needed for these read-only energy values; notifications require a separate Home Assistant automation.
+From **2.4.0**, install/update the integration in HACS, then add **HA Tools Email** under **Settings → Devices & services**. Configure Energy Dashboard grid import and save a shared tariff from Energy Optimizer **4.0+ → Tariff settings**. Select an optional zone classification for cheap-zone and next-cheap values. Open the Energy device under this integration to use the seven entities. SMTP is not needed for these read-only energy values; notifications require a separate Home Assistant automation.
 
 The integration exposes a shared Energy device with current tariff zone, current
 usage price, cheap-period status, next cheap start and today's measured usage
-cost. All five entities and `ha_tools_email/energy_snapshot` use the same tariff
+cost, grid energy imported today and cheap-energy share today. All seven entities and `ha_tools_email/energy_snapshot` use the same tariff
 engine and grid-import Recorder measurements. Entity identifiers remain stable
 across reloads. PL/EN names are included.
 
@@ -162,7 +162,7 @@ Historical cards can batch their supplied intervals through
 `ha_tools_email/energy_price_queries` with `{queries: [{buckets, coverage?}], profile?}`.
 Results retain the order, completeness and rows of `EnergyTariff.price_buckets`.
 These are calculations over card-supplied data, never new household measurements
-and never input to the five global entities. The endpoint performs no Recorder,
+and never input to the seven global entities. The endpoint performs no Recorder,
 SMTP or settings writes. It permits up to 64 queries, 2048 buckets, 2048 total
 measured hours, 512 KiB of input and a weighted tariff-work budget; complex
 profiles may reach that work budget earlier. All calculations share one bounded
@@ -173,9 +173,17 @@ zones and dynamic intervals. Missing classification stays unknown; prices and na
 do not imply a cheap period. The primary current price includes energy and variable
 fees. Unknown variable fees mean unknown usage price and cost. Fixed monthly fees
 are metadata only, never prorated into today's charge. Today's window starts at
-HA-local midnight and ends at the last completed Recorder hour; fractional-hour
-calendar boundaries remain unknown. A future cheap start is bounded to eight days
+HA-local midnight and combines completed Recorder hours with actual completed
+five-minute readings from the current hour. The values share the reported
+`measurement_through` cutoff; missing intervals stay unavailable, and real zero
+remains zero. Fractional-hour calendar boundaries remain unknown. A future cheap start is bounded to eight days
 and skips the current continuous cheap segment.
+
+The current-zone enum contains the configured zone ID (for example `day`),
+with `classification` (`cheap`, `expensive`, `mixed` or unknown), label, rate and
+next-change attributes. When upgrading an automation that compared the older
+classification state, compare the `classification` attribute or the cheap-period
+binary sensor instead. Entity unique IDs and user customizations stay stable.
 
 ## Energy data and previews
 
