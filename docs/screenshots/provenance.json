@@ -13,11 +13,11 @@
   "qualification": "Unedited actual HA Core2026.9.4 embedded report preview, PL390Dark. Synthetic250kWh247EUR. Source192+58 and devices50+Unmeasured200; explicit zone legend, stable device colors and compact visual labels. Exact raw values preserved in text/CSV from same snapshot. No email client or inbox-delivery claim.",
   "current_gmail": {
     "captured_at": "2026-10-20",
-    "backend_runtime": "11f89dbb6d95ea3c1085a696aaee6644d758040c",
-    "rendered_and_delivered_runtime": "0b99c41c5a417e99a2d2b2652a188c9a28f4c72b",
-    "snapshot_id": "3e5cfe03744c0619f394d5adaabf81b49cfd4071d7f41a762983bb2a2a8cd283",
+    "backend_runtime": "4317aac535d7a10aeea2c27e08d05335f8f5a3b3",
+    "lower_tables_delivered_runtime": "cd9fae12e500c32f530d9ef2e5d41b780f06e35b",
+    "fixture": "public golden-energy-2026-10-17.json",
     "file": "energy-report-costs-pl-gmail-dark.png",
-    "sha256": "e25b1fa707b8598bb68638008544d93763d289fbdb8d74f247a30391de0e2498",
+    "sha256": "23594900f7fc326f030c8e9927e810d5cbd6686cf57d2970ee21f12e45f7179e",
     "pixels": [
       1080,
       2400
@@ -26,6 +26,21 @@
     "device": "Samsung A71",
     "locale": "pl",
     "theme": "Dark",
-    "qualification": "Unedited actual delivered synthetic mail149. Current runtime HTML/text/CSV byte-identical to delivered runtime for this snapshot. Full PL/EN Light/Dark reviewed, including lower costs, zones, fees, rate history, monthly units, hourly data and footer. This image shows lower Polish cost/rate tables; no private mailbox content. Device theme, original unread state and notification flags restored after QA. It does not qualify current frontend HA styles."
+    "qualification": "Unedited actual synthetic QA156 lower tables; unchanged text/numbers bound to final QA162 renderer. Complete PL/EN body reviewed in actual Light/Dark. Daily kWh and money/rates use two decimals; shares whole and changes one. QA B: EN in Inbox, PL in Spam; SMTP acceptance on all three QA recipients is not an Inbox claim. Phone baseline/unread/notification flags restored and device lease released. Current native HA styles remain separately open."
+  },
+  "current_gmail_chart": {
+    "captured_at": "2026-10-20",
+    "backend_runtime": "4317aac535d7a10aeea2c27e08d05335f8f5a3b3",
+    "file": "energy-report-chart-pl-gmail-dark.png",
+    "sha256": "348081148a36214f1a822b139ae0011bb6f7bfeb794262e8622d5878bfb9e509",
+    "pixels": [
+      1080,
+      2400
+    ],
+    "client": "Gmail Android 2026.10.05.998732664.Release",
+    "device": "Samsung A71",
+    "locale": "pl",
+    "theme": "Dark",
+    "qualification": "Unedited actual delivered synthetic QA162, QA B Spam classification preserved. Clipped foreground markers remain visible without any images. Light and Dark personally reviewed. Marker/plot contrast18.501:1 in actual dark pixels; no pixel-difference claim against the complete mockup."
   }
 }

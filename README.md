@@ -93,6 +93,10 @@ The current complete report was also checked after real QA delivery in Gmail Lig
 
 This unedited Gmail capture uses synthetic measurements. [Capture details](docs/screenshots/provenance.json) distinguish client validation from the earlier HA preview.
 
+The previous-period chart ticks remain visible in actual Gmail Dark without image loading:
+
+![Previous-period ticks and tariff zones in Gmail Android Dark, synthetic data](docs/screenshots/energy-report-chart-pl-gmail-dark.png)
+
 ## Services
 
 | Service | Purpose |
