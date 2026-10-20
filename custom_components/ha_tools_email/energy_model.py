@@ -172,6 +172,44 @@ def _comparisons(requests, total, coverage, scope):
     return result
 
 
+def _previous_ticks(previous, period, zone):
+    """Align actual facts by civil position and fold; never synthesize DST cells."""
+    if not previous:
+        return {}
+    _coverage(previous.get('hours', []), previous['start'], previous['end'])
+    first = _instant(previous['start']).astimezone(zone)
+    def key(local):
+        day = (local.month, local.day) if period['kind'] == 'year' else (local.date()-first.date()).days
+        return (day, local.hour, local.fold)
+    return {key(_instant(row['from']).astimezone(zone)): _decimal(row.get('kwh'))
+            for row in previous.get('hours', [])}
+
+
+def _daily_rows(hourly, zone):
+    """Aggregate verified hourly producer facts, retaining gaps and real DST length."""
+    days = {}
+    for hour in hourly:
+        local = _instant(hour['start']).astimezone(zone)
+        day = days.setdefault(local.date(), [])
+        day.append(hour)
+    rows = []
+    for date, hours in days.items():
+        observed = [h for h in hours if not h['future']]
+        zones = list(dict.fromkeys(h['zone'] for h in observed if h['zone'] is not None))
+        rows.append({'start': datetime.combine(date,datetime.min.time(),zone).isoformat(),
+            'hours':len(hours), 'kwh':_known_sum(h['kwh'] for h in observed),
+            'prev_kwh':_sum(h['prev_kwh'] for h in hours),
+            'cost':_sum(h['cost'] for h in observed if h['kwh'] is not None),
+            'energy_cost':_sum(h['energy_cost'] for h in observed if h['kwh'] is not None),
+            'variable_cost':_sum(h['variable_cost'] for h in observed if h['kwh'] is not None),
+            'measured_kwh':_known_sum(h['measured_kwh'] for h in observed),
+            'complete':bool(observed) and len(observed)==len(hours) and all(h['kwh'] is not None and not h['partial'] for h in hours),
+            'partial':any(h['partial'] for h in hours) or bool(observed) and len(observed)!=len(hours),
+            'future':not observed,
+            'zones':[{'id':z,'kwh':_known_sum(h['kwh'] for h in observed if h['zone']==z)} for z in zones]})
+    return rows
+
+
 def build_report(inputs):
     """Build an independent model without mutating inputs or pricing again.
 
@@ -221,6 +259,8 @@ def _build_report(inputs):
     identity_ok = bool(currency and basis) and identities <= {(currency, basis)}
     issues, hourly, residuals, adjusted, device_hours = [], [], [], ZERO, {sid: [] for sid in config}
     double_counting, measured_hours = False, 0
+    previous = _previous_ticks(inputs.get('previous'),period,zone)
+    first_date = start.astimezone(zone).date()
     for offset in range(period['hours']):
         instant = start + timedelta(hours=offset)
         raw = provided.get(instant, {})
@@ -251,9 +291,11 @@ def _build_report(inputs):
         if eligible:
             residuals.append(residual)
         local = instant.astimezone(zone)
+        previous_day = (local.month,local.day) if period['kind']=='year' else (local.date()-first_date).days
+        previous_value = previous.get((previous_day,local.hour,local.fold),_decimal(raw.get('prev_kwh')))
         hourly.append({'start': local.isoformat(), 'hour': local.hour, 'fold': local.fold,
             'kwh': kwh, 'zone': raw.get('zone'), **costs, 'cost': costs['usage_cost'],
-            'measured_kwh': measured, 'prev_kwh': _decimal(raw.get('prev_kwh')),
+            'measured_kwh': measured, 'prev_kwh': previous_value,
             'partial': bool(raw) and _instant(raw['to']) - instant < timedelta(hours=1),
             'future': not eligible})
     expected = ceil((cutoff - start).total_seconds() / 3600)
@@ -381,6 +423,7 @@ def _build_report(inputs):
     tariff['fixed'] = [{**row, 'share': _decimal(row.get('share'))} for row in fixed_rows]
     return {'schema': SCHEMA, 'period': period, 'coverage': coverage, 'currency': currency,
         'price_basis': basis, 'totals': totals, 'zones': zones, 'hourly': hourly,
+        'daily': _daily_rows(hourly,zone),
         'devices': devices, 'ranking': ranking, 'unmeasured': unmeasured,
         'rooms': grouped('area'), 'floors': grouped('floor'), 'comparisons': comparisons,
         'alternatives': deepcopy(inputs.get('alternatives', [])),
