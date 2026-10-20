@@ -4,7 +4,7 @@ No recipient inference, SMTP reads, automatic retry or delivery claim. The calle
 owns source/actor authorization and revalidates context immediately before IO.
 """
 import re
-from .history import async_dispatch_channel_attempt
+from .history import async_dispatch_channel_attempt, async_dispatch_attempt
 
 _NOTIFY = re.compile(r'notify\.[a-z0-9_]{1,128}')
 
@@ -77,7 +77,6 @@ async def async_send_energy_channels(hass,storage,*,channels,cadence,actor=None,
     """
     from datetime import datetime,timezone
     from .composer import async_build_report_payload
-    from .history import async_dispatch_attempt
     selected=normalize_channels(channels)
     bucket=hass.data['ha_tools_email']
     service=bucket.get('energy_analysis')
