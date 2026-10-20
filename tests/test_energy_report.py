@@ -366,7 +366,7 @@ class EnergyReportTest(unittest.TestCase):
         result = self.render()
         self.assertIn('&lt;Night&gt;', result['html'])
         self.assertIn('<Night>', result['text'])
-        self.assertIn('9.99', Markup(result['html']).cells)
+        self.assertIn('9.99', ' '.join(Markup(result['html']).cells))
         self.assertEqual('9.9900', self.rows(result)['chart.bins.0.zone_breakdown.zones.0.usage_cost']['value'])
         self.assertEqual('PLN', self.rows(result)['chart.bins.0.zone_breakdown.zones.0.usage_cost']['unit'])
         self.assertIn('No published period share', result['text'])
@@ -433,7 +433,7 @@ class EnergyReportTest(unittest.TestCase):
     def test_mobile_kpis_keep_the_three_column_mockup_group(self):
         html = self.render()['html']
         self.assertNotIn('.kpi-card{display:block;width:100%', html)
-        cards = ReportDOM(html).root.find(**{'class': 'kpi-card'})
+        cards = ReportDOM(html).root.find(data_role='kpi-label')
         self.assertEqual(3, len(cards))
 
     def test_kpi_values_share_one_row_so_wrapped_labels_do_not_shift_baselines(self):
@@ -477,16 +477,15 @@ class EnergyReportTest(unittest.TestCase):
         report = self.render()
         dom = ReportDOM(report['html']).root
         group, = dom.find(data_section='kpis')
-        row, = [node for node in group.children if isinstance(node, ReportNode) and node.tag == 'tr']
+        row = [node for node in group.children if isinstance(node, ReportNode) and node.tag == 'tr'][0]
         cards = [node for node in row.children if isinstance(node, ReportNode) and node.tag == 'td']
         self.assertEqual(3, len(cards))
         self.assertEqual(['Measured energy', 'Period cost', 'Cheap-zone share'],
-            [card.find(data_role='kpi-label')[0].text() for card in cards])
+            [card.text() for card in cards])
         self.assertEqual(['240.0', '241.00', 'Unknown'],
-            [card.find(data_role='kpi-number')[0].text() for card in cards])
-        for card in cards:
-            for metadata in ('Complete measurements', 'Complete pricing', 'Gross', 'Price basis'):
-                self.assertNotIn(metadata, card.text())
+            [card.text() for card in group.find(data_role='kpi-number')])
+        for metadata in ('Complete measurements', 'Complete pricing', 'Gross', 'Price basis'):
+            self.assertNotIn(metadata, group.text())
         metadata, = dom.find(data_section='report-status')
         self.assertIn('Complete measurements', metadata.text())
         self.assertLess(report['html'].index('data-section="timeline"'),
@@ -564,8 +563,8 @@ class EnergyReportTest(unittest.TestCase):
                                                        'legacy_combined_cost': None}}],
             'unattributed': {'recorded_kwh': '1.23', 'known_costs': {'energy_cost': '2.46'}}}
         result = self.render()
-        self.assertIn('13.37', Markup(result['html']).cells)
-        self.assertIn('2.46', Markup(result['html']).cells)
+        self.assertIn('13.37', ' '.join(Markup(result['html']).cells))
+        self.assertIn('2.46', ' '.join(Markup(result['html']).cells))
         self.assertIn('13.37', result['text'])
         self.assertIn('2.46', result['text'])
         rows = self.rows(result)
