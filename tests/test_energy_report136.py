@@ -57,6 +57,17 @@ class Mail136Test(unittest.TestCase):
         for forbidden in ('<svg', '<script', 'display:flex', 'display:grid'):
             self.assertNotIn(forbidden, result['html'])
 
+    def test_lower_tables_keep_phone_reading_width_and_avoid_empty_zone_audit_rows(self):
+        result = self.render()
+        zones = self.section(result, 'measured-zone-values')
+        rows = [node for node in zones.children if isinstance(node, fixture.ReportNode) and node.tag == 'tr']
+        self.assertLessEqual(len(rows), 25)
+        self.assertNotIn('Unattributed to zone', zones.text())
+        self.assertIn('10.0 kWh', zones.text())
+        groups = self.section(result, 'comparison-groups')
+        for row in [n for n in groups.children if isinstance(n, fixture.ReportNode) and n.tag == 'tr']:
+            self.assertLessEqual(len(row.children), 3)
+
     def test_mail136_partition_proof_rejects_mismatch_overlap_negative_and_stale(self):
         base = copy.deepcopy(self.s)
         mutations = [
