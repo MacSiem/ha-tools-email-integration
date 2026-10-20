@@ -67,6 +67,18 @@ _COMPARE = {
 }
 
 
+_EN_ZONE_MOBILE_CSS = """
+@media screen and (max-width: 500px) {
+  .energy-zones-en { table-layout:fixed; }
+  .energy-zones-en tr { display:block; }
+  .energy-zones-en .zone-label { display:block; width:100%; box-sizing:border-box; overflow-wrap:anywhere; }
+  .energy-zones-en .zone-value { display:inline-block; box-sizing:border-box; vertical-align:top; border-top:0 !important; padding:0 8px 8px 0 !important; overflow-wrap:anywhere; }
+  .energy-zones-en .zone-value:nth-child(2) { width:40%; text-align:left; }
+  .energy-zones-en .zone-value:nth-child(3) { width:20%; text-align:center; }
+  .energy-zones-en .zone-value:nth-child(4) { width:40%; padding-right:0 !important; text-align:right; }
+}
+"""
+
 def _previous_tick(*, legend=False):
     # Actual foreground glyphs follow Gmail's readable-text inversion. A fixed
     # two-pixel clip preserves chart geometry without remote or inline images.
@@ -405,7 +417,8 @@ class _View:
             self.lines.append(f'- {label} ({hours}): {" · ".join(values)}')
         gap = '<td width="4" style="width:4px;line-height:0;font-size:0">&nbsp;</td>'
         bar = f'<table role="presentation" width="100%" style="border-radius:6px"><tr>{gap.join(segments)}</tr></table>' if segments else ''
-        return section(bar + f'<table role="presentation" width="100%" style="margin-top:8px">{"".join(rows)}</table>' if rows else paragraph(self.tr('no_data')), padding='4px 24px 0')
+        table_class = ' class="energy-zones-en"' if self.lang == 'en' else ''
+        return section(bar + f'<table role="presentation" width="100%"{table_class} style="margin-top:8px">{"".join(rows)}</table>' if rows else paragraph(self.tr('no_data')), padding='4px 24px 0')
 
     def rank_block(self, items, *, rooms=False):
         items = _items(items)
@@ -558,4 +571,6 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
     html = render_frame(language=v.lang, title=title, preheader=preheader, eyebrow=f'Home Assistant · HA Tools · {report_label}', subtitle=subtitle, content=''.join(blocks), closing=closing)
     notify_data = {'url': '/ha-tools?tab=energy', 'clickAction': '/ha-tools?tab=energy', 'group': 'ha-tools-energy', 'tag': 'ha-tools-energy-' + {'day': 'daily', 'week': 'weekly', 'month': 'monthly', 'year': 'yearly'}.get(v.kind, 'report')}
     notify = {'title': f'{v.tr("energy")}: {v.period_label()} · {summary}', 'message': preheader, 'data': notify_data}
+    if v.lang == 'en':
+        html = html.replace('</style>', _EN_ZONE_MOBILE_CSS + '</style>', 1)
     return {'subject': subject, 'preheader': preheader, 'html': html, 'text': '\n'.join(v.lines), 'notify': notify}

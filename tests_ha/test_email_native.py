@@ -45,9 +45,15 @@ def record(index, outcome='accepted_by_smtp'):
         'recipient_count': 0, 'outcome': outcome}
 
 
-async def test_native_no_schedules_preserves_exact_five_energy_entities(hass, hass_storage):
+async def test_native_no_schedules_preserves_exact_native_inventory(hass, hass_storage):
     entry, storage = await _setup(hass)
-    assert len(er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)) == 5
+    entries = er.async_entries_for_config_entry(er.async_get(hass), entry.entry_id)
+    assert {row.unique_id for row in entries} == {
+        *(f'{entry.entry_id}_energy_{key}' for key in
+          ('zone', 'price', 'next_cheap', 'today_cost', 'today', 'cheap_share_today', 'cheap')),
+        f'{entry.entry_id}_reports_problem',
+    }
+    assert len(entries) == 8
     assert not records(hass, entry)
     assert hass.data[DOMAIN]['email_native'].data == {}
 

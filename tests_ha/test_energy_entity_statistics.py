@@ -43,7 +43,8 @@ def records(hass, entry):
     return {key: registry.async_get(registry.async_get_entity_id(domain, DOMAIN,
             f'{entry.entry_id}_energy_{key}')) for domain, key in
             (('sensor', 'zone'), ('sensor', 'price'), ('sensor', 'next_cheap'),
-             ('sensor', 'today_cost'), ('binary_sensor', 'cheap'))}
+             ('sensor', 'today_cost'), ('sensor', 'today'),
+             ('sensor', 'cheap_share_today'), ('binary_sensor', 'cheap'))}
 
 
 def preferences(*ids, flat=False):
@@ -76,7 +77,7 @@ def source_fields(device):
 
 
 @pytest.mark.parametrize('flat', [False, True])
-async def test_native_rebind_preserves_all_five_ids_customizations_and_foreign_device(hass, hass_storage, flat):
+async def test_native_rebind_preserves_all_seven_ids_customizations_and_foreign_device(hass, hass_storage, flat):
     manager = await async_get_manager(hass)
     manager.data = preferences()
     a_entry, a, ae = source(hass, 'a')
@@ -105,7 +106,10 @@ async def test_native_rebind_preserves_all_five_ids_customizations_and_foreign_d
         current = records(hass, entry)
         assert {row.device_id for row in current.values()} == {expected}
         assert custom == {key: custom_fields(row) for key, row in current.items()}
-        assert len(er.async_entries_for_config_entry(registry, entry.entry_id)) == 5
+        assert len(er.async_entries_for_config_entry(registry, entry.entry_id)) == 8
+        report_id = registry.async_get_entity_id('binary_sensor', DOMAIN,
+                                                 f'{entry.entry_id}_reports_problem')
+        assert registry.async_get(report_id).device_id == fallback
         assert source_fields(devices.async_get(a.id)) == before_a
         assert source_fields(devices.async_get(b.id)) == before_b
         for foreign_entry, original_device in ((a_entry, a), (b_entry, b)):
@@ -172,6 +176,8 @@ async def test_native_daily_total_statistics_metadata_reset_and_signed_sum(hass,
     from homeassistant.components.sensor.recorder import list_statistic_ids
     from homeassistant.components.recorder.tasks import StatisticsTask
     from homeassistant.components.recorder.statistics import statistics_during_period
+    from custom_components.ha_tools_email.energy import measurement_window
+    from custom_components.ha_tools_email.energy_native_short import cutoff_at
 
     beginning = datetime.fromisoformat(start)
     next_day = datetime.fromisoformat(following)
@@ -199,7 +205,17 @@ async def test_native_daily_total_statistics_metadata_reset_and_signed_sum(hass,
     async def publish(instant, value, reset):
         freezer.move_to(instant)
         snapshot = deepcopy(baseline)
-        snapshot['today'].update(usage_cost=value, **{'from': reset.isoformat()})
+        # Publish the current producer contract, not only its legacy hourly alias.
+        # Core must see an available TOTAL before it can expose last_reset and
+        # compile signed sums. All original reset/sum/unavailable checks remain.
+        start, end, aligned = measurement_window(instant, hass.config.time_zone)
+        assert aligned and start == reset
+        snapshot['generated_at'] = instant.isoformat()
+        snapshot['today'].update(usage_cost=value, **{'from': start.isoformat(), 'to': end.isoformat()})
+        snapshot['entity_facts'].update(usage_cost=value,
+            measurement_from=start.isoformat(), measurement_through=cutoff_at(instant).isoformat(),
+            coverage_complete=value is not None,
+            reason=None if value is not None else 'measurement_incomplete')
         coordinator.data = snapshot
         for listener in tuple(coordinator._listeners):
             listener()

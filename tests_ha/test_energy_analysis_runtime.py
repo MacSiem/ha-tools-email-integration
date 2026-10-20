@@ -146,7 +146,10 @@ async def test_native_analysis_selected_comparison_chart_and_policy(hass, hass_s
         usage = next(row for row in rows if row['field'] == 'totals.kwh')
         assert Decimal(usage['value'].replace(',', '.')) == Decimal(result['totals']['kwh'])
         assert '<table' in report['html'] and '<svg' not in report['html']
-        assert report['snapshot_id'] in report['html'] and report['snapshot_id'] in report['text']
+        provenance = '<!-- ha-tools-snapshot:' + report['snapshot_id'] + ' -->'
+        assert provenance in report['html']
+        assert report['snapshot_id'] not in report['html'].replace(provenance, '')
+        assert report['snapshot_id'] not in report['text']  # provenance stays out of user copy
         # Display date preference is independent of the Polish labels/numbers.
         await client.send_json_auto_id({**report_msg, 'date_language': 'en'})
         english_dates_response = await client.receive_json()

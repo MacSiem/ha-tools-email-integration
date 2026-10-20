@@ -1,11 +1,12 @@
-"""Bounded native association of the existing five entities to Energy import."""
+"""Bounded native association of the seven Energy entities to their import."""
 from datetime import timedelta
 
 from .composer import _energy_grid_import_ids
 from .const import DOMAIN
 
 ENERGY_ENTITIES = (('sensor', 'zone'), ('sensor', 'price'), ('sensor', 'next_cheap'),
-                   ('sensor', 'today_cost'), ('binary_sensor', 'cheap'))
+                   ('sensor', 'today_cost'), ('sensor', 'today'),
+                   ('sensor', 'cheap_share_today'), ('binary_sensor', 'cheap'))
 
 
 def resolve_source_device(preferences, entities, devices):
@@ -99,7 +100,7 @@ class EnergySourceDeviceAssociation:
                 if record.device_id:
                     previous.add(record.device_id)
                 entities.async_update_entity(eid, device_id=target.id)
-        # Move our five entries first. Never remove another integration's link.
+        # Move our seven Energy entries first. Never remove another integration's link.
         for device_id in previous - {fallback.id, target.id}:
             device = devices.async_get(device_id)
             if (device is not None and not hasattr(device, 'config_entry_id')

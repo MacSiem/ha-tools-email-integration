@@ -31,8 +31,14 @@ async def test_native_forwarded_entities_availability_metadata_unload_reload(has
     entry, storage = await _setup(hass)
     registry = er.async_get(hass)
     records = {r.unique_id.removeprefix(f'{entry.entry_id}_energy_'): r
-               for r in er.async_entries_for_config_entry(registry, entry.entry_id)}
-    assert set(records) == {'zone', 'price', 'next_cheap', 'today_cost', 'cheap'}
+               for r in er.async_entries_for_config_entry(registry, entry.entry_id)
+               if r.unique_id.startswith(f'{entry.entry_id}_energy_')}
+    assert set(records) == {'zone', 'price', 'next_cheap', 'today_cost', 'today',
+                            'cheap_share_today', 'cheap'}
+    assert len(er.async_entries_for_config_entry(registry, entry.entry_id)) == 8
+    reports_id = registry.async_get_entity_id('binary_sensor', DOMAIN,
+                                              f'{entry.entry_id}_reports_problem')
+    assert reports_id is not None
     assert len({r.device_id for r in records.values()}) == 1
     device = dr.async_get(hass).async_get(records['price'].device_id)
     assert (DOMAIN, f'{entry.entry_id}_energy') in device.identifiers
@@ -41,7 +47,9 @@ async def test_native_forwarded_entities_availability_metadata_unload_reload(has
     coordinator = hass.data[DOMAIN]['energy_snapshot']
     await coordinator.async_refresh()
     await hass.async_block_till_done()
-    assert hass.states.get(records['zone'].entity_id).state == 'cheap'
+    zone = hass.states.get(records['zone'].entity_id)
+    assert zone.state == 'day'
+    assert zone.attributes['classification'] == 'cheap'
     assert hass.states.get(records['cheap'].entity_id).state == 'on'
     price = hass.states.get(records['price'].entity_id)
     assert float(price.state) == 1.2
@@ -53,16 +61,20 @@ async def test_native_forwarded_entities_availability_metadata_unload_reload(has
     assert cost.attributes['device_class'] == 'monetary'
     assert cost.attributes['state_class'] == 'total'
     ids = {k: (r.entity_id, r.id, r.unique_id) for k, r in records.items()}
-    assert len(coordinator._listeners) == 5
+    assert len(coordinator._listeners) == 7
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
     replacement = hass.data[DOMAIN]['energy_snapshot']
     assert replacement is not coordinator and not coordinator.running
     assert not coordinator._listeners and coordinator._unsub is None and coordinator._boundary_unsub is None
-    assert len(replacement._listeners) == 5
+    assert len(replacement._listeners) == 7
     assert ids == {r.unique_id.removeprefix(f'{entry.entry_id}_energy_'):
                    (r.entity_id, r.id, r.unique_id)
-                   for r in er.async_entries_for_config_entry(registry, entry.entry_id)}
+                   for r in er.async_entries_for_config_entry(registry, entry.entry_id)
+                   if r.unique_id.startswith(f'{entry.entry_id}_energy_')}
+    assert len(er.async_entries_for_config_entry(registry, entry.entry_id)) == 8
+    assert registry.async_get_entity_id('binary_sensor', DOMAIN,
+        f'{entry.entry_id}_reports_problem') == reports_id
     assert float(hass.states.get(records['price'].entity_id).state) == 1.2
     await storage.async_save_tariff(None, expected_revision=1)
     await replacement.async_refresh()
@@ -158,7 +170,7 @@ async def test_native_recorder_external_import_without_state_prices_daily_moneta
     from homeassistant.components.recorder import models
     from homeassistant.components.recorder.statistics import async_add_external_statistics
 
-    freezer.move_to('2026-10-18T12:30:00+00:00')
+    freezer.move_to('2026-10-18T12:00:00+00:00')
     await hass.config.async_set_time_zone('UTC')
     manager = await async_get_manager(hass)
     manager.data = {'energy_sources': [{'type': 'grid', 'flow_from': [
@@ -190,6 +202,21 @@ async def test_native_recorder_external_import_without_state_prices_daily_moneta
     assert state.attributes['device_class'] == 'monetary'
     assert state.attributes['unit_of_measurement'] == 'EUR'
     assert state.attributes['state_class'] == 'total'
+    assert result['entity_facts']['coverage_complete'] is True
+    for key, expected in (('today', hours), ('cheap_share_today', 100)):
+        sid = registry.async_get_entity_id('sensor', DOMAIN, f'{entry.entry_id}_energy_{key}')
+        assert float(hass.states.get(sid).state) == pytest.approx(expected)
+    # Hourly external history cannot supply the current half-hour's real 5-min tail.
+    # Legacy completed-hour totals remain available, but native selected-current
+    # sensors must become unavailable rather than publishing a fabricated zero.
+    freezer.move_to('2026-10-18T12:30:00+00:00')
+    incomplete = await coordinator.async_refresh()
+    assert incomplete['today']['measurement_complete'] is True
+    assert incomplete['today']['usage_cost'] == pytest.approx(hours * 1.2)
+    assert incomplete['entity_facts']['coverage_complete'] is False
+    for key in ('today', 'today_cost', 'cheap_share_today'):
+        sid = registry.async_get_entity_id('sensor', DOMAIN, f'{entry.entry_id}_energy_{key}')
+        assert hass.states.get(sid).state == 'unavailable'
 
 
 async def test_native_timestamp_and_cheap_transition_publish_aware_values(hass, hass_storage, freezer):

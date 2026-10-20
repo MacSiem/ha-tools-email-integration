@@ -35,10 +35,37 @@ async def drain(runtime):
 @pytest.mark.parametrize('compile_delay',[10,3610])
 @pytest.mark.freeze_time('2026-10-19T10:55:01+00:00')
 async def test_real_hour_compile_after_boundary_or_next_hour_is_automatically_retried(
-        hass,hass_storage,recorder_mock,hass_ws_client,hass_admin_user,freezer,compile_delay):
+        hass,hass_storage,recorder_mock,hass_ws_client,hass_admin_user,freezer,compile_delay,monkeypatch):
+    # Keep the real failing request and its public error envelope. Record only
+    # the producer exception which the WS boundary deliberately maps to a generic
+    # error, so the next Core run can distinguish a stale-context fence from an
+    # actual adapter/readiness defect. No retry or replacement producer is used.
+    from custom_components.ha_tools_email.energy_statistics_publisher import EnergyStatisticsPublisher
+    prepare_failures = []
+    real_prepare = EnergyStatisticsPublisher.async_prepare
+
+    async def observe_prepare(self, actor):
+        try:
+            return await real_prepare(self, actor)
+        except (ValueError, RuntimeError, OSError) as error:
+            prepare_failures.append((type(error).__name__, str(error)))
+            raise
+
+    monkeypatch.setattr(EnergyStatisticsPublisher, 'async_prepare', observe_prepare)
     await hass.config.async_set_time_zone('UTC')
     entry,storage=await _setup(hass)
     await storage.async_save_tariff_book(migrate_tariff_v1(profile(),legacy_combined=False),expected_revision=0)
+    # The saved tariff changes the native zone ENUM capabilities. Publish it
+    # now, then drain Core's resulting entity-registry update before capturing
+    # the statistics request's membership revision. A later timer must not be
+    # the first publisher of fixture setup while prepare is already in flight.
+    coordinator = hass.data[DOMAIN]['energy_snapshot']
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    await _async_recorder_barrier(hass, recorder_mock)
+    zone_id = er.async_get(hass).async_get_entity_id('sensor', DOMAIN,
+        f'{entry.entry_id}_energy_zone')
+    assert er.async_get(hass).async_get(zone_id).capabilities['options'] == ['day']
     area=ar.async_get(hass).async_create('Readiness')
     registry=er.async_get(hass)
     grid=registry.async_get_or_create('sensor','test','readiness_grid',suggested_object_id='readiness_grid')
@@ -62,7 +89,9 @@ async def test_real_hour_compile_after_boundary_or_next_hour_is_automatically_re
     # A fixture token minted before the >1h frozen-clock jump has expired.
     refresh_token=await hass.auth.async_create_refresh_token(hass_admin_user,client_id='http://localhost/')
     client=await hass_ws_client(hass,hass.auth.async_create_access_token(refresh_token))
-    prepared=await command(client,'prepare');assert prepared['success'],prepared
+    membership_revision = hass.data[DOMAIN]['energy_membership'].revision
+    prepared=await command(client,'prepare');assert prepared['success'],(prepared,prepare_failures)
+    assert hass.data[DOMAIN]['energy_membership'].revision == membership_revision
     enabled=await command(client,'enable',proposal=prepared['result']['proposal'],expected_revision=prepared['result']['revision'],
         acknowledge_global=True,acknowledge_current_membership=True)
     assert enabled['success'],enabled

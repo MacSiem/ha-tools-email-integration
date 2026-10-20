@@ -135,6 +135,7 @@ async def _ws_subscribe_analysis_updates(hass, connection, msg):
 
     Revoking feature access must still purge an already mounted view. Actual
     reads retain their own fresh feature and native source authorization.
+    Only separately authorized Reports readers receive a schedule-change reason.
     """
     service = hass.data.get(DOMAIN, {}).get('energy_analysis')
     if await _feature_user(hass, connection) is None:
@@ -146,6 +147,7 @@ async def _ws_subscribe_analysis_updates(hass, connection, msg):
         return
     removers = []
     stopped = False
+    schedule_task = None
 
     @callback
     def unsubscribe():
@@ -153,6 +155,8 @@ async def _ws_subscribe_analysis_updates(hass, connection, msg):
         if stopped:
             return
         stopped = True
+        if schedule_task is not None:
+            schedule_task.cancel()
         for remove in removers:
             remove()
         removers.clear()
@@ -160,15 +164,56 @@ async def _ws_subscribe_analysis_updates(hass, connection, msg):
         # Core owns its subscription dictionary (including close iteration).
         # Keep this idempotent callback there until Core removes it.
 
+    async def schedule_changed():
+        """The reason itself is private Reports metadata; empty invalidation is public."""
+        nonlocal schedule_task
+        payload = {}
+        principal = connection.user
+        try:
+            access = await _feature_authorized(hass, connection, 'energy_reports', 'visible')
+            if access is not None:
+                access = await _feature_authorized(hass, connection, 'energy_reports', 'read', token=access)
+            if access is not None:
+                # Reuse the report reader's configured-source and revision fences.
+                # No Recorder, private schedule/history IO or model calculation.
+                configuration, _period, context = service._capture('day', purpose='report_read')
+                await service._require_access(context, configuration, principal.id, policy_state=access[1])
+                # Private schedule rows already require native admin. The final
+                # fresh admin principal also has native source read permission.
+                user = await _feature_user(hass, connection)
+                service._assert_current(context)
+                storage, state = access
+                if (user is not None and getattr(user, 'is_admin', False) is True
+                        and connection.user is principal
+                        and _feature_context_current(hass, storage, state['revision'])
+                        and all(feature_access_allowed(state['policy'], 'energy_reports', operation,
+                            user_id=principal.id, is_active=user.is_active,
+                            is_admin=getattr(user, 'is_admin', False))
+                            for operation in ('visible', 'read'))):
+                    payload = {'schedules_changed': True}
+        except Exception:
+            # Denial, changed source/policy or unavailable source: reason withheld.
+            pass
+        finally:
+            schedule_task = None
+        if (not stopped and not service._stopped
+                and hass.data.get(DOMAIN, {}).get('energy_analysis') is service):
+            connection.send_event(msg['id'], payload)
+
     @callback
     def changed(_event):
+        nonlocal schedule_task
         if stopped:
             return
         if (service._stopped or
                 hass.data.get(DOMAIN, {}).get('energy_analysis') is not service):
             unsubscribe()
             return
-        # Never forward event.data, identities, policies or entity values.
+        # Never inspect/forward event.data, identities, policies or entity values.
+        if getattr(_event, 'event_type', None) == EVENT_SCHEDULES_CHANGED:
+            if schedule_task is None:
+                schedule_task = hass.async_create_task(schedule_changed())
+            return
         connection.send_event(msg['id'], {})
 
     try:

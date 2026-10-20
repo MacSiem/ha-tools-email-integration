@@ -343,7 +343,12 @@ def _build_report(inputs):
         remainder = None
         issues.append({'code': 'double_counting', 'severity': 'warning', 'data': {}})
     device_cost = _sum((row['cost'] for row in devices), empty=ZERO)
-    remainder_cost = usage - device_cost if partitioned and usage is not None and device_cost is not None and not double_counting else None
+    # A monetary residual needs the same eligible-hour evidence as R4's
+    # quantity residual. Independent device costs can remain valid on their own
+    # mask; subtracting them from a partial grid subtotal is not a valid balance.
+    residual_supported = (partitioned and not double_counting and remainder is not None
+        and all(value is not None for value in residuals))
+    remainder_cost = usage - device_cost if residual_supported and usage is not None and device_cost is not None else None
     unmeasured = {'kwh': remainder, 'share': share(remainder), 'cost': remainder_cost,
         'status': 'double_counting' if double_counting else 'ok' if partitioned and all(value is not None for value in residuals) else 'unknown',
         'tolerance_adjustment_kwh': adjusted,
