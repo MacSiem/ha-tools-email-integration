@@ -2,6 +2,11 @@
 
 ## 2.4.0 (Unreleased)
 
+- Share schema-2 calendar analysis, historical tariff-book versions, measured source/group comparisons and HTML/text/CSV reports across all Energy cards. Reports can be read inside HA without SMTP; email delivery remains an explicit separate action.
+- Add administrator-saved feature policies with separate visibility, read and execution checks, native source permissions and revocation fences. Keep secrets and mail configuration private when sharing analysis.
+- Publish native hourly usage-cost statistics only after explicit consent to their global authenticated-user visibility. Preserve delayed measurements, resumable pending hours, disable/re-enable boundaries and explicit seven-day backfill without replaying unconfirmed imports.
+- Attach stable Energy entities to an unambiguous source meter device, preserving identifiers and customizations. Prefer the active shared tariff book; use the legacy profile only when no book exists or an explicit override is requested. Invalid or inactive books do not silently fall back.
+
 - Add shared light/dark mail surfaces and an explicit preview theme, readable severity badges and values beside chart bars. Keep the complete shared Log caveat once, preserving per-chart omissions and missing/zero explanations.
 - Format generated mail dates and period bounds in Home Assistant’s configured time zone and PL/EN language, with DST offsets and separate technical UTC time. Preserve calendar boundaries, source identities and pricing. Use readable dates in chart labels and comparisons while retaining calendar-day identities and both offsets of repeated hours.
 - Keep source-table energy, cost and share values together on narrow mail clients; let source names wrap to the remaining width.
@@ -10,7 +15,7 @@
 - Price Energy Optimizer 4.0 card histories through the same EnergyTariff engine, including ephemeral card overrides. Bound batch size, CPU work and pending jobs; do not read Recorder or change settings for supplied-history pricing.
 - Refresh shared measurements by exact source/unit/day context and completed absolute hours. Reprice tariff boundaries without redundant Recorder work, stop listeners/timers on unload, and reject late results after reload, authorization or revision changes.
 - Preserve optional explicit cheap/expensive/mixed classification on zones and dynamic intervals. Never infer classification from names, minimum prices or legacy tariff mode.
-- Keep monetary daily cost without a statistics state class; current price remains a measurement in currency/kWh. Add native coverage across the actual minimum, stable and beta Home Assistant versions.
+- Expose daily monetary usage cost as a total with an explicit reset at the measurement-calendar day boundary; current price remains a measurement in currency/kWh. Add native coverage across the actual minimum, stable and beta Home Assistant versions.
 
 ## 2.3.1 (2026-10-16)
 

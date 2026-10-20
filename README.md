@@ -53,6 +53,8 @@ Each configured Email schedule also has its own status sensors, a Send now butto
 
 Energy entities attach to the grid-import meter's device when that device is unambiguous; otherwise they use their own Energy device. Stable entity identifiers and personal names are retained when the source changes. Home Assistant Repairs can guide an administrator to configure a missing grid-import meter or investigate confirmed overlapping device measurements. Missing or partial readings do not count as a successful repair.
 
+The active shared tariff book supplies these entities, including its currency, dated rate versions and explicit zone classification. A legacy profile is used only when no book is configured or an explicit compatible request selects it. An invalid book or missing active tariff leaves prices unavailable. **Cost today** contains measured energy and variable usage charges; it excludes monthly fixed fees. Its monetary total resets at the start of the measurement-calendar day. The current usage price is a separate currency/kWh measurement.
+
 ## Native cost statistics
 
 Open a full Energy card as an administrator and choose **Cost statistics** in its footer. Review the exact sources, currency and gross/net basis, then explicitly enable sharing. The integration adds hourly usage costs from its existing server calculations. The feature is off by default; reading a card does not enable it. The dialog shows automatic-update status and gives an explicit seven-day backfill using current room assignments. Historical room membership is not reconstructed.
