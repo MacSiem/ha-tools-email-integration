@@ -15,6 +15,27 @@ UTC = timezone.utc
 
 
 class Build1ServiceTest(unittest.TestCase):
+    def test_live_rate_is_current_and_cache_expires_at_an_intraminute_rule_boundary(self):
+        async def run():
+            h = Harness(); h.now = datetime(2026,1,11,12,31,tzinfo=UTC)
+            p = h.book['tariffs'][0]['versions'][0]['profile']
+            p['zones'].append({'id':'other','label':'New zone','energyRate':.3,'variableRate':0,'classification':'cheap'})
+            p['rules'] = [{'zone':'other','priority':10,'intervals':[{'from':'12:32','to':'24:00'}]}]
+            async def short(subject,configuration,start,end,guard):
+                await guard()
+                return {'sensor.grid':None,'sensor.device':None}
+            with h.patches(), patch.object(inputs,'async_short_hour',short):
+                first = await h.subject.async_get_build1_model('day','user')
+                self.assertEqual(1,first['report_model']['current']['rate'])
+                self.assertEqual('2026-01-11T12:32:00+00:00',first['report_model']['current']['next_change'])
+                h.now += timedelta(minutes=1)
+                self.assertFalse(h.subject.context_is_current(first))
+                second = await h.subject.async_get_build1_model('day','user')
+                self.assertEqual(.3,second['report_model']['current']['rate'])
+                self.assertEqual('New zone',second['report_model']['current']['label'])
+                self.assertTrue(await h.subject.async_validate_result(second,'user'))
+        asyncio.run(run())
+
     def test_grid_with_solar_keeps_import_but_does_not_price_site_consumers(self):
         async def run():
             h = Harness(); h.now = datetime(2026,1,11,12,tzinfo=UTC)
