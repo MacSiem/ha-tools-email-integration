@@ -82,7 +82,9 @@ class NativePricingServiceTest(unittest.TestCase):
                 h.permissions.check_entity = lambda sid, _: sid in ('sensor.grid','sensor.device')
             h.on_native = revoke
             with h.native_patches():
-                with self.assertRaises(RuntimeError):
+                # The union fence can reject immediately as authorization denial,
+                # before the older changed-optional-access context check.
+                with self.assertRaises((PermissionError, RuntimeError)):
                     await h.subject.async_get_analysis('day', 'user')
                 self.assertIsNone(h.subject._cache)
         asyncio.run(run())
