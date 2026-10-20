@@ -56,6 +56,25 @@ class Mail136Test(unittest.TestCase):
             self.assertIn('80%', output)
             self.assertIn('Missing measurement', output)
 
+    def test_new_style_spec_formats_readable_numbers_without_changing_csv(self):
+        self.s['totals'].update(kwh='12345.6789', total_cost='98765.4321')
+        self.s['comparisons']['previous'].update(delta_kwh='12.3456', percent='7.56')
+        before = copy.deepcopy(self.s)
+        for language, energy, money, delta in (('pl', '12\u00a0345,7', '98\u00a0765,43', '+12,3 kWh'),
+                                               ('en', '12,345.7', '98,765.43', '+12.3 kWh')):
+            with self.subTest(language=language):
+                result = fixture.REPORT.render_energy_analysis(self.s, language=language,
+                    timezone_name='Europe/Warsaw', hour_cycle='24')
+                visible = fixture.ReportDOM(result['html']).root.text()
+                for output in (visible, result['text']):
+                    for value in (energy, money, delta, '+8%'):
+                        self.assertIn(value, output)
+                    self.assertNotIn('+7.6%', output)
+                rows = {row['field']: row for row in fixture.csv.DictReader(fixture.StringIO(result['csv']))}
+                self.assertEqual('12345,6789' if language == 'pl' else '12345.6789', rows['totals.kwh']['value'])
+                self.assertEqual('98765,4321' if language == 'pl' else '98765.4321', rows['totals.total_cost']['value'])
+                self.assertEqual(before, self.s)
+
     def test_mail136_kpi_uses_full_producer_comparison_and_effective_price(self):
         self.s = json.loads((fixture.ROOT / 'tests/fixtures/energy-report-schema2-v53.json').read_text())
         c = self.s['comparisons']['previous']
