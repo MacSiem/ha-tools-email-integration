@@ -386,6 +386,24 @@ class EnergyReportTest(unittest.TestCase):
         self.assertNotIn('unclassified amount', result['html'])
 
 
+    def test_kpi_labels_and_notes_keep_primary_foreground_for_client_dark_recoloring(self):
+        # Outlook Android recolors the light KPI background to rgb(72,77,84).
+        # Its muted #536274 foreground became rgb(142,157,177): only 3.09:1.
+        # The primary foreground retains 5.81:1 in that actual client. Keep
+        # labels/notes distinct by size rather than the failing muted color.
+        import re
+        for language in ('pl', 'en'):
+            html = self.render(language=language)['html']
+            light_css = html.split('@media', 1)[0]
+            rules = dict(re.findall(r'([^{}]+)\{([^{}]*)\}', light_css))
+            for selector in ('.kpi-label', '.note'):
+                with self.subTest(language=language, selector=selector):
+                    self.assertIn('color:#202a38', rules[selector])
+                    self.assertIn('font-size:12px', rules[selector])
+            dom = ReportDOM(html).root
+            self.assertEqual(3, len(dom.find(data_role='kpi-label')))
+            self.assertTrue(dom.find(**{'class': 'note'}))
+
     def test_compact_kpi_group_contains_three_cards_without_metadata_rows(self):
         report = self.render()
         dom = ReportDOM(report['html']).root
