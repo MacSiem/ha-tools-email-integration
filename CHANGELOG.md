@@ -2,6 +2,8 @@
 
 ## 2.4.0 (Unreleased)
 
+- Read the import cost already recorded by HA Energy when no tariff book exists, with explicit currency and source-hour coverage. Return the same native fact in analysis and HTML/text/CSV reports; keep current price observations separate from history and components/fixed fees unknown. Recheck the complete published source set after native IO, including cached responses.
+
 - Share schema-2 calendar analysis, historical tariff-book versions, measured source/group comparisons and HTML/text/CSV reports across all Energy cards. Reports can be read inside HA without SMTP; email delivery remains an explicit separate action.
 - Add administrator-saved feature policies with separate visibility, read and execution checks, native source permissions and revocation fences. Keep secrets and mail configuration private when sharing analysis.
 - Publish native hourly usage-cost statistics only after explicit consent to their global authenticated-user visibility. Preserve delayed measurements, resumable pending hours, disable/re-enable boundaries and explicit seven-day backfill without replaying unconfirmed imports.
