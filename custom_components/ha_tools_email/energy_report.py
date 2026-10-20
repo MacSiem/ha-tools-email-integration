@@ -206,7 +206,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                 number = Decimal(str(value))
                 if number.is_finite():
                     result = format(number, 'f')
-                    return localized_number(result), True
+                    return result.replace('.', ',') if pl else result, True
             except InvalidOperation:
                 pass
         return str(value), False
