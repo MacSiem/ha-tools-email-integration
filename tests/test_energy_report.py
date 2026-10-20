@@ -134,7 +134,7 @@ class EnergyReportTest(unittest.TestCase):
         self.assertIn('same measurements', result['text'])
         self.assertIn('does not activate', result['text'])
 
-    def test_zero_unknown_negative_and_unrounded_decimal_are_distinct_all_formats(self):
+    def test_zero_unknown_negative_remain_distinct_and_csv_keeps_unrounded_decimal(self):
         self.snapshot['totals'].update(energy_cost='0.00', variable_cost=None,
             total_cost='-123456789012345678901234567890.123400', effective_price='1E-20')
         result = self.render()
@@ -144,8 +144,9 @@ class EnergyReportTest(unittest.TestCase):
             'totals.effective_price': '0.00000000000000000001'}
         for field, value in literals.items():
             self.assertEqual(value, rows[field]['value'])
-            self.assertIn(value, result['html'])
-            self.assertIn(value, result['text'])
+        for shown in ('0.00', 'Unknown', '-123456789012345678901234567890.12', '<0.01'):
+            self.assertIn(shown, ' '.join(Markup(result['html']).cells))
+            self.assertIn(shown, result['text'])
         # Valid negative numeric data remains numeric in spreadsheet exports.
         self.assertFalse(rows['totals.total_cost']['value'].startswith("'"))
 
@@ -269,7 +270,7 @@ class EnergyReportTest(unittest.TestCase):
         result=self.render(language='pl');rows=self.rows(result)
         self.assertEqual('-0,1250',rows['totals.kwh']['value'])
         self.assertEqual('EUR/miesiąc',rows['rates.0.legacy_combined_monthly']['unit'])
-        self.assertIn('-0,1250',result['text']);self.assertIn('-0,1250',result['html'])
+        self.assertIn('-0,13',result['text']);self.assertIn('-0,13',result['html'])
         self.assertFalse(rows['totals.kwh']['value'].startswith("'"))
 
     def test_readable_report_hides_implementation_paths_while_csv_keeps_source_columns(self):
@@ -315,8 +316,9 @@ class EnergyReportTest(unittest.TestCase):
                       'groups.devices.sensor.device.kwh', 'groups.unmeasured.kwh',
                       'fees.components.subscription', 'rates.0.fixed_monthly.subscription'):
             row = rows[field]
-            self.assertIn(row['value'], Markup(result['html']).cells)
-            self.assertIn(row['value'], result['text'])
+            shown = '31.00' if field == 'rates.0.fixed_monthly.subscription' else row['value']
+            self.assertIn(shown, Markup(result['html']).cells)
+            self.assertIn(shown, result['text'])
 
     def test_date_language_is_independent_of_ui_language_and_calendar_timezone(self):
         for language, date_language, heading, day, number in (
@@ -364,7 +366,8 @@ class EnergyReportTest(unittest.TestCase):
         result = self.render()
         self.assertIn('&lt;Night&gt;', result['html'])
         self.assertIn('<Night>', result['text'])
-        self.assertIn('9.9900', Markup(result['html']).cells)
+        self.assertIn('9.99', Markup(result['html']).cells)
+        self.assertEqual('9.9900', self.rows(result)['chart.bins.0.zone_breakdown.zones.0.usage_cost']['value'])
         self.assertEqual('PLN', self.rows(result)['chart.bins.0.zone_breakdown.zones.0.usage_cost']['unit'])
         self.assertIn('No published period share', result['text'])
         self.assertNotIn('class="bar-fill cheap"', result['html'])
@@ -527,9 +530,10 @@ class EnergyReportTest(unittest.TestCase):
         negative, = timeline.find(data_bin='0')
         bar, = negative.find(data_role='bar')
         self.assertEqual('0%', bar.attrs['height'])
-        self.assertIn('-0.0000123400', report['text'])
+        self.assertIn('>−0.01', report['text'])
+        self.assertEqual('-0.0000123400', self.rows(report)['chart.bins.0.kwh']['value'])
         values, = dom.find(data_section='measurement-values')
-        self.assertIn('-0.0000123400', values.text())
+        self.assertIn('>−0.01', values.text())
 
     def test_partial_zone_known_costs_and_unattributed_are_readable_without_invented_full_cost(self):
         self.snapshot['chart']['bins'][0]['zone_breakdown'] = {
@@ -556,11 +560,11 @@ class EnergyReportTest(unittest.TestCase):
         compared['costs']['delta_cost'] = '13.37'
         compared['costs']['delta_total_cost'] = '-2.46'
         result = self.render()
-        self.assertIn('+17.2500 kWh', Markup(result['html']).cells)
+        self.assertIn('+17.25 kWh', Markup(result['html']).cells)
         self.assertIn('+13.37', Markup(result['html']).cells)
         self.assertIn('-2.46', Markup(result['html']).cells)
-        self.assertIn('+7.125', Markup(result['html']).cells)
-        self.assertIn('+17.2500 kWh', result['text'])
+        self.assertIn('+7.1', Markup(result['html']).cells)
+        self.assertIn('+17.25 kWh', result['text'])
         rows = self.rows(result)
         self.assertEqual('17.2500', rows['comparisons.previous.delta_kwh']['value'])
         self.assertEqual('13.37', rows['comparisons.previous.costs.delta_cost']['value'])

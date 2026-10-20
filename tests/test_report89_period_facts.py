@@ -127,14 +127,15 @@ class Report89PeriodFactsTests(unittest.TestCase):
         self.assertIn('Unmeasured',floors)
         self.assertEqual(1,devices.count('QA80 Office'))
 
-    def test_compact_main_ranking_retains_exact_html_details_plain_text_and_csv(self):
+    def test_compact_main_and_detail_rankings_keep_exact_source_only_in_csv(self):
         value=self.fixture();before=deepcopy(value)
         for language,raw in [('en','49.9999999999995450'),('pl','49,9999999999995450')]:
             result=self.render(value,language)
             main=self.section(result,'device-ranking').text()
             self.assertIn('50',main);self.assertIn('200',main);self.assertNotIn(raw,main)
-            self.assertIn(raw,self.section(result,'ranking-values').text())
-            self.assertIn(raw,result['text'])
+            self.assertNotIn(raw,self.section(result,'ranking-values').text())
+            self.assertIn('50.0' if language=='en' else '50,0', self.section(result,'ranking-values').text())
+            self.assertNotIn(raw,result['text'])
             rows={r['field']:r for r in csv.DictReader(StringIO(result['csv']))}
             self.assertEqual(raw,rows['groups.devices.sensor.device.kwh']['value'])
             self.assertEqual(before['snapshot_id'],result['snapshot_id'])
@@ -146,7 +147,9 @@ class Report89PeriodFactsTests(unittest.TestCase):
         item.update(attribution='parent_residual',measured_kwh='99',kwh='49.9999999999995450')
         result=self.render(value)
         self.assertNotIn('99',[node.text() for node in self.section(result,'device-ranking').find() if node.tag=='td'])
-        self.assertIn('49.9999999999995450',self.section(result,'ranking-values').text())
+        self.assertIn('50.0',self.section(result,'ranking-values').text())
+        rows={r['field']:r for r in csv.DictReader(StringIO(result['csv']))}
+        self.assertEqual('49.9999999999995450',rows['groups.devices.sensor.device.kwh']['value'])
 
     def test_unknown_small_and_negative_rank_values_remain_distinct_and_labels_are_escaped(self):
         for quantity,expected in [(None,'Unknown'),('0','0'),('0.00001','0.00001'),('-0.00001','-0.00001')]:

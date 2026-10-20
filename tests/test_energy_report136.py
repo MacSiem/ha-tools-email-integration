@@ -23,7 +23,7 @@ class Mail136Test(unittest.TestCase):
         c.update(delta_kwh='12.3456', percent='5.4321')
         result = self.render()
         kpis = self.section(result, 'kpis').text()
-        for value in ('Previous period', '+12.3456 kWh', '+5.4321%', 'Effective price', '1.00 EUR/kWh'):
+        for value in ('Previous period', '+12.35 kWh', '+5.4%', 'Effective price', '1.00 EUR/kWh'):
             self.assertIn(value, kpis)
             self.assertIn(value, result['text'])
 
@@ -138,7 +138,7 @@ class Mail136Test(unittest.TestCase):
         self.assertIn('Decrease -123.45 kWh', kpis)
         self.assertNotIn('Previous period', kpis)
 
-    def test_mail137_visual_flow_labels_are_brief_but_text_and_csv_keep_exact_producer_values(self):
+    def test_mail137_all_mail_values_are_brief_and_csv_keeps_exact_producer_values(self):
         device = next(iter(self.s['groups']['devices'].values()))
         raw_device, raw_residual = '49.9999999999995450', '200.0000000000004550'
         device.update(kwh=raw_device, recorded_kwh=raw_device)
@@ -149,7 +149,7 @@ class Mail136Test(unittest.TestCase):
         self.assertIn('200 kWh', visual)
         for raw in (raw_device, raw_residual):
             self.assertNotIn(raw, visual)
-            self.assertIn(raw, result['text'])
+            self.assertNotIn(raw, result['text'])
             self.assertIn(raw, result['csv'])
 
     def test_mail137_flow_swatch_width_is_an_explicit_column_not_an_equal_table_share(self):
