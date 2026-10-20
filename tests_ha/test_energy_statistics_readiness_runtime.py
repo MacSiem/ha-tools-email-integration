@@ -52,6 +52,21 @@ async def test_real_hour_compile_after_boundary_or_next_hour_is_automatically_re
             raise
 
     monkeypatch.setattr(EnergyStatisticsPublisher, 'async_prepare', observe_prepare)
+    runtime_observations = []
+    real_runtime = EnergyStatisticsPublisher.async_refresh_runtime
+
+    async def observe_runtime(self, actor, **kwargs):
+        at = kwargs['now'].isoformat()
+        try:
+            result = await real_runtime(self, actor, **kwargs)
+            runtime_observations.append((at, result))
+            return result
+        except Exception as error:
+            runtime_observations.append((at, type(error).__name__, str(error)))
+            raise
+
+    monkeypatch.setattr(EnergyStatisticsPublisher, 'async_refresh_runtime', observe_runtime)
+
     await hass.config.async_set_time_zone('UTC')
     entry,storage=await _setup(hass)
     await storage.async_save_tariff_book(migrate_tariff_v1(profile(),legacy_combined=False),expected_revision=0)
@@ -118,6 +133,7 @@ async def test_real_hour_compile_after_boundary_or_next_hour_is_automatically_re
         freezer.move_to(datetime.now(UTC)+timedelta(seconds=15))
         async_fire_time_changed(hass,datetime.now(UTC))
         await hass.async_block_till_done();await drain(runtime)
+    assert publisher._state['runtime']['last_end'] is not None, (runtime_observations, publisher._state['runtime'], publisher._state['pending'], runtime._paused, runtime._retry_after)
     sid=next(sid for sid,row in publisher._state['series'].items() if row['identity']['kind']=='area')
     result=await recorder_mock.async_add_executor_job(partial(statistics_during_period,
         hass,END-timedelta(hours=1),END,{sid},'hour',None,{'sum','change'}))
