@@ -380,6 +380,7 @@ def entity_modules():
     sensor.SensorStateClass = types.SimpleNamespace(MEASUREMENT='measurement', TOTAL='total')
     binary = types.ModuleType('homeassistant.components.binary_sensor')
     binary.BinarySensorEntity = BinarySensorEntity
+    binary.BinarySensorDeviceClass = types.SimpleNamespace(PROBLEM='problem')
     modules = [entity, registry, sensor, binary]
     with patch.dict(sys.modules, {m.__name__: m for m in modules}):
         loaded = []
