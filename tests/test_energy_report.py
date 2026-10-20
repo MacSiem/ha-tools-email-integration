@@ -386,6 +386,53 @@ class EnergyReportTest(unittest.TestCase):
         self.assertNotIn('unclassified amount', result['html'])
 
 
+    def test_lower_mail_tables_use_bounded_precision_and_keep_exact_csv(self):
+        values = {
+            'chart.bins.0.kwh': '1.234567891234567',
+            'chart.bins.0.recorded_kwh': '1.234567891234567',
+            'chart.bins.0.usage_cost': '12.345678901234567',
+            'rates.0.profile.zones.0.energyRate': '0.123456789012345',
+            'fees.days.0.day_fraction': '0.123456789012345',
+            'groups.devices.sensor.device.kwh': '48.123456789012345',
+        }
+        item = self.snapshot['chart']['bins'][0]
+        item.update(kwh=values['chart.bins.0.kwh'], recorded_kwh=values['chart.bins.0.recorded_kwh'],
+                    usage_cost=values['chart.bins.0.usage_cost'])
+        self.snapshot['rates'][0]['profile']['zones'][0]['energyRate'] = values['rates.0.profile.zones.0.energyRate']
+        self.snapshot['fees']['days'][0]['day_fraction'] = values['fees.days.0.day_fraction']
+        self.snapshot['groups']['devices']['sensor.device']['kwh'] = values['groups.devices.sensor.device.kwh']
+        before = copy.deepcopy(self.snapshot)
+        for language in ('pl', 'en'):
+            result = self.render(language=language)
+            text = ' '.join(Markup(result['html']).cells)
+            separator = ',' if language == 'pl' else '.'
+            for raw in values.values():
+                self.assertNotIn(raw.replace('.', separator), text)
+            for short in ('1.23', '12.35', '0.1235', '0.12', '48.12'):
+                self.assertIn(short.replace('.', separator), text)
+            rows = self.rows(result)
+            for field, raw in values.items():
+                self.assertEqual(raw.replace('.', separator), rows[field]['value'])
+            self.assertEqual(before, self.snapshot)
+
+    def test_lower_mail_tiny_nonzero_values_are_not_presented_as_zero(self):
+        self.snapshot['chart']['bins'][0].update(kwh='0.000000123456', usage_cost='0.000000987654')
+        self.snapshot['rates'][0]['profile']['zones'][0]['energyRate'] = '0.000000123456'
+        for language in ('pl', 'en'):
+            result = self.render(language=language)
+            text = ' '.join(Markup(result['html']).cells)
+            separator = ',' if language == 'pl' else '.'
+            self.assertIn(('<0.01').replace('.', separator), text)
+            self.assertIn(('<0.0001').replace('.', separator), text)
+            rows = self.rows(result)
+            self.assertEqual('0.000000123456'.replace('.', separator), rows['chart.bins.0.kwh']['value'])
+
+    def test_mobile_kpis_keep_the_three_column_mockup_group(self):
+        html = self.render()['html']
+        self.assertNotIn('.kpi-card{display:block;width:100%', html)
+        cards = ReportDOM(html).root.find(**{'class': 'kpi-card'})
+        self.assertEqual(3, len(cards))
+
     def test_kpi_labels_and_notes_keep_primary_foreground_for_client_dark_recoloring(self):
         # Outlook Android recolors the light KPI background to rgb(72,77,84).
         # Its muted #536274 foreground became rgb(142,157,177): only 3.09:1.
