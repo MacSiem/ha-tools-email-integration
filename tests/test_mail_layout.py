@@ -8,8 +8,9 @@ from tests.test_composer import composer as c
 from tests.test_energy_comparison import snapshot
 
 class Node:
-    def __init__(self,tag,parent=None,text=''):
+    def __init__(self,tag,parent=None,text='',attrs=()):
         self.tag,self.parent,self.text=tag,parent,text
+        self.attrs=dict(attrs)
     def inside(self,ancestor):
         current=self
         while current:
@@ -21,7 +22,7 @@ class Document(HTMLParser):
     def __init__(self,html):
         super().__init__(convert_charrefs=True);self.root=Node('document');self.stack=[self.root];self.nodes=[];self.feed(html)
     def handle_starttag(self,tag,attrs):
-        node=Node(tag,self.stack[-1]);self.nodes.append(node)
+        node=Node(tag,self.stack[-1],attrs=attrs);self.nodes.append(node)
         if tag not in {'br','hr','meta','link','img','input','wbr'}:self.stack.append(node)
     def handle_endtag(self,tag):
         for i in range(len(self.stack)-1,0,-1):
@@ -48,9 +49,28 @@ class MailLayoutTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(n.inside(column) for n in text))
         ending=('Alternatywy: te same pomiary; raport nie aktywuje taryfy.' if polish else
                 'Alternatives use the same measurements; this report does not activate a tariff.')
-        self.assertEqual(ending,text[-1].text)
+        from tests.helper_composer_schema2 import csv_facts
+        footers=[n for n in doc.nodes if n.attrs.get('data-section')=='report-footer']
+        self.assertEqual(1,len(footers))
+        footer=footers[0]
+        self.assertTrue(footer.inside(column))
+        self.assertEqual(payload['snapshot_id'],footer.attrs.get('data-snapshot-id'))
+        self.assertEqual(1,sum(n.attrs.get('data-snapshot-id')==payload['snapshot_id'] for n in doc.nodes))
+        self.assertFalse(any(n.text==payload['snapshot_id'] for n in text))
         self.assertEqual(1,sum(n.text==ending for n in text))
-        self.assertEqual(1,sum(n.text==payload['snapshot_id'] for n in text))
+        self.assertTrue(next(n for n in text if n.text==ending).inside(footer))
+        generated=('Wygenerowano: ' if polish else 'Generated: ')+csv_facts(payload)['generated_at']
+        self.assertEqual(generated,text[-1].text)
+        self.assertTrue(text[-1].inside(footer))
+        self.assertEqual(1,sum(n.text==generated for n in text))
+        status=[n for n in doc.nodes if n.attrs.get('data-section')=='report-status']
+        self.assertEqual(1,len(status))
+        self.assertTrue(status[0].inside(column))
+        facts=csv_facts(payload)
+        status_text=[n.text for n in text if n.inside(status[0])]
+        self.assertIn(facts['period.start'],status_text)
+        self.assertIn(facts['period.end'],status_text)
+        self.assertLess(doc.nodes.index(status[0]),doc.nodes.index(footer))
         self.assertFalse(any(n.tag in {'script','img','iframe'} for n in doc.nodes))
 
     async def test_energy_builder_keeps_its_charts_before_footer_in_same_column(self):
@@ -76,7 +96,8 @@ class MailLayoutTest(unittest.IsolatedAsyncioTestCase):
         self.assert_schema2_coherent(p)
         self.assertIn('Selected comparisons',p['html'])
         self.assertIn('data-section="measurement-values"',p['html'])
-        self.assertIn('data-section="source-times"',p['html'])
+        doc=Document(p['html'])
+        self.assertEqual(1,sum(n.attrs.get('data-section')=='report-status' for n in doc.nodes))
         self.assertEqual(Decimal('24'),Decimal(p['summary']['total_kwh']))
         self.assertEqual(Decimal('12'),Decimal(csv_facts(p)['comparisons.previous.baseline_kwh']))
         self.assertLess(p['html'].index('Selected comparisons'),p['html'].index(p['snapshot_id']))

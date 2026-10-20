@@ -95,9 +95,64 @@ class FriendlyEnergyMailDatesTest(unittest.TestCase):
                 prefix='25 paź 2026' if language=='pl' else 'Oct 25, 2026'
                 self.assertEqual(prefix+' 02:00:00 +0200 [Europe/Warsaw]',first)
                 self.assertEqual(prefix+' 02:00:00 +0100 [Europe/Warsaw]',second)
+                self.assertEqual([first,second,prefix+' 03:00:00 +0100 [Europe/Warsaw]'],
+                    [values[f'chart.bins.{i}.from'] for i in range(3)])
                 for field in ('body','html'):
-                    self.assertIn(first,unescape(payload[field]))
-                    self.assertIn(second,unescape(payload[field]))
+                    self.assertIn('02:00 +0200',unescape(payload[field]))
+                    self.assertIn('02:00 +0100',unescape(payload[field]))
+                from tests.helper_composer_schema2 import renderer
+                from tests.test_mail_layout import Document
+                # Short clocks distinguish the actual instants in both clock
+                # modes; full dates, seconds and zone audit remain in CSV.
+                for cycle,clock,ordinary in (('24','02:00','03:00'),('12','02:00 AM','03:00 AM')):
+                    rendered=renderer.render_energy_analysis(snapshot,language=language,
+                        timezone_name='Europe/Warsaw',hour_cycle=cycle)
+                    for field in ('text','html'):
+                        visible=unescape(rendered[field])
+                        self.assertIn(clock+' +0200',visible)
+                        self.assertIn(clock+' +0100',visible)
+                    doc=Document(rendered['html'])
+                    measurements=[n for n in doc.nodes if n.tag=='tr'
+                        and n.attrs.get('data-role')=='measurement']
+                    clocks=[next(n.text for n in doc.nodes if n.tag=='#text' and n.inside(row))
+                            for row in measurements]
+                    self.assertEqual([clock+' +0200',clock+' +0100',ordinary],clocks)
+
+    def test_missing_value_and_currency_show_one_unknown_without_changing_csv_facts(self):
+        import csv
+        from io import StringIO
+        from tests.helper_composer_schema2 import renderer
+        from tests.test_mail_layout import Document
+        start=datetime(2026,10,10,tzinfo=UTC)
+        for language,unknown,caption in (('pl','Brak danych','Koszt okresu'),
+                                         ('en','Unknown','Period cost')):
+            with self.subTest(language=language):
+                payload=self.compose(start,start+timedelta(hours=3),language=language,
+                    display='Europe/Warsaw',report='UTC',cadence='daily')
+                snapshot=copy.deepcopy(self.last_fixture.snapshot)
+                self.assertIsNone(snapshot['totals']['total_cost'])
+                self.assertIsNone(snapshot['totals']['currency'])
+                before=copy.deepcopy(snapshot)
+                rendered=renderer.render_energy_analysis(snapshot,language=language,
+                    timezone_name='Europe/Warsaw',hour_cycle='24')
+                self.assertIn(caption+': '+unknown+'\n',rendered['text'])
+                doc=Document(rendered['html'])
+                self.assertNotIn(unknown+' '+unknown,rendered['text'])
+                # Check individual value cells, not adjacent independent KPIs.
+                cells=[n for n in doc.nodes if n.tag=='td' and not any(
+                    child is not n and child.tag=='td' and child.inside(n) for child in doc.nodes)]
+                for cell in cells:
+                    visible=' '.join(n.text for n in doc.nodes if n.tag=='#text' and n.inside(cell))
+                    self.assertNotIn(unknown+' '+unknown,visible)
+                facts={r['field']:r for r in csv.DictReader(StringIO(rendered['csv']))}
+                self.assertEqual((unknown,unknown),
+                    (facts['totals.total_cost']['value'],facts['totals.total_cost']['unit']))
+                self.assertEqual(before,snapshot)
+                # A known currency remains useful beside a missing amount.
+                snapshot['totals']['currency']='PLN'
+                known=renderer.render_energy_analysis(snapshot,language=language,
+                    timezone_name='Europe/Warsaw',hour_cycle='24')
+                self.assertIn(caption+': '+unknown+(' zł' if language=='pl' else ' PLN')+'\n',known['text'])
 
     def test_zero_missing_days_and_date_shaped_categories_keep_their_values(self):
         from decimal import Decimal

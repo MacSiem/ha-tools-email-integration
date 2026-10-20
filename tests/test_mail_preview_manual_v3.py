@@ -148,7 +148,7 @@ class MailPreviewManualTests(unittest.IsolatedAsyncioTestCase):
                             self.assertIn('<!doctype html>', mail['html'])
                             if kind == 'energy_report':
                                 self.assertIn('data-section="period"', mail['html'])
-                                self.assertIn('O raporcie' if language.startswith('pl') else 'About this report', mail['html'])
+                                self.assertIn('Źródło i jakość danych' if language.startswith('pl') else 'Source and data quality', mail['html'])
                                 self.assertIn('Okres raportu:' if language.startswith('pl') else 'Report period:', mail['body'])
                             else:
                                 self.assertIn('Okres raportu:' if language.startswith('pl') else 'Report period:', mail['html'])
