@@ -16,7 +16,7 @@ from uuid import uuid4
 
 from .analysis_periods import resolve_analysis_periods
 from .report_window import ReportWindow
-from .report_actor import _ScheduleActor
+from .report_actor import _ScheduleActor, _AutomationActor
 from .feature_access import validate_feature_access
 from .energy_patterns_periods import resolve_patterns_window
 from .analysis_provider import (capture_energy_configuration,
@@ -250,11 +250,17 @@ class EnergyAnalysisService:
         actor.check()
         return actor
 
+    def _automation_actor(self):
+        actor = _AutomationActor(self)
+        actor.check()
+        return actor
+
     @staticmethod
     def _actor_signature(actor):
-        if type(actor) is _ScheduleActor:
+        if type(actor) in (_ScheduleActor, _AutomationActor):
             actor.check()
-            return _digest({'schedule_capability': actor.token})
+            key = 'schedule_capability' if type(actor) is _ScheduleActor else 'automation_capability'
+            return _digest({key: actor.token})
         if type(actor) is not str or not actor or len(actor) > 128:
             raise PermissionError('energy_report_actor_required')
         return _digest({'authenticated_user': actor})
@@ -397,6 +403,7 @@ class EnergyAnalysisService:
         return list({row['entity_id']: row for row in rows}.values())
 
     async def _require_access(self, context, configuration, user_id, *, policy_state=None):
+        principal = user_id  # Signature binds the capability, not its resolved author.
         state = policy_state if policy_state is not None else await self.storage.async_get_feature_access()
         self._assert_current(context)
         if state['revision'] != context['feature_access_revision']:
@@ -413,11 +420,12 @@ class EnergyAnalysisService:
         if context.get('request_kind') == 'report_window':
             if context['actor_signature'] != self._actor_signature(user_id):
                 raise PermissionError('energy_report_actor_mismatch')
-            if type(user_id) is _ScheduleActor:
+            if type(user_id) in (_ScheduleActor, _AutomationActor):
                 if user_id.service is not self or context['access_purpose'] != 'report_execute':
                     raise PermissionError('energy_report_actor_mismatch')
                 user_id.check()
-                author = user_id.schedule.get('author_user_id')
+                author = (user_id.schedule.get('author_user_id')
+                          if type(user_id) is _ScheduleActor else None)
                 if author is None:
                     # Explicit server principal, not individual native entity access.
                     # Only validated legacy admin defaults permit authorless automation.
@@ -434,7 +442,7 @@ class EnergyAnalysisService:
                 if user is None or not user.is_active or not user.is_admin:
                     raise PermissionError('energy_report_admin_required')
                 self._assert_current(context)
-        if context.get('report_model') and context.get('actor_signature') != self._actor_signature(user_id):
+        if context.get('report_model') and context.get('actor_signature') != self._actor_signature(principal):
             raise PermissionError('energy_report_actor_mismatch')
         ids = [row['entity_id'] for row in self._sensors(configuration)]
         feature, operation = _ACCESS_PURPOSES[context['access_purpose']]

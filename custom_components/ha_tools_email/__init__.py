@@ -404,17 +404,24 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         # HA supplies this identity; action data cannot inject an actor.
         actor = call.context.user_id
         if not actor:
-            raise ServiceValidationError('Authenticated report actor required')
+            service = hass.data[DOMAIN].get('energy_analysis')
+            if service is None:
+                raise ServiceValidationError('energy_analysis_not_ready')
+            actor = service._automation_actor()
         result = await async_send_now(hass,kind='energy_report',
             cadence=call.data.get('cadence','daily'),actor=actor,
             channels=normalize_channels(call.data.get('targets')),
-            period_mode='calendar',report_timezone=hass.config.time_zone)
-        return {'result':result['status'],'channel':result['channel'],
+            period_mode='calendar',report_timezone=hass.config.time_zone,
+            **({'date':call.data['date']} if 'date' in call.data else {}))
+        from datetime import datetime, timezone
+        return {'at':datetime.now(timezone.utc).isoformat(),
+                'result':result['status'],'channel':result['channel'],
                 'attempt_id':result['attempt_id']}
 
     _register_admin_response_service(hass,DOMAIN,'send_energy_report',handle_send_energy_report,
         schema=vol.Schema({vol.Optional('cadence',default='daily'):vol.In(['daily','weekly','monthly']),
-            vol.Optional('targets'):[cv.string]}),supports_response=SupportsResponse.OPTIONAL)
+            vol.Optional('targets'):[cv.string],
+            vol.Optional('date'):cv.string}),supports_response=SupportsResponse.OPTIONAL)
 
     # Register services
     async_register_admin_service(

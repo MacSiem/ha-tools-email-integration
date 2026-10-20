@@ -354,6 +354,34 @@ async def async_send_schedule(
     )
 
 
+def resolve_energy_date_window(cadence, selected_date, now, timezone_name):
+    """Select an actual completed calendar window containing an ISO local date.
+
+    Keep the real server clock for validation and transport/history. This helper
+    never changes HA configuration or uses the selected date as a fake clock.
+    """
+    if type(selected_date) is not str or len(selected_date) != 10:
+        raise ValueError('invalid_energy_report_date')
+    try:
+        if date.fromisoformat(selected_date).isoformat() != selected_date:
+            raise ValueError('invalid_energy_report_date')
+    except ValueError:
+        raise ValueError('invalid_energy_report_date') from None
+    kind = {'daily': 'day', 'weekly': 'week', 'monthly': 'month'}.get(cadence)
+    if kind is None:
+        raise ValueError('unsupported_energy_report_cadence')
+    from .analysis_periods import resolve_analysis_periods
+    resolved = resolve_analysis_periods(kind, now, timezone_name, anchor=selected_date)
+    period = resolved.get('current') or {}
+    if resolved.get('status') != 'ready' or period.get('partial') is not False:
+        raise ValueError(resolved.get('reason') or 'energy_report_date_not_completed')
+    from .report_window import resolve_report_window
+    bounds = tuple(datetime.fromisoformat(period[key]) for key in ('start', 'end'))
+    request = resolve_report_window(cadence, now, timezone_name, mode='calendar', bounds=bounds)
+    return {'report_window': bounds, 'report_timezone': timezone_name,
+            'period_semantics': request.semantics}
+
+
 async def async_send_now(
     hass: Any,
     *,
@@ -368,12 +396,20 @@ async def async_send_now(
     before_send=None,
     attempt_schedule_id=None,
     channels=None,
+    date=None,
 ) -> dict[str, Any]:
     """Compose and send a report immediately."""
     bucket = hass.data[DOMAIN]
     now = datetime.now(timezone.utc)
     options = {}
-    if period_mode is not None:
+    if date is not None:
+        if kind != KIND_ENERGY_REPORT or period_mode != 'calendar':
+            raise ValueError('date_requires_calendar_energy_report')
+        zone = hass.config.time_zone
+        if report_timezone is not None and report_timezone != zone:
+            raise ValueError('dated_energy_report_uses_ha_timezone')
+        options = resolve_energy_date_window(cadence, date, now, zone)
+    elif period_mode is not None:
         options = await async_resolve_manual_period(hass, kind=kind, cadence=cadence,
             now=now, period_mode=period_mode, report_timezone=report_timezone)
     elif report_timezone is not None:

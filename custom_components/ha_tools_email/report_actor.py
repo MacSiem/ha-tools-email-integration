@@ -32,3 +32,31 @@ class _ScheduleActor:
         author=self.schedule.get('author_user_id')
         if author is not None and (type(author) is not str or not author or len(author)>128):
             raise PermissionError('energy_schedule_author_required')
+
+
+class _AutomationActor:
+    """Ephemeral trusted HA action principal, never a persisted fake schedule.
+
+    Only the registered service handler mints this capability when HA supplies
+    no user identity. It cannot be supplied through serializable action data.
+    """
+    __slots__ = ('service', 'storage', 'generation', 'token')
+
+    def __init__(self, service):
+        self.service = service
+        self.storage = service.storage
+        self.generation = service.hass.data.get('ha_tools_email', {}).get('schedule_generation', 0)
+        self.token = uuid4().hex
+
+    def __reduce__(self):
+        raise TypeError('private_automation_actor')
+
+    def __repr__(self):
+        return '<private automation actor>'
+
+    def check(self):
+        self.service._check_running()
+        bucket = self.service.hass.data.get('ha_tools_email', {})
+        if (self.storage is not self.service.storage or
+                bucket.get('schedule_generation', 0) != self.generation):
+            raise RuntimeError('automation_actor_expired')

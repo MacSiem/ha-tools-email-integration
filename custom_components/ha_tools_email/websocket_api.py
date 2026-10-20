@@ -995,6 +995,7 @@ async def _ws_set_schedule(
         vol.Required("cadence"): vol.In(sorted(VALID_CADENCES)),
         vol.Optional("recipients", default=[]): vol.Any([str], str),
         vol.Optional("report_preferences"): dict,
+        vol.Optional("channels"): [str],
         vol.Optional("period_mode"): vol.In(["rolling", "calendar"]),
         vol.Optional("timezone"): str,
         vol.Optional("max_entries"): vol.All(int, vol.Range(min=1, max=1000)),
@@ -1012,11 +1013,18 @@ async def _ws_send_now(
     if isinstance(recipients, str):
         recipients = [item.strip() for item in recipients.split(",") if item.strip()]
     try:
+        delivery_options = {}
+        if 'channels' in msg:
+            if msg['kind'] != 'energy_report':
+                raise ValueError('native_channels_require_energy_report')
+            from .delivery import normalize_channels
+            delivery_options['channels'] = normalize_channels(msg['channels'])
         result = await async_send_now(
             hass,
             kind=msg["kind"],
             cadence=msg["cadence"],
             recipients=recipients,
+            **delivery_options,
             **({"actor":connection.user.id} if msg["kind"] == "energy_report" else {}),
             **({"report_preferences":msg["report_preferences"]} if msg["kind"] == "energy_report" and "report_preferences" in msg else {}),
             **({"period_mode": msg["period_mode"]} if "period_mode" in msg else {}),
