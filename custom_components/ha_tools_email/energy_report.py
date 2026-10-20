@@ -745,6 +745,8 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     groups = snapshot.get('groups') or {}
     def friendly_name(kind, identity, index, item=None):
         value = (item or {}).get('name') or names[kind].get(identity)
+        if kind == 'floors' and identity == '__no_floor__' and (not value or value == identity):
+            return tr('Bez piętra', 'No floor')
         # Native entity IDs are technical audit metadata, never display names.
         return str(value) if value and value != identity else title(kind) + ' ' + str(index+1)
 
@@ -943,13 +945,23 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         coverage = comparison.get('coverage') or {}
         covered = [coverage.get('current'), *(coverage.get('baselines') or [coverage.get('baseline')])]
         comparable = (comparison.get('status') == 'ready' and comparison.get('reason') is None
-            and all(number(value) is not None and number(value) >= Decimal('0.9') for value in covered))
+            and all(number(value) is not None and Decimal('0.9') <= number(value) <= 1 for value in covered))
         if comparable and number(comparison.get('percent'), signed=True) is not None:
             change += ' · ' + exact((*cp, 'percent')) + '%'
         else:
             change += ' · ' + tr('Brak porównywalnego procentu', 'No comparable percentage')
         if comparison.get('status') != 'ready':
             change += ' · ' + exact((*cp, 'status'))
+        def coverage_percent(value):
+            ratio = number(value)
+            return compact_number(ratio * 100, unknown) + '%' if ratio is not None and ratio <= 1 else unknown
+        baseline_coverage = [number(value) for value in covered[1:]]
+        baseline_minimum = min(baseline_coverage) if baseline_coverage and None not in baseline_coverage else None
+        if not comparable:
+            change += ' · ' + tr('Pokrycie bieżące/bazowe: ', 'Current/baseline coverage: ')
+            change += coverage_percent(coverage.get('current')) + ' / ' + coverage_percent(baseline_minimum)
+            if comparison.get('reason') is not None:
+                change += ' · ' + exact((*cp, 'reason'))
         text_parts.append(change)
         html_parts.append('<tr><td colspan="3" class="note">' + escape(change + ' · ' + scope) + '</td></tr>')
         costs = comparison.get('costs') or {}
@@ -1022,6 +1034,9 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                     schedules.append(tr('Godziny według reguł taryfy; szczegóły w CSV', 'Hours follow tariff rules; details in CSV'))
             if not schedules and zone_row.get('id') == profile.get('defaultZone'):
                 schedules.append(tr('Pozostałe godziny', 'Other hours'))
+            if profile.get('exceptions'):
+                schedules = [tr('Godziny i wyjątki według taryfy; szczegóły w CSV',
+                    'Hours and exceptions follow the tariff; details in CSV')]
             if schedules:
                 name += '\n' + ', '.join(schedules)
             rate_rows.append([name, exact((*rp, 'profile', 'zones', zi, 'energyRate')),
