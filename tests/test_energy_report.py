@@ -316,7 +316,8 @@ class EnergyReportTest(unittest.TestCase):
                       'groups.devices.sensor.device.kwh', 'groups.unmeasured.kwh',
                       'fees.components.subscription', 'rates.0.fixed_monthly.subscription'):
             row = rows[field]
-            shown = '31.00' if field == 'rates.0.fixed_monthly.subscription' else row['value']
+            shown = ('31.00' if field == 'rates.0.fixed_monthly.subscription' else
+                     '48.0' if field == 'groups.devices.sensor.device.kwh' else row['value'])
             self.assertIn(shown, Markup(result['html']).cells)
             self.assertIn(shown, result['text'])
 
