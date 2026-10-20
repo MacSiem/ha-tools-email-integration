@@ -87,6 +87,7 @@ class BookSnapshotTests(unittest.IsolatedAsyncioTestCase):
     async def test_zero_negative_prices_and_fixed_fees_do_not_change_usage_cost(self):
         for price in (0, -2):
             v = version(rate=price, monthly=900)
+            v['profile']['allowNegativeEnergy'] = True
             _, r = await self.refresh(book([v]))
             self.assertEqual(price, r['current']['usage_rate'])
             self.assertEqual(price * 12, float(r['today']['usage_cost']))
