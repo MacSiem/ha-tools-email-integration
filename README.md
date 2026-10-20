@@ -87,6 +87,12 @@ The report places a published comparison beside the energy total and an effectiv
 
 [Capture provenance](docs/screenshots/provenance.json). This is an HA preview with synthetic measurements; no email was sent.
 
+The current complete report was also checked after real QA delivery in Gmail Light and Dark, in Polish and English. The lower cost, fee and rate tables keep short numbers and visible units:
+
+![Polish cost and rate tables in current Gmail Android Dark, synthetic data](docs/screenshots/energy-report-costs-pl-gmail-dark.png)
+
+This unedited Gmail capture uses synthetic measurements. [Capture details](docs/screenshots/provenance.json) distinguish client validation from the earlier HA preview.
+
 ## Services
 
 | Service | Purpose |

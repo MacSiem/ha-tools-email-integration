@@ -10,5 +10,22 @@
   ],
   "capture": "email-day10-pl390-dark-flow.png",
   "snapshot_id": "92f1d887cb2b64c0d2d3ada04a3c329051f30e0d5bd427bb5398ed54f65f4853",
-  "qualification": "Unedited actual HA Core2026.9.4 embedded report preview, PL390Dark. Synthetic250kWh247EUR. Source192+58 and devices50+Unmeasured200; explicit zone legend, stable device colors and compact visual labels. Exact raw values preserved in text/CSV from same snapshot. No email client or inbox-delivery claim."
+  "qualification": "Unedited actual HA Core2026.9.4 embedded report preview, PL390Dark. Synthetic250kWh247EUR. Source192+58 and devices50+Unmeasured200; explicit zone legend, stable device colors and compact visual labels. Exact raw values preserved in text/CSV from same snapshot. No email client or inbox-delivery claim.",
+  "current_gmail": {
+    "captured_at": "2026-10-20",
+    "backend_runtime": "11f89dbb6d95ea3c1085a696aaee6644d758040c",
+    "rendered_and_delivered_runtime": "0b99c41c5a417e99a2d2b2652a188c9a28f4c72b",
+    "snapshot_id": "3e5cfe03744c0619f394d5adaabf81b49cfd4071d7f41a762983bb2a2a8cd283",
+    "file": "energy-report-costs-pl-gmail-dark.png",
+    "sha256": "e25b1fa707b8598bb68638008544d93763d289fbdb8d74f247a30391de0e2498",
+    "pixels": [
+      1080,
+      2400
+    ],
+    "client": "Gmail Android 2026.10.05.998732664.Release",
+    "device": "Samsung A71",
+    "locale": "pl",
+    "theme": "Dark",
+    "qualification": "Unedited actual delivered synthetic mail149. Current runtime HTML/text/CSV byte-identical to delivered runtime for this snapshot. Full PL/EN Light/Dark reviewed, including lower costs, zones, fees, rate history, monthly units, hourly data and footer. This image shows lower Polish cost/rate tables; no private mailbox content. Device theme, original unread state and notification flags restored after QA. It does not qualify current frontend HA styles."
+  }
 }
