@@ -108,3 +108,23 @@ class Mail136Test(unittest.TestCase):
         self.assertIn('&lt;Actual &amp; zone&gt;', result['html'])
         self.assertIn('zone-cheap', [n.attrs.get('class') for n in legend.find(data_role='zone-swatch')])
         self.assertIn('Mixed zones', result['text'])
+
+    def test_mail136_unknown_percent_keeps_delta_without_fake_percentage(self):
+        self.s = json.loads((fixture.ROOT / 'tests/fixtures/energy-report-schema2-v53.json').read_text())
+        c = self.s['comparisons']['previous']
+        c.update(baseline_kwh='0', full_baseline_kwh='0', percent=None)
+        kpis = self.section(self.render(), 'kpis').text()
+        self.assertNotIn('Unknown%', kpis)
+        self.assertIn('Increase', kpis)
+
+    def test_mail136_destination_colors_distinguish_device_identities_and_match_legend(self):
+        devices = self.s['groups']['devices']
+        first = next(iter(devices.values()))
+        first.update(kwh='25.0', recorded_kwh='25.0')
+        devices['z-second'] = dict(first, name='Second meter')
+        result = self.render()
+        destination = self.section(result, 'flow-destination-composition')
+        colors = [n.attrs.get('class') for n in destination.find(data_role='flow-segment')]
+        self.assertEqual({'device-0', 'device-1', 'unmeasured'}, set(colors))
+        swatches = [n.attrs.get('class') for n in destination.find(data_role='flow-swatch')]
+        self.assertEqual(set(colors), set(swatches))
