@@ -72,6 +72,8 @@ _CSS = ('body{margin:0;background:#eef2f7;color:#202a38;font:14px Arial,sans-ser
         '.report{max-width:640px;margin:0 auto;background:#fff}'
         'caption,th,td{text-align:left;padding:5px;vertical-align:top;overflow-wrap:anywhere}'
         'caption{font-size:15px;font-weight:bold;padding-top:15px;padding-bottom:6px}'
+        '.field-label{background:transparent;font-weight:normal;border-bottom:1px solid #d8e0eb}'
+        '.number{text-align:right;font-variant-numeric:tabular-nums}'
         'th{background:#edf2f8}td{border-bottom:1px solid #d8e0eb;white-space:pre-wrap}'
         '.header{background:#284c80;color:#fff;font-size:21px;padding:16px}'
         '.period td{background:#284c80;color:#edf4ff;padding:0 16px 12px;border:0;font-size:12px}'
@@ -386,7 +388,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         minimum = 2 if rate or money else 1 if unit == 'kWh' or key == 'percent' else 0
         quantum = Decimal(1).scaleb(-places)
         with localcontext() as precision:
-            precision.prec = max(40, len(value.as_tuple().digits) + abs(value.adjusted()) + places + 4)
+            precision.prec = max(40, len(value.as_tuple().digits) + max(0, value.adjusted()) + places + 4)
             rounded = value.quantize(quantum, rounding=ROUND_HALF_UP)
         if value != 0 and rounded == 0:
             # A small confirmed measurement must never look like a true zero.
@@ -406,13 +408,17 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     def table(title_text, rows, *, section=None):
         text_parts.append('\n' + title_text)
         html_parts.append('<table' + (' data-section="' + section + '"' if section else '')
-                          + '><caption>' + escape(title_text) + '</caption>')
+                          + '><caption>' + escape(title_text) + '</caption>'
+                          + '<colgroup><col width="50%"><col width="34%"><col width="16%"></colgroup>')
         if not rows:
             rows = [(tr('Dane', 'Data'), unknown, '', None)]
         for caption, value, unit, bar in rows:
             text_parts.append(caption + ': ' + value + (' ' + unit if unit else ''))
-            html_parts.append('<tr><th scope="row">' + escape(caption) + '</th><td>' + escape(value)
-                + '</td><td>' + escape(unit) + '</td></tr>')
+            numeric = value.lstrip('+-<>−').replace(',', '.').replace('.', '', 1).isdigit()
+            value_attrs = (' class="number"' if numeric else '') + (' colspan="2"' if not unit else '')
+            html_parts.append('<tr><th scope="row" class="field-label">' + escape(caption) + '</th><td'
+                + value_attrs + '>' + escape(value) + '</td>'
+                + ('<td>' + escape(unit) + '</td>' if unit else '') + '</tr>')
             if bar is not None:
                 width, color = bar
                 html_parts.append('<tr><td colspan="3"><table role="presentation" class="bar-track" width="100%"><tr>'
