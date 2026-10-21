@@ -153,6 +153,10 @@ The English tariff rows also remain readable in the current narrow Gmail layout,
 
 ![English cost components and complete rate units in actual Gmail Android Dark](docs/screenshots/energy-report-rates-en-gmail-dark.png)
 
+Previous-period markers also retain readable foreground ink in Gmail on iOS with the system Dark appearance:
+
+![Current previous-period markers in actual Gmail iOS Dark, synthetic daily report](docs/screenshots/energy-report-chart-en-gmail-ios-dark.png)
+
 These unedited screenshots show one new synthetic QA message on Samsung A71. The changed sections were checked in both Light and Dark; [capture provenance](docs/screenshots/provenance.json) preserves the exact renderer and fixture. SMTP acceptance alone does not establish inbox delivery on every recipient account.
 
 ## Shared Energy snapshot and entities

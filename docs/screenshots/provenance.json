@@ -62,15 +62,41 @@
           2400
         ],
         "capture": "mail167a71/en-dark-up02.png"
-      },
+      }
+    ]
+  },
+  "current_gmail_en168": {
+    "captured_at": "2026-10-21",
+    "backend_runtime": "b13fc333aeb4a89d9f1ecc8ef7c443fdebdebaf9",
+    "synthetic_model_sha256": "b65cc3fbe61d798599fe34f2775d49b09e5ba04360b1de5c64a7815f7c26effd",
+    "HTML_sha256": "d96a2e413d9a8d95b7b9faf523e34ba11e485ac0a3912c23dd3f73049d6e52af",
+    "language": "en",
+    "theme": "Dark",
+    "qualification": "Unedited delivered synthetic EN168 in QA B Inbox, one new SMTP handoff. Actual current Gmail iOS Dark chart and English rate gap, Gmail Android Light/Dark chart/rates, Apple Mail local MIME Dark and Gmail web Light-body affected sections personally inspected in sets. Plain texts unchanged. Both phones returned Home, original appearance and Android permission flags verified. Separate iOS query cleanup checks the active editor, not the stale placeholder; confirmed already empty. Baseline message read state is recorded per client, not assumed. This is client rendering evidence, not inbox proof for every SMTP recipient.",
+    "images": [
       {
         "file": "energy-report-rates-en-gmail-dark.png",
-        "sha256": "1e0827993e32abbbf844d75be1bf6ab20fd83c3cb33fe653e4a560a8c6777a7f",
+        "sha256": "8d5b33188462d3a4dabd8ac4618311c9fe432447dbb9124ec0f1aebe9f3012b4",
         "pixels": [
           1080,
           2400
         ],
-        "capture": "mail167a71/en-dark-settled-bottom.png"
+        "format": "PNG",
+        "client": "Gmail Android 2026.10.05.998732664.Release",
+        "device": "Samsung A71",
+        "capture": "mail168a71/dark-rates-qualified.png"
+      },
+      {
+        "file": "energy-report-chart-en-gmail-ios-dark.png",
+        "sha256": "4d92b98cd3709d2a80132098993a04b4d4e9b6260c81038c7adb79ede0d549ec",
+        "pixels": [
+          1170,
+          2532
+        ],
+        "format": "PNG",
+        "client": "Gmail iOS, real system Dark",
+        "device": "iPhone12 QA B",
+        "capture": "mail168-ios/images/21837870-8270-418C-B12F-A82D040A094C.png"
       }
     ]
   }

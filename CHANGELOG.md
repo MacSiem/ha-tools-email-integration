@@ -2,10 +2,12 @@
 
 ## 2.4.0 (Unreleased)
 
+- Fit previous-period chart glyphs inside their two-pixel line so Gmail on iOS preserves readable foreground markers. Separate English rate labels from complete equations on narrow clients; retain model values, text alternatives and plot geometry.
+
 - Preserve native tariff-zone ENUM options during temporary snapshot unavailability, while keeping values unavailable. Prevent self-generated registry updates from interrupting authorized statistics reads; explicitly removing a tariff still clears its options.
 - Keep unmeasured energy cost unknown when grid and device measurements do not support the same residual. Preserve independently valid device costs and real zero balances.
 - Notify authorized active report cards when schedules change, without forwarding schedule contents or overwriting unsaved drafts. Include all seven Energy entities in source-device reassociation and keep Reports status on its own device.
-- Keep English tariff rows readable on narrow mail clients without changing Polish HTML or the plain-text alternatives.
+- Keep English tariff rows readable on narrow mail clients without changing the Polish tariff rows or the plain-text alternatives.
 
 - Add native daily import and cheap-energy-share sensors from completed five-minute Recorder evidence plus non-overlapping full hours. Today’s usage-cost sensor uses the same cutoff. Current-zone states now identify the actual zone; classification remains an attribute. Preserve stable entity IDs and explicitly reject stale or incomplete measurements.
 - Add explicit native/mobile/email delivery targets, channel-aware schedules and attempt history with batch/period metadata. Unconfirmed handoffs are not automatically retried; report delivery problems surface through native status and Repairs.
@@ -25,7 +27,7 @@
 - Format generated mail dates and period bounds in Home Assistant’s configured time zone and PL/EN language, with DST offsets and separate technical UTC time. Preserve calendar boundaries, source identities and pricing. Use readable dates in chart labels and comparisons while retaining calendar-day identities and both offsets of repeated hours.
 - Keep source-table energy, cost and share values together on narrow mail clients; let source names wrap to the remaining width.
 
-- Add one shared Energy snapshot and five stable entities: tariff classification, current usage price, cheap-zone binary state, next cheap start and cost today. Prices use tariff currency; missing data or variable fees stay unavailable and fixed monthly fees remain separate.
+- Add one shared Energy snapshot and stable tariff entities: tariff classification, current usage price, cheap-zone binary state, next cheap start and cost today. Prices use tariff currency; missing data or variable fees stay unavailable and fixed monthly fees remain separate.
 - Price Energy Optimizer 4.0 card histories through the same EnergyTariff engine, including ephemeral card overrides. Bound batch size, CPU work and pending jobs; do not read Recorder or change settings for supplied-history pricing.
 - Refresh shared measurements by exact source/unit/day context and completed absolute hours. Reprice tariff boundaries without redundant Recorder work, stop listeners/timers on unload, and reject late results after reload, authorization or revision changes.
 - Preserve optional explicit cheap/expensive/mixed classification on zones and dynamic intervals. Never infer classification from names, minimum prices or legacy tariff mode.
