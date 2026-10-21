@@ -1,12 +1,30 @@
 """Known source readings remain inspectable without becoming a full balance."""
 import copy
 import unittest
+from datetime import datetime, timezone
 from tests.test_energy_measurements import measurements, readings
 from tests.test_build1_energy_model import model, inputs_for
 from tests.test_energy_registry import registry
+from tests.test_energy_analysis import analysis
+from tests.test_energy_registry_adapter import RegistryAdapterTest
 
 
 class RecordedPartialTest(unittest.TestCase):
+    def test_actual_accumulator_projection_retains_recorded_cells_without_pricing_them(self):
+        start, end = '2026-01-01T00:00Z', '2026-01-01T02:00Z'
+        snapshot = readings(start, end, missing=(('sensor.b', 1),))
+        accumulator = analysis.EnergyAnalysisAccumulator(None,
+            {'start':start,'end':end,'timezone':'UTC','kind':'day'}, {},
+            generated_at=datetime(2026,1,1,3,tzinfo=timezone.utc),
+            consumers=[], membership={}, include_report_hours=True)
+        accumulator.add_chunk(snapshot,start,end)
+        result=accumulator.finish()
+        self.assertIsNone(result['totals']['kwh'])
+        projected=accumulator.report_projection()
+        self.assertEqual([2,1],[row['recorded_kwh'] for row in projected['hours']])
+        self.assertIsNone(projected['hours'][1]['kwh'])
+        self.assertIsNone(projected['hours'][1]['costs']['usage_cost'])
+
     def test_source_subtotal_retains_a_missing_household_hour(self):
         start, end = '2026-01-01T00:00Z', '2026-01-01T02:00Z'
         snapshot = readings(start, end, missing=(('sensor.b', 1),))
@@ -59,3 +77,20 @@ class RecordedPartialTest(unittest.TestCase):
         self.assertEqual('Office plug Energy', result['sources']['sensor.b']['name'])
         self.assertEqual('My meter', result['sources']['sensor.explicit']['name'])
         self.assertEqual('Independent name', result['sources']['sensor.legacy']['name'])
+
+
+class NativeDeviceLabelAdapterTest(unittest.IsolatedAsyncioTestCase):
+    async def test_actual_registry_capture_carries_device_naming_semantics(self):
+        adapter,hass,listeners,changes,entities,areas,floors=RegistryAdapterTest().fixture()
+        try:
+            entities['sensor.a'].name=None
+            entities['sensor.a'].original_name='Energy'
+            entities['sensor.a'].has_entity_name=True
+            device=adapter._modules[1].async_get(hass).async_get('dev')
+            device.name='Factory';device.name_by_user='Kitchen plug'
+            result=adapter.capture(['sensor.a'])
+            self.assertEqual('Kitchen plug Energy',result['sources']['sensor.a']['name'])
+            self.assertNotIn('sensor.foreign',result['sources'])
+            self.assertEqual('Kitchen plug',device.name_by_user)
+        finally:
+            adapter.stop()
