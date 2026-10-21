@@ -42,5 +42,36 @@
     "locale": "pl",
     "theme": "Dark",
     "qualification": "Unedited actual delivered synthetic QA162, QA B Spam classification preserved. Clipped foreground markers remain visible without any images. Light and Dark personally reviewed. Marker/plot contrast18.501:1 in actual dark pixels; no pixel-difference claim against the complete mockup."
+  },
+  "current_gmail_en167": {
+    "captured_at": "2026-10-21",
+    "backend_runtime": "001f986962840d4630b7cf8c9609871bae2e80c7",
+    "synthetic_model_sha256": "b65cc3fbe61d798599fe34f2775d49b09e5ba04360b1de5c64a7815f7c26effd",
+    "HTML_sha256": "8269f7e3ddcb65f46a97043b2b5543b52851b1e06d1e7d8e5eb3b64b18eb7033",
+    "client": "Gmail Android 2026.10.05.998732664.Release",
+    "device": "Samsung A71",
+    "language": "en",
+    "theme": "Dark",
+    "qualification": "Unedited actual delivered synthetic EN167, QA B Inbox; changed tariff zones and rates personally inspected in Light and Dark. kWh/share/amount spacing and complete PLN/kWh units retained. One SMTP handoff to three QA recipients does not prove Inbox for QA A/C. New message restored unread with labels unchanged; phone baseline and notification flags exact; lease released.",
+    "images": [
+      {
+        "file": "energy-report-zones-en-gmail-dark.png",
+        "sha256": "d76ac49c9aebc5345cd0fcd1ca04305a5d2aae8acd787226ce53b8ebac9fd638",
+        "pixels": [
+          1080,
+          2400
+        ],
+        "capture": "mail167a71/en-dark-up02.png"
+      },
+      {
+        "file": "energy-report-rates-en-gmail-dark.png",
+        "sha256": "1e0827993e32abbbf844d75be1bf6ab20fd83c3cb33fe653e4a560a8c6777a7f",
+        "pixels": [
+          1080,
+          2400
+        ],
+        "capture": "mail167a71/en-dark-settled-bottom.png"
+      }
+    ]
   }
 }

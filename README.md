@@ -47,7 +47,7 @@ For email delivery, open **Settings → Devices & services → HA Tools Email �
 
 ## Entities
 
-The integration exposes services, a websocket API and the shared Energy device described below. Its five read-only entities provide current tariff zone, usage price, cheap-period status, next cheap start and today’s measured usage cost. They do not enable notifications.
+The integration exposes services, a websocket API and the shared Energy device described below. Its seven read-only Energy entities provide current tariff zone, usage price, cheap-period status, next cheap start, today’s measured usage cost, grid import today and cheap-energy share today. They do not enable notifications.
 
 Each configured Email schedule also has its own status sensors, a Send now button, attempt event and read-only calendar. The next-report time follows the saved calendar; manually sending does not consume an automatic schedule period. A disabled calendar can still be sent manually by an authorized user. The mail-server-accepted outcome does not confirm delivery. Error and warning counts stay unknown until a complete 24-hour source is available. Existing entity names and customizations are preserved.
 
@@ -68,10 +68,11 @@ Native Recorder statistics are readable by **all authenticated Home Assistant us
 
 ## Reading energy reports in Home Assistant
 
-1. Configure your grid import and any measured devices in Home Assistant’s **Energy Dashboard**.
-2. Add an Energy Optimizer, Energy Insights or Energy Email card. With the current schema-2 API, the cards share the server’s calendar periods, recorded measurements and tariff calculations.
-3. In Energy Email, open **Preview**, select **Day / Week / Month / Year**, optionally choose a calendar date and comparison, then press **Read report**. Read it in HA or explicitly download HTML, text or CSV. No recipient or SMTP account is required.
-4. If HA Energy already records grid-import costs, the analysis and report show **Cost recorded in HA** without a tariff book. An administrator can save a tariff under **Tariff settings** to calculate its energy charges, variable charges and fixed fees. Missing values remain unavailable; measured zero remains zero. Fixed tariff fees apply once to the household period.
+1. Configure grid import and any measured devices in Home Assistant’s **Energy Dashboard**.
+2. Add an Energy Optimizer, Energy Insights or Energy Email card. With the current model API, **Overview / Breakdown / Costs / Reports** share the server’s calendar periods, measurements and tariff calculations. Open a Compact card to reach the full view.
+3. In **Reports**, choose **Day / Week / Month / Year** and the period arrows, then **Load preview**. **Phone / Desktop** and **Light / Dark** change the cached preview locally. No recipient or SMTP account is required to read it. Older compatible **Preview** APIs retain their documented HTML, text and CSV downloads.
+4. A new report defaults to **HA notification**. Review and explicitly confirm a manual action or save a schedule. For email, first configure SMTP in the integration, then choose the email channel. Acceptance by Home Assistant or SMTP is not confirmation that a phone or inbox received the report. An unconfirmed handoff is not automatically repeated.
+5. Without a tariff book, supported recorded import costs from HA Energy remain recorded amounts with explicit coverage. Review a tariff under **Costs** to calculate its components. Missing values stay unavailable; measured zero stays zero. Fixed fees apply once to the household period, separately from device usage.
 
 Report access follows the administrator’s saved feature policy and native HA resource permissions. Existing defaults are retained until an administrator saves a policy; energy reports default to administrator access. A policy may allow a household user to read reports without granting permission to send mail, edit SMTP, change tariffs or manage schedules. The card hides unavailable actions; the server also checks every request.
 
@@ -145,6 +146,14 @@ action:
         sensor.freezer_temperature has been unavailable for 15 minutes.
         Check the device and the SMTP settings in Settings → Devices & services → HA Tools Email → Configure.
 ```
+
+The English tariff rows also remain readable in the current narrow Gmail layout, with energy, share, amount and complete rate units separated:
+
+![English tariff zones in actual Gmail Android Dark, synthetic daily report](docs/screenshots/energy-report-zones-en-gmail-dark.png)
+
+![English cost components and complete rate units in actual Gmail Android Dark](docs/screenshots/energy-report-rates-en-gmail-dark.png)
+
+These unedited screenshots show one new synthetic QA message on Samsung A71. The changed sections were checked in both Light and Dark; [capture provenance](docs/screenshots/provenance.json) preserves the exact renderer and fixture. SMTP acceptance alone does not establish inbox delivery on every recipient account.
 
 ## Shared Energy snapshot and entities
 
