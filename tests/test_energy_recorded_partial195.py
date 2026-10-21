@@ -6,7 +6,7 @@ from tests.test_energy_measurements import measurements, readings
 from tests.test_build1_energy_model import model, inputs_for
 from tests.test_energy_registry import registry
 from tests.test_energy_analysis import analysis
-from tests.test_energy_registry_adapter import RegistryAdapterTest
+from tests import test_energy_registry_adapter as registry_adapter_tests
 
 
 class RecordedPartialTest(unittest.TestCase):
@@ -81,7 +81,7 @@ class RecordedPartialTest(unittest.TestCase):
 
 class NativeDeviceLabelAdapterTest(unittest.IsolatedAsyncioTestCase):
     async def test_actual_registry_capture_carries_device_naming_semantics(self):
-        adapter,hass,listeners,changes,entities,areas,floors=RegistryAdapterTest().fixture()
+        adapter,hass,listeners,changes,entities,areas,floors=registry_adapter_tests.RegistryAdapterTest().fixture()
         try:
             entities['sensor.a'].name=None
             entities['sensor.a'].original_name='Energy'

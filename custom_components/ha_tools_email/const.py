@@ -4,7 +4,7 @@ from __future__ import annotations
 
 DOMAIN = "ha_tools_email"
 NAME = "HA Tools Email"
-VERSION = "2.4.1"
+VERSION = "2.4.2"
 
 STORAGE_KEY = f"{DOMAIN}.storage"
 STORAGE_VERSION = 1
