@@ -18,6 +18,19 @@ def _label(value):
     return value if isinstance(value, str) and len(value) <= 256 else None
 
 
+def _source_name(entity, device):
+    """Keep explicit entity names; scope integration entity labels to their device."""
+    explicit = _label(entity.get('name'))
+    if explicit:
+        return explicit
+    original = _label(entity.get('original_name'))
+    if entity.get('has_entity_name') is True:
+        parent = _label(device.get('name_by_user') or device.get('name'))
+        if parent:
+            return _label(f'{parent} {original}' if original else parent) or original
+    return original
+
+
 def resolve_membership(source_ids, registries, *, captured_at, revision):
     """Detach only requested entities: entity area overrides the device area.
 
@@ -46,7 +59,7 @@ def resolve_membership(source_ids, registries, *, captured_at, revision):
         if not floor:
             floor_id = None
         sources[sid] = {"entity_id": sid if entity else None,
-                        "name": _label(entity.get("name") or entity.get("original_name")),
+                        "name": _source_name(entity, device),
                         "area_id": area_id, "area_name": _label(area.get("name")),
                         "floor_id": floor_id, "floor_name": _label(floor.get("name")),
                         "attribution": attribution}

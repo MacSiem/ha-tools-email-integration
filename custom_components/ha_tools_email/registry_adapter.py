@@ -102,11 +102,12 @@ class RegistryMembership:
                 continue
             device_id, entity_area = getattr(entity, 'device_id', None), getattr(entity, 'area_id', None)
             data['entities'][sid] = {key: getattr(entity, key, None) for key in
-                                     ('area_id', 'device_id', 'name', 'original_name')}
+                                     ('area_id', 'device_id', 'name', 'original_name', 'has_entity_name')}
             device = devices.async_get(device_id) if device_id else None
             device_area = getattr(device, 'area_id', None)
             if device is not None:
-                data['devices'][device_id] = {'area_id': device_area}
+                data['devices'][device_id] = {key: getattr(device, key, None)
+                    for key in ('area_id', 'name', 'name_by_user')}
             area_id = entity_area or device_area
             area = areas.async_get_area(area_id) if area_id else None
             if area is not None:

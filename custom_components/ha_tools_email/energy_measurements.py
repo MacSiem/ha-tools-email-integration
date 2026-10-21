@@ -118,7 +118,10 @@ def measurement_evidence(snapshot, start, end):
     for stamp in grid:
         values = [cells.get(stamp) for cells in per_source.values()]
         value = _sum(values) if all(value is not None for value in values) else None
-        hourly.append({'from': stamp, 'to': stamp + 3600000, 'kwh': value})
+        known = [value for value in values if value is not None]
+        hourly.append({'from': stamp, 'to': stamp + 3600000, 'kwh': value,
+                       'recorded_kwh': _sum(known) if known else None,
+                       'measured_sources': len(known), 'expected_sources': len(ids)})
     observed = _sum(value for cells in per_source.values() for value in cells.values()) if measured else None
     known_hours = [row['kwh'] for row in hourly if row['kwh'] is not None]
     recorded = _sum(known_hours) if known_hours else None

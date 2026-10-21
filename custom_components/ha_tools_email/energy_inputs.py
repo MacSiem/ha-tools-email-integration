@@ -170,8 +170,12 @@ def short_projection(values, configuration, tariff, start, end):
             return {}
         return {key: str(value) if value is not None else None for key, value in
                 calculate_energy_amounts(Decimal(value), rate['energy_rate'], rate['variable_rate'], rate['rate_semantics']).items()}
-    kwh = total([row['entity_id'] for row in configuration['grid_sensors']])
+    grid_ids = [row['entity_id'] for row in configuration['grid_sensors']]
+    kwh = total(grid_ids)
+    recorded = [Decimal(values[sid]) for sid in grid_ids if values.get(sid) is not None]
     return {'from': start.isoformat(), 'to': end.isoformat(), 'kwh': kwh,
+        'recorded_kwh': str(sum(recorded, Decimal(0))) if recorded else None,
+        'measured_sources': len(recorded), 'expected_sources': len(grid_ids),
         'currency': rate.get('currency') if known else None,
         'price_basis': rate.get('price_basis') if known else None,
         'classification': rate.get('classification') if known else None,

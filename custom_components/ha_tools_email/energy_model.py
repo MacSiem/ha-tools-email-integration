@@ -198,6 +198,7 @@ def _daily_rows(hourly, zone):
         zones = list(dict.fromkeys(h['zone'] for h in observed if h['zone'] is not None))
         rows.append({'start': datetime.combine(date,datetime.min.time(),zone).isoformat(),
             'hours':len(hours), 'kwh':_known_sum(h['kwh'] for h in observed),
+            'recorded_kwh':_known_sum(h['recorded_kwh'] for h in observed),
             'prev_kwh':_sum(h['prev_kwh'] for h in hours),
             'cost':_sum(h['cost'] for h in observed if h['kwh'] is not None),
             'energy_cost':_sum(h['energy_cost'] for h in observed if h['kwh'] is not None),
@@ -297,8 +298,13 @@ def _build_report(inputs):
         local = instant.astimezone(zone)
         previous_day = (local.month,local.day) if period['kind']=='year' else (local.date()-first_date).days
         previous_value = previous.get((previous_day,local.hour,local.fold),_decimal(raw.get('prev_kwh')))
+        recorded = _decimal(raw.get('recorded_kwh', raw.get('kwh')))
+        if recorded is not None and recorded < 0:
+            raise ValueError('negative_recorded_import')
         hourly.append({'start': local.isoformat(), 'hour': local.hour, 'fold': local.fold,
             'kwh': kwh, 'zone': raw.get('zone'), 'classification': raw.get('classification'), **costs, 'cost': costs['usage_cost'],
+            'recorded_kwh': recorded, 'measured_sources': raw.get('measured_sources'),
+            'expected_sources': raw.get('expected_sources'),
             'measured_kwh': measured, 'prev_kwh': previous_value,
             'partial': bool(raw) and _instant(raw['to']) - instant < timedelta(hours=1),
             'future': not eligible})
@@ -313,7 +319,9 @@ def _build_report(inputs):
     totals = {key: _sum(row[key] for row in observed) for key in COSTS}
     usage = totals['usage_cost']
     fixed = _decimal(projection.get('fixed_share')) if identity_ok else None
-    totals.update(import_kwh=imported, fixed_share=fixed,
+    totals.update(import_kwh=imported,
+        recorded_import_kwh=_known_sum(row['recorded_kwh'] for row in hourly if not row['future']),
+        fixed_share=fixed,
         total_with_fixed=usage + fixed if usage is not None and fixed is not None else None,
         effective_rate=_ratio(usage, imported))
     peak = max(observed, key=lambda row: row['kwh']) if observed else None
