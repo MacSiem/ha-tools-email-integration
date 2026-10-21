@@ -7,6 +7,7 @@ import copy
 from html.parser import HTMLParser
 import importlib
 import json
+import re
 from pathlib import Path
 import sys
 import types
@@ -72,6 +73,36 @@ class Build1MailPolishTests(unittest.TestCase):
     def render(self, language='pl', **settings):
         return MAIL.render(self.model, language=language, timezone_name='Europe/Warsaw',
                            hour_cycle='24', **settings)
+
+    def test_previous_marker_ink_fits_its_clip_and_has_a_text_sized_cell(self):
+        # Gmail iOS clipped the 8px glyph inside a 2px line to a faint hairline.
+        # This is an HTML precondition; actual client contrast still needs QA.
+        for language in ('pl', 'en'):
+            doc = Document(block(self.render(language)['html'], 5))
+            ticks = doc.by_class('tick-ink')
+            self.assertGreater(len(ticks), 1)
+            for tick in ticks:
+                style = tick.attrs['style']
+                height = float(re.search(r'height:([\d.]+)px', style)[1])
+                size, line = map(float, re.search(r'font:700 ([\d.]+)px/([\d.]+)px', style).groups())
+                self.assertLessEqual(size, height)
+                self.assertEqual(line, height)
+                if tick.parent.tag == 'td':
+                    self.assertNotIn('font-size:0', tick.parent.attrs['style'])
+                    self.assertNotRegex(tick.parent.attrs['style'], r'line-height:0(?:;|$)')
+
+    def test_english_rate_labels_have_a_real_gap_before_the_equation(self):
+        result = self.render('en')
+        doc = Document(block(result['html'], 9))
+        totals = doc.by_class('rate-total')
+        self.assertEqual(len(totals), len(self.model['tariff']['zones']))
+        for total in totals:
+            label = total.parent.parent.children[0]
+            padding = re.search(r'padding:([^;]+)', label.attrs['style'])[1].split()
+            right = padding[1] if len(padding) > 1 else padding[0]
+            self.assertGreaterEqual(float(right.removesuffix('px')), 8)
+            self.assertNotIn('white-space:nowrap', label.attrs['style'])
+            self.assertIn(total.parent.text, result['text'])
 
     def test_comparison_baselines_are_secondary_atomic_quantities_in_both_languages(self):
         for language, baseline, delta in (('pl', '17,6 kWh', '+1,17 kWh'),
