@@ -88,13 +88,13 @@ The report places a published comparison beside the energy total and an effectiv
 
 [Capture provenance](docs/screenshots/provenance.json). This is an HA preview with synthetic measurements; no email was sent.
 
-The current complete report was also checked after real QA delivery in Gmail Light and Dark, in Polish and English. The lower cost, fee and rate tables keep short numbers and visible units:
+Client checks apply to their recorded artifacts and scope. Earlier Polish and English full-body checks retain the unchanged sections through the recorded HTML comparison. Batch 168 separately checked the changed chart markers and English rate spacing in Gmail Android Light/Dark, Gmail iOS Dark, Apple Mail Dark using local MIME, and Gmail web with a light message body. Local previews and SMTP acceptance do not establish client rendering or Inbox placement.
 
-![Polish cost and rate tables in current Gmail Android Dark, synthetic data](docs/screenshots/energy-report-costs-pl-gmail-dark.png)
+![Recorded Polish cost and rate tables in Gmail Android Dark, synthetic data](docs/screenshots/energy-report-costs-pl-gmail-dark.png)
 
 This unedited Gmail capture uses synthetic measurements. [Capture details](docs/screenshots/provenance.json) distinguish client validation from the earlier HA preview.
 
-The previous-period chart ticks remain visible in actual Gmail Dark without image loading:
+The recorded Polish Gmail capture below retains its original renderer and scope; the current marker correction is shown in the English iOS capture further below:
 
 ![Previous-period ticks and tariff zones in Gmail Android Dark, synthetic data](docs/screenshots/energy-report-chart-pl-gmail-dark.png)
 
@@ -157,11 +157,11 @@ Previous-period markers also retain readable foreground ink in Gmail on iOS with
 
 ![Current previous-period markers in actual Gmail iOS Dark, synthetic daily report](docs/screenshots/energy-report-chart-en-gmail-ios-dark.png)
 
-These unedited screenshots show one new synthetic QA message on Samsung A71. The changed sections were checked in both Light and Dark; [capture provenance](docs/screenshots/provenance.json) preserves the exact renderer and fixture. SMTP acceptance alone does not establish inbox delivery on every recipient account.
+These unedited screenshots retain their individual sources: the English tariff-zone image is from batch 167 on Samsung A71; the lower rate table is from batch 168 on that device; the chart is from batch 168 on iOS. The affected Android sections were checked in Light and Dark. [Capture provenance](docs/screenshots/provenance.json) preserves each renderer, fixture and client. Batch 168 was confirmed in QA A and QA B Inbox; SMTP acceptance alone does not establish delivery to QA C.
 
 ## Shared Energy snapshot and entities
 
-From **2.4.0**, install/update the integration in HACS, then add **HA Tools Email** under **Settings → Devices & services**. Configure Energy Dashboard grid import and save a shared tariff from Energy Optimizer **4.0+ → Tariff settings**. Select an optional zone classification for cheap-zone and next-cheap values. Open the Energy device under this integration to use the seven entities. SMTP is not needed for these read-only energy values; notifications require a separate Home Assistant automation.
+From **2.4.0**, install/update the integration in HACS, then add **HA Tools Email** under **Settings → Devices & services**. Configure Energy Dashboard grid import and save a shared tariff from Energy Optimizer **4.0+ → Tariff settings**. Select an optional zone classification for cheap-zone and next-cheap values. Open the Energy device under this integration to use the seven entities. SMTP is not needed for these read-only energy values or the Reports HA notification channel. A separate Home Assistant automation is optional when using the entities for custom alerts.
 
 The integration exposes a shared Energy device with current tariff zone, current
 usage price, cheap-period status, next cheap start and today's measured usage
@@ -450,8 +450,9 @@ that separately and does not select the test again automatically.
 HA Tools Email is included in the HACS default catalog as an Integration.
 Download it in HACS, restart Home Assistant, then add **HA Tools Email** under
 **Settings → Devices & services → Add integration**. Configure SMTP in its
-options only when sending is needed. Existing config entries and Store data
-are retained on upgrade; do not delete them to update the integration.
+options only when email delivery is needed. Reading reports and using HA notifications
+do not require SMTP. Existing config entries and Store data are retained on upgrade;
+do not delete them to update the integration.
 
 ### HACS Custom Repository
 
@@ -461,14 +462,14 @@ are retained on upgrade; do not delete them to update the integration.
 4. Install **HA Tools Email**.
 5. Restart Home Assistant.
 6. Go to **Settings → Devices & services → Add integration** and add **HA Tools Email**. The setup form has no fields — just confirm.
-7. Open **Configure** on the HA Tools Email integration and enter your SMTP settings. Optionally enable **Send a test email before saving**. SMTP acceptance confirms handoff to the server; check the inbox or provider separately for delivery.
+7. **For email delivery only:** open **Configure** on the HA Tools Email integration and enter your SMTP settings. Optionally enable **Send a test email before saving**. SMTP acceptance confirms handoff to the server; check the inbox or provider separately for delivery.
 
 ### Manual
 
 1. Copy `custom_components/ha_tools_email/` to `<config>/custom_components/`.
 2. Restart Home Assistant.
 3. Add **HA Tools Email** from **Settings → Devices & services**.
-4. Enter SMTP settings as in step 7 above.
+4. For email delivery only, enter SMTP settings as in step 7 above.
 
 ## FAQ
 
