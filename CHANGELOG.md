@@ -1,6 +1,10 @@
 # Changelog
 
-## 2.4.0 (Unreleased)
+## 2.4.1 (Unreleased)
+
+- Keep Energy reports available when precise meter readings produce zero residuals or very small amounts in internal decimal notation. Preserve the exact measurement values, existing price calculations, and strict validation of external decimal strings.
+
+## 2.4.0 (2026-10-21)
 
 - Fit previous-period chart glyphs inside their two-pixel line so Gmail on iOS preserves readable foreground markers. Separate English rate labels from complete equations on narrow clients; retain model values, text alternatives and plot geometry.
 

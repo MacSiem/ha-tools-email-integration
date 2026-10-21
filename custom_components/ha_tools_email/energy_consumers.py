@@ -151,7 +151,7 @@ class ConsumerPeriod:
                         continue
                     state['kwh'] += Decimal(value); state['observations'] += 1
                     if rate is not None and rate['available']:
-                        amounts = calculate_energy_amounts(value, rate['energy_rate'], rate['variable_rate'], rate['rate_semantics'])
+                        amounts = calculate_energy_amounts(Decimal(value), rate['energy_rate'], rate['variable_rate'], rate['rate_semantics'])
                         if hour_amounts is not None:
                             hour_amounts[sid] = amounts
                         if amounts['usage_cost'] is not None:

@@ -38,6 +38,10 @@ class ConsumerAnalysisTest(unittest.TestCase):
         builder.add_chunk(readings(start, end, sources=('sensor.grid',), value=grid), start, end,
                           consumer_snapshot=consumer_readings(start, end, values))
 
+    def test_external_decimal_strings_keep_the_existing_strict_syntax(self):
+        with self.assertRaises(ValueError):
+            analysis.calculate_energy_amounts('1E-17', 1, 0, 'components')
+
     def test_precise_equal_meters_keep_a_zero_remainder_priceable(self):
         builder = self.builder()
         quantity = 0.12345678901234567

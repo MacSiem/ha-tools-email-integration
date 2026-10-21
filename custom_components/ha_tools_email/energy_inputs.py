@@ -169,7 +169,7 @@ def short_projection(values, configuration, tariff, start, end):
         if value is None or not known:
             return {}
         return {key: str(value) if value is not None else None for key, value in
-                calculate_energy_amounts(value, rate['energy_rate'], rate['variable_rate'], rate['rate_semantics']).items()}
+                calculate_energy_amounts(Decimal(value), rate['energy_rate'], rate['variable_rate'], rate['rate_semantics']).items()}
     kwh = total([row['entity_id'] for row in configuration['grid_sensors']])
     return {'from': start.isoformat(), 'to': end.isoformat(), 'kwh': kwh,
         'currency': rate.get('currency') if known else None,
