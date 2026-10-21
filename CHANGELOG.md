@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.4.1 (Unreleased)
+## 2.4.1 (2026-10-21)
 
 - Keep Energy reports available when precise meter readings produce zero residuals or very small amounts in internal decimal notation. Preserve the exact measurement values, existing price calculations, and strict validation of external decimal strings.
 
