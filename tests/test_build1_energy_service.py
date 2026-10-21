@@ -15,6 +15,21 @@ UTC = timezone.utc
 
 
 class Build1ServiceTest(unittest.TestCase):
+    def test_short_projection_prices_internal_decimal_zero_and_tiny_values(self):
+        h = Harness()
+        configuration = {'grid_sensors': [{'entity_id': 'sensor.grid'}],
+                         'consumers': [{'stat_consumption': 'sensor.device'}],
+                         'consumer_domain': 'grid_import'}
+        start = datetime(2026, 1, 11, 12, tzinfo=UTC)
+        for quantity in ('0E-17', '1E-17'):
+            with self.subTest(quantity=quantity):
+                row = inputs.short_projection(
+                    {'sensor.grid': quantity, 'sensor.device': quantity}, configuration,
+                    h.book['tariffs'][0], start, start + timedelta(minutes=5))
+                self.assertEqual(Decimal(quantity), Decimal(row['kwh']))
+                self.assertEqual(Decimal(quantity), Decimal(row['costs']['energy_cost']))
+                self.assertEqual(Decimal(quantity), Decimal(row['devices']['sensor.device']['costs']['energy_cost']))
+
     def test_live_rate_is_current_and_cache_expires_at_an_intraminute_rule_boundary(self):
         async def run():
             h = Harness(); h.now = datetime(2026,1,11,12,31,tzinfo=UTC)
