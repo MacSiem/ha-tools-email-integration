@@ -38,6 +38,28 @@ class ConsumerAnalysisTest(unittest.TestCase):
         builder.add_chunk(readings(start, end, sources=('sensor.grid',), value=grid), start, end,
                           consumer_snapshot=consumer_readings(start, end, values))
 
+    def test_precise_equal_meters_keep_a_zero_remainder_priceable(self):
+        builder = self.builder()
+        quantity = 0.12345678901234567
+        self.add(builder, START, MID, quantity, (quantity, 0, 0))
+        self.add(builder, MID, END, quantity, (quantity, 0, 0))
+        result = builder.finish()
+        self.assertEqual(Decimal('0'), Decimal(result['groups']['unmeasured']['kwh']))
+        self.assertEqual('0.00', result['groups']['unmeasured']['energy_cost'])
+        self.assertEqual(Decimal(str(quantity)) * 2,
+                         Decimal(result['groups']['devices'][IDS[0]]['kwh']))
+
+    def test_small_measured_consumption_is_not_rejected_or_rounded_to_zero(self):
+        builder = self.builder()
+        quantity = 0.00000000000000001
+        self.add(builder, START, MID, quantity, (quantity, 0, 0))
+        self.add(builder, MID, END, quantity, (quantity, 0, 0))
+        result = builder.finish()
+        self.assertEqual(Decimal('0.00000000000000002'),
+                         Decimal(result['groups']['devices'][IDS[0]]['kwh']))
+        self.assertEqual(Decimal('0'), Decimal(result['groups']['unmeasured']['kwh']))
+        self.assertEqual('0.00', result['groups']['unmeasured']['energy_cost'])
+
     def test_disjoint_rooms_and_floors_costs_share_snapshot_and_fixed_fees_stay_household(self):
         builder = self.builder()
         self.add(builder, START, MID, 130, (100, 40, 10))
