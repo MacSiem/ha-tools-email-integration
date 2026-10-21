@@ -81,10 +81,11 @@ _EN_ZONE_MOBILE_CSS = """
 
 def _previous_tick(*, legend=False):
     # Actual foreground glyphs follow Gmail's readable-text inversion. A fixed
-    # two-pixel clip preserves chart geometry without remote or inline images.
+    # two-pixel glyph fits its line box: oversized clipped text becomes a faint
+    # hairline in Gmail iOS. Keep the existing geometry and avoid image fetches.
     display, width = ('inline-block', '10px') if legend else ('block', '100%')
     return (f'<span class="tick-ink" aria-hidden="true" style="display:{display};width:{width};'
-            'height:2px;overflow:hidden;vertical-align:3px;font:700 8px/2px monospace;'
+            'height:2px;overflow:hidden;vertical-align:3px;font:700 2px/2px monospace;'
             'white-space:nowrap;color:#111827">' + '█' * 128 + '</span>')
 
 
@@ -340,7 +341,7 @@ class _View:
                 attrs = f' class="{key}" bgcolor="{color}"' if key else ''
                 bg = f'background-color:{color};' if color else ''
                 if key == 'tick':
-                    segments.append(f'<tr><td height="{height}" style="height:{height}px;line-height:0;font-size:0">{_previous_tick()}</td></tr>')
+                    segments.append(f'<tr><td height="{height}" style="height:{height}px;line-height:2px;font-size:2px">{_previous_tick()}</td></tr>')
                 else:
                     segments.append(f'<tr><td{attrs} height="{height}" style="height:{height}px;{bg}line-height:0;font-size:0">&nbsp;</td></tr>')
                 cursor = end
@@ -489,7 +490,8 @@ class _View:
             components = f'{self.n(zone.get("energy_rate"), 2)} + {self.n(zone.get("variable_rate"), 2)} = '
             total_rate = self.rate(zone.get('rate'))
             value = components + total_rate
-            rate_rows.append(f'<tr><td class="tx2" style="padding:4px 0;font:400 12px/16px {FONT};color:{L["tx2"]}">{E(label)}</td><td class="tx2" align="right" style="padding:4px 0;font:400 12px/16px {FONT};color:{L["tx2"]}">{E(components)}<b class="rate-total">{E(total_rate)}</b></td></tr>')
+            label_padding = '4px 8px 4px 0' if self.lang == 'en' else '4px 0'
+            rate_rows.append(f'<tr><td class="tx2" style="padding:{label_padding};font:400 12px/16px {FONT};color:{L["tx2"]}">{E(label)}</td><td class="tx2" align="right" style="padding:4px 0;font:400 12px/16px {FONT};color:{L["tx2"]}">{E(components)}<b class="rate-total">{E(total_rate)}</b></td></tr>')
             self.lines.append(f'- {label}: {value}')
         basis = self.tariff.get('price_basis', self.m.get('price_basis'))
         basis_label = self.tr(basis) if basis in ('gross', 'net') else self.tr('basis_unknown')
