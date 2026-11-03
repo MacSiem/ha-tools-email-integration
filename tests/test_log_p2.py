@@ -43,6 +43,26 @@ class LogP2(unittest.TestCase):
   for part in ('html','body'):
    self.assertIn('AUTH_EXPIRED_SYNTHETIC',p[part]);self.assertIn('Connection failed',p[part]);self.assertNotIn('x'*1000,p[part])
   self.assertIn(exception,p['summary']['entries'][0]['message'][0]);self.assertNotIn('PRIVATE_TRACE_SYNTHETIC',p['body'])
+ def test_traceback_terminal_cause_survives_alongside_late_reason(self):
+  message="Traceback (synthetic)\n{'opaque':'"+'x'*9000+"','reason':'SYNTHETIC_REASON_AFTER_OPAQUE_CONTEXT'}\nRuntimeError: SYNTHETIC_CURRENT_ROOT_CAUSE\n"
+  for language in ('pl','en'):
+   for cadence in ('daily','weekly','monthly'):
+    p=c.build_log_digest_payload([{'id':'native-shape','level':'ERROR','name':'fixture','timestamp':NOW.timestamp(),'count':1,'message':[message],'exception':'PRIVATE_EXCEPTION_SYNTHETIC','source':['PRIVATE_SOURCE_SYNTHETIC']}],cadence=cadence,now=NOW,presentation=c._presentation(language,'UTC'))
+    for field in ('html','body'):
+     self.assertIn('SYNTHETIC_REASON_AFTER_OPAQUE_CONTEXT',p[field]);self.assertIn('RuntimeError: SYNTHETIC_CURRENT_ROOT_CAUSE',p[field]);self.assertNotIn('PRIVATE_EXCEPTION_SYNTHETIC',p[field]);self.assertNotIn('PRIVATE_SOURCE_SYNTHETIC',p[field]);self.assertNotIn('x'*1000,p[field])
+    self.assertEqual(message,p['summary']['entries'][0]['message'][0])
+ def test_native_traceback_calendar_current_context_and_rolling(self):
+  msg="Traceback (synthetic)\n{'opaque':'"+'x'*9000+"','reason':'SYNTHETIC_REASON_AFTER_OPAQUE_CONTEXT'}\nRuntimeError: SYNTHETIC_CURRENT_ROOT_CAUSE\n"
+  for language in ('pl','en'):
+   for cadence in ('daily','weekly','monthly'):
+    for context in ('selected','current','rolling'):
+     stamp=END.timestamp()-1 if context=='selected' else END.timestamp()+1
+     row={'id':'native','level':'ERROR','name':'fixture','timestamp':stamp,'count':1,'message':[msg],'exception':'PRIVATE_EXCEPTION_SYNTHETIC'}
+     hass=types.SimpleNamespace(data={'system_log':types.SimpleNamespace(records=[row])},config=types.SimpleNamespace(time_zone='UTC'))
+     options={'window_start':START,'window_end':END,'manual_window':True} if context!='rolling' else {'manual_window':True}
+     p=asyncio.run(c.async_build_log_digest_payload(hass,object(),cadence=cadence,now=NOW,presentation=c._presentation(language,'UTC'),**options))
+     for field in ('html','body'):
+      self.assertIn('SYNTHETIC_REASON_AFTER_OPAQUE_CONTEXT',p[field]);self.assertIn('RuntimeError: SYNTHETIC_CURRENT_ROOT_CAUSE',p[field]);self.assertNotIn('PRIVATE_EXCEPTION_SYNTHETIC',p[field])
  def test_polish_core_headings_are_localized(self):
   p=self.make('pl')
   for key in ('html','body'):

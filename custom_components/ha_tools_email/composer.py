@@ -1255,8 +1255,17 @@ def _log_excerpt(value: str, limit: int = 320) -> str:
                 target.append(match.group('key') + ': ' + item[:180])
     parts = (priority + secondary)[:3]
     if parts:
-        first = text.splitlines()[0].strip()
-        if first and len(first) <= 160 and not first.startswith(('{', '[', 'Traceback')):
+        lines = text.rstrip().splitlines()
+        first = lines[0].strip()
+        last = lines[-1].strip()
+        # A traceback's final exception is independent evidence from a nested
+        # JSON/repr reason. Reserve room for both before filling with context.
+        terminal = last if 'Traceback' in text and re.match(r'^[A-Za-z_][\w.]*\s*:', last) else ''
+        if terminal:
+            parts = [parts[0][:110], terminal[:130]]
+            if first and len(first) <= 160 and not first.startswith(('{', '[', 'Traceback')):
+                parts.insert(0, first[:60])
+        elif first and len(first) <= 160 and not first.startswith(('{', '[', 'Traceback')):
             parts.insert(0, first)
         return (' · '.join(parts))[:limit] + ' …'
     tail = max(1, limit // 6)
