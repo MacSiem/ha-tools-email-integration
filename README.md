@@ -4,6 +4,8 @@
 
 Energy analysis, reports and optional email delivery for Home Assistant. Read energy reports inside HA without SMTP. Configure SMTP when you want to send mail or enable a mail schedule. Existing HA Tools service calls and server-side log digests remain supported.
 
+Log Digest shows retained aggregate counts by last-observed window, with current and undated entries separately. Long diagnostics are summarized in email; full retained details remain available locally in Home Assistant. Polish and English report text follows the recipient presentation settings.
+
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.7+-blue.svg?logo=homeassistant)](https://www.home-assistant.io/) [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Version](https://img.shields.io/github/v/release/MacSiem/ha-tools-email-integration)](https://github.com/MacSiem/ha-tools-email-integration/releases)
 
 Part of the [HA Tools](https://github.com/MacSiem) ecosystem.

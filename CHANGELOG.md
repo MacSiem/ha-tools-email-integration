@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.4.4 (2026-11-03)
+
+- Make Log Digest readable in Polish and English, summarize long diagnostics and keep full retained details in the local Home Assistant log.
+- Distinguish last-observed period counts from current or undated retained entries.
+
 ## 2.4.3 (2026-11-03)
 
 - Calculate period comparisons over matched measured hours and include a known legacy combined fixed fee without inventing its components.
