@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.4.5 (2026-11-03)
+
+- Preserve source value types and precision in the Energy report CSV raw_json column alongside the existing readable values.
+
 ## 2.4.4 (2026-11-03)
 
 - Make Log Digest readable in Polish and English, summarize long diagnostics and keep full retained details in the local Home Assistant log.
