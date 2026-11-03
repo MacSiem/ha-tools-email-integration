@@ -160,15 +160,17 @@ class Report70ComparisonTest(unittest.IsolatedAsyncioTestCase):
                 if not missing_device:
                     self.assertFalse(comparison['groups']['reconciles_household_delta'])
                 # Preserve the old common-mask arithmetic in summary and CSV.
-                # BUILD-1 R9 compares each actual window at >=90% coverage:
-                # current 240 vs measured baseline 230, not 230 vs230.
+                # BUILD-1 compares the same qualified household hours:
+                # retain the baseline total separately from paired 230 vs 230.
                 model = h.subject._cache[2]['report_model']
                 r9 = next(row for row in model['comparisons'] if row['key'] == 'previous_day')
                 self.assertEqual(230, r9['kwh'])
-                self.assertEqual(10, r9['delta_kwh'])
+                self.assertEqual(230, r9['compared_current_kwh'])
+                self.assertEqual(230, r9['compared_baseline_kwh'])
+                self.assertEqual(0, r9['delta_kwh'])
                 self.assertTrue(r9['coverage_ok'])
-                self.assertAlmostEqual(100*10/230, r9['delta_pct'])
-                self.assertIn('+4.3%', report['html'])
+                self.assertEqual(0, r9['delta_pct'])
+                self.assertIn('0.0%', report['html'])
                 exported = {row['field']: row for row in csv.DictReader(StringIO(report['csv']))}
                 self.assertEqual('230.0', exported['comparisons.previous.current_kwh']['value'])
                 self.assertEqual('230.0', exported['comparisons.previous.baseline_kwh']['value'])
