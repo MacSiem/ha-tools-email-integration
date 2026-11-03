@@ -6,6 +6,7 @@ meaning of partial/common-measurement values and metadata in exported reports.
 """
 from collections.abc import Mapping
 import csv
+import json
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 from html import escape
@@ -239,6 +240,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                 names[kind].setdefault(identity, name)
 
     sections = []
+    raw_values = []
     total_currency = snapshot.get('totals', {}).get('currency')
 
     def walk(value, path, caption, currency, rows):
@@ -258,6 +260,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                 currency = value['totals'].get('currency')
             if not value:
                 rows.append(('.'.join(path), caption, empty, '', False))
+                raw_values.append(value)
             for child, item in value.items():
                 if child in _PRIVATE:
                     continue
@@ -270,6 +273,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         elif isinstance(value, (list, tuple)):
             if not value:
                 rows.append(('.'.join(path), caption, empty, '', False))
+                raw_values.append(value)
             for index, item in enumerate(value):
                 walk(item, (*path, str(index)), caption + f' / {index + 1}', currency, rows)
         else:
@@ -293,6 +297,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                 if 'fixed_monthly' in path:
                     unit += '/month' if not pl else '/miesiąc'
             rows.append(('.'.join(path), caption, text, unit, numeric))
+            raw_values.append(value)
 
     # General projection is deliberate: comparison masks/coverage, partial known
     # amounts, historical fees, rules, exceptions and future producer facts are
@@ -1185,7 +1190,8 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         tr('Wygenerowano: ', 'Generated: ') + amount(('generated_at',)), snapshot_id])
     output = StringIO(newline='')
     writer = csv.writer(output, lineterminator='\r\n')
-    writer.writerow(('snapshot_id', 'section', 'field', 'label', 'value', 'unit'))
+    writer.writerow(('snapshot_id', 'section', 'field', 'label', 'value', 'unit', 'raw_json'))
+    raw_iterator = iter(raw_values)
 
     def csv_text(value):
         # Treat names, IDs, metadata and paths as untrusted spreadsheet text.
@@ -1195,7 +1201,8 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     for section_title, rows in sections:
         for path, caption, value, unit, numeric in rows:
             writer.writerow((csv_text(snapshot_id), csv_text(section_title), csv_text(path), csv_text(caption),
-                             value if numeric else csv_text(value), csv_text(unit)))
+                             value if numeric else csv_text(value), csv_text(unit),
+                             json.dumps(next(raw_iterator), ensure_ascii=False, allow_nan=False, separators=(',', ':'))))
     html_parts.append('</td></tr></table></body></html>')
     return {'snapshot_id': snapshot_id, 'html': ''.join(html_parts),
             'text': '\n'.join(text_parts) + '\n', 'csv': output.getvalue()}

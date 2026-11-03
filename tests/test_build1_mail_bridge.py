@@ -146,3 +146,38 @@ class Build1MailBridgeTest(unittest.IsolatedAsyncioTestCase):
                 await h.subject.async_get_analysis('report_window', 'user', purpose='report_read',
                     _report_window=request, _report_model=True)
             self.assertEqual([], h.queries)
+
+class CalendarMailExternalUrlTest(unittest.IsolatedAsyncioTestCase):
+    async def test_configured_external_url_reaches_calendar_mail(self):
+        h = Build1MailBridgeTest().harness()
+        request = periods.resolve_report_window('daily', h.now, 'UTC', mode='calendar')
+        cases = [(None, None), ('https://ha.example.test/energy', 'https://ha.example.test/energy'),
+                 ('javascript:alert(1)', None), ('https://other.example.test/energy', 'https://other.example.test/energy'),
+                 (None, None)]
+        with h.patches():
+            for language, (configured, expected) in ((lang, case) for lang in ('pl', 'en') for case in cases):
+                with self.subTest(language=language, configured=configured):
+                    h.hass.config.external_url = configured
+                    result = await h.subject.async_prepare_report(request, 'user', purpose='report_execute', **{**OPTIONS, 'language': language})
+                    if expected:
+                        self.assertIn(f'href="{expected}"', result['html'])
+                        self.assertIn(expected, result['text'])
+                    else:
+                        self.assertNotIn('href=', result['html'])
+                        self.assertNotIn('Otwórz panel Energia:', result['text'])
+                        self.assertNotIn('Open Energy dashboard:', result['text'])
+                    self.assertNotIn('ha.example.test', result['html'] if expected != 'https://ha.example.test/energy' else '')
+            h.hass.config.external_url = 'https://ha.example.test/energy'
+            preview = await h.subject.async_prepare_report(request, 'user', purpose='report_read', **OPTIONS)
+            self.assertNotIn('href=', preview['html'])
+
+    async def test_url_change_during_render_fails_closed(self):
+        h = Build1MailBridgeTest().harness()
+        h.hass.config.external_url = 'https://ha.example.test/energy'
+        request = periods.resolve_report_window('daily', h.now, 'UTC', mode='calendar')
+        def change(job):
+            if getattr(job, 'func', None) is mail.render:
+                h.hass.config.external_url = 'https://other.example.test/energy'
+        h.on_cpu = change
+        with h.patches(), self.assertRaisesRegex(RuntimeError, 'energy_external_url_changed'):
+            await h.subject.async_prepare_report(request, 'user', purpose='report_execute', **OPTIONS)

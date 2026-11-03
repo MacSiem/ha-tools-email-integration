@@ -647,3 +647,33 @@ class EnergyP1RollingRatesTest(EnergyReportTest):
                 result=self.render()
                 body=ReportDOM(result['html']).root.find(data_section='rate-history-0')[0].text()
                 self.assertIn('Unknown',body)
+
+class RawCsvRoundtripTest(unittest.TestCase):
+    def test_real_producer_snapshot_values_roundtrip_in_both_locales(self):
+        from tests.test_energy_analysis import EnergyAnalysisTest
+        fixture = EnergyAnalysisTest()
+        builder = fixture.builder()
+        fixture.add(builder, '2026-01-01T00:00Z', '2026-01-01T01:00Z', 1.23456789)
+        fixture.add(builder, '2026-01-01T01:00Z', '2026-01-01T02:00Z', 2.34567891)
+        snapshot = builder.finish()
+        snapshot['future_projection'] = {'looks_null': 'null', 'looks_number': '123.4500',
+                                         'zero': 0, 'missing': None, 'formula': '=2+2'}
+        def leaves(value, path=()):
+            if isinstance(value, dict) and value:
+                for k, child in value.items():
+                    if k not in REPORT._PRIVATE:
+                        yield from leaves(child, path + (str(k),))
+            elif isinstance(value, list) and value:
+                for index, child in enumerate(value):
+                    yield from leaves(child, path + (str(index),))
+            else:
+                yield '.'.join(path), value
+        expected = list(leaves(snapshot))
+        for language in ('en', 'pl'):
+            with self.subTest(language=language):
+                result = REPORT.render_energy_analysis(snapshot, language=language, timezone_name='UTC', hour_cycle='24')
+                rows = list(csv.DictReader(StringIO(result['csv'])))
+                actual = [(row['field'], json.loads(row['raw_json'])) for row in rows]
+                self.assertEqual(expected, actual)
+                self.assertEqual(snapshot, json.loads(json.dumps(snapshot, allow_nan=False)))
+                self.assertEqual('0.08', snapshot['totals']['fixed_cost'])
