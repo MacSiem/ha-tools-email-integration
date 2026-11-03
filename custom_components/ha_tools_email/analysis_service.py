@@ -966,7 +966,15 @@ class EnergyAnalysisService:
             if not await self.async_validate_result(snapshot, actor):
                 raise RuntimeError('energy_analysis_context_changed')
             from .mail_energy import render
-            presentation = await self.coordinator._async_run_cpu(partial(render, snapshot['report_model'], **options))
+            # Read the current external URL for each executable calendar mail.
+            # Never fall back to an internal/LAN URL; the renderer validates it.
+            mail_options = dict(options)
+            if snapshot.get('context', {}).get('access_purpose') == 'report_execute':
+                mail_options['external_url'] = getattr(self.hass.config, 'external_url', None)
+            presentation = await self.coordinator._async_run_cpu(partial(render, snapshot['report_model'], **mail_options))
+            if ('external_url' in mail_options and
+                    mail_options['external_url'] != getattr(self.hass.config, 'external_url', None)):
+                raise RuntimeError('energy_external_url_changed')
             # The caller reauthorizes after this await before releasing output.
             # Copy only presentation fields. CSV/identity belong to this exact
             # producer snapshot and its unchanged legacy export implementation.

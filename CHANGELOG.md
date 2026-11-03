@@ -3,6 +3,7 @@
 ## 2.4.5 (2026-11-03)
 
 - Preserve source value types and precision in the Energy report CSV raw_json column alongside the existing readable values.
+- Include the configured safe external URL in calendar report mail, when available.
 
 ## 2.4.4 (2026-11-03)
 
