@@ -477,6 +477,7 @@ def _fees(versions, start, end):
     totals = dict.fromkeys(FEE_KEYS + ('legacy_combined',), Decimal(0))
     known = dict.fromkeys(totals, True)
     parts, identities = [], set()
+    total_known = True
     boundaries = {bound for version in versions for bound in _bounds(version) if bound is not None}
     while True:
         a = int(_midnight(day, zone).timestamp() * 1000)
@@ -498,6 +499,9 @@ def _fees(versions, start, end):
                 values['legacy_combined'] = v.get('legacy_combined_monthly')
                 if values['legacy_combined'] is None:
                     values['legacy_combined'] = 0
+            if v is None or (v.get('legacy_combined_monthly') is None
+                             and not all(values[k] is not None for k in FEE_KEYS)):
+                total_known = False
             for key, value in values.items():
                 if value is None:
                     known[key] = False
@@ -509,13 +513,13 @@ def _fees(versions, start, end):
     named_complete = all(known[k] for k in FEE_KEYS)
     return {'components': {k: _money(totals[k]) if known[k] else None for k in totals},
             'known_components': {k: _money(v) for k, v in totals.items()},
-            'complete': named_complete, 'days': parts}, totals, known, identities
+            'complete': named_complete, 'total_known': total_known, 'days': parts}, totals, known, identities
 
 
 def _price(tariff, rows, coverage, fingerprint, *, include_report_projection=False):
     versions = tariff['versions']
     start, end = _stamp(coverage['from']), _stamp(coverage['to'])
-    fee, fee_totals, fee_known, identities = _fees(versions, start, end)
+    fee, fee_totals, _, identities = _fees(versions, start, end)
     ordered, issues, priced = [], [], []
     sums = dict.fromkeys(('energy_cost', 'variable_cost', 'legacy_combined_cost'), Decimal(0))
     known = dict.fromkeys(sums, True)
@@ -585,8 +589,8 @@ def _price(tariff, rows, coverage, fingerprint, *, include_report_projection=Fal
         # Sum separately rounded known period parts even when a legacy version
         # prevents claiming a complete named energy/distribution split.
         usage = sum((_decimal(_money(value)) for value in sums.values()), Decimal(0))
-    fixed = sum((_decimal(fee['components'][k]) for k in FEE_KEYS), Decimal(0)) if fee['complete'] and compatible else None
-    total = usage + fixed if components_complete and measurement_complete and compatible and usage is not None and fixed is not None else None
+    fixed = sum((_decimal(_money(fee_totals[k])) for k in fee_totals), Decimal(0)) if fee['total_known'] and compatible else None
+    total = usage + fixed if measurement_complete and compatible and usage is not None and fixed is not None else None
     currency, basis = next(iter(identities)) if compatible else (None, None)
     return {'tariff_id': tariff['id'], 'tariff_name': tariff['name'], 'origin': deepcopy(tariff['origin']),
             'measurement_fingerprint': fingerprint,
@@ -598,7 +602,7 @@ def _price(tariff, rows, coverage, fingerprint, *, include_report_projection=Fal
             'total_cost': _money(total), 'effective_price': _money(total / kwh) if total is not None and kwh > 0 else None,
             'known_costs': {k: _money(v) if compatible and not overlapping else None for k, v in sums.items()},
             **({'report_fixed_share': str(sum(fee_totals.values(), Decimal(0)))
-                if compatible and all(fee_known.values()) else None}
+                if compatible and fee['total_known'] else None}
                if include_report_projection else {}),
             'fees': fee if compatible else None, 'rows': priced, 'issues': issues,
             'rates': [{'version_id': v['id'], 'valid_from': v.get('valid_from'), 'valid_to': v.get('valid_to'),

@@ -434,7 +434,7 @@ def _build_report(inputs):
             if 'fixed_monthly' in tariff else monthly,
         days_in_month=monthrange(start.astimezone(zone).year, start.astimezone(zone).month)[1],
         history=deepcopy(projection.get('rates', [])))
-    tariff['zones'] = [{**meta,
+    tariff['zones'] = [{**meta, 'label': meta.get('label') or meta['id'],
         'energy_rate': _decimal(meta.get('energy_rate', meta.get('energyRate'))),
         'variable_rate': _decimal(meta.get('variable_rate', meta.get('variableRate'))),
         'hours_label': next((row['hours_label'] for row in zones if row['id'] == meta['id']), '')}

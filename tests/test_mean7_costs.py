@@ -100,3 +100,14 @@ class MeanSevenCostTest(unittest.TestCase):
         result = self.compare(snapshots, periods, None)
         self.assertEqual(old, result)
         self.assertNotIn('costs', result)
+
+    def test_legacy_aggregate_fee_is_counted_once_for_mean_and_current(self):
+        snapshots, periods, _ = self.fixture(hours=10)
+        v = version(rate=.5, rate_semantics='legacy_combined',
+                    fixed_monthly=dict.fromkeys(('subscription','capacity','distribution','other')),
+                    legacy_combined_monthly=31)
+        costs=self.compare(snapshots,periods,tariff([v]))['costs']
+        for row in [costs['current'],costs['baseline']]:
+            self.assertEqual('0.42',row['fixed_cost'])
+            self.assertIsNotNone(row['total_cost'])
+            self.assertIsNone(row['fees']['components']['subscription'])

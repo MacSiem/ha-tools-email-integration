@@ -209,9 +209,9 @@ async def async_collect_inputs(service, configuration, period, context, accumula
             # Reuse the very same engine's fixed-fee integration; never scale a
             # rounded period fee or split arbitrary named wire components.
             def add_fee():
-                _, amounts, known, identities = _fees(active['versions'], completed.timestamp()*1000,
+                fee, amounts, _, identities = _fees(active['versions'], completed.timestamp()*1000,
                                                        measured_until.timestamp()*1000)
-                if projection['fixed_share'] is not None and all(known.values()) and identities == {(projection['currency'], projection['price_basis'])}:
+                if projection['fixed_share'] is not None and fee['total_known'] and identities == {(projection['currency'], projection['price_basis'])}:
                     projection['fixed_share'] = str(Decimal(projection['fixed_share']) + sum(amounts.values(), Decimal(0)))
                 else:
                     projection['fixed_share'] = None

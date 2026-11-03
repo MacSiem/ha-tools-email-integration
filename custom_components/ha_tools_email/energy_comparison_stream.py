@@ -207,14 +207,13 @@ class PairedComparisonAccumulator:
     def _cost_side(self, state, index, eligible, complete):
         start, end = (int(_instant(self._periods[index][key]).timestamp() * 1000)
                       for key in ('start', 'end'))
-        fee, _, _, fee_identities = _fees(self._versions, start, end)
+        fee, fee_totals, _, fee_identities = _fees(self._versions, start, end)
         usage = finish_usage_cost(state, eligible=eligible, identity_constraints=fee_identities)
         compatible = usage['compatible']
-        fixed = (sum((Decimal(fee['components'][key]) for key in FEE_KEYS), Decimal(0))
-                 if fee['complete'] and compatible else None)
+        fixed = (sum((Decimal(_money(value)) for value in fee_totals.values()), Decimal(0))
+                 if fee['total_known'] and compatible else None)
         total = (Decimal(usage['usage_cost']) + fixed
-                 if complete and usage['pricing_complete'] and fixed is not None
-                 and all(usage[key] is not None for key in _COMPONENTS) else None)
+                 if complete and usage['usage_cost'] is not None and fixed is not None else None)
         return {**usage, 'fixed_scope': 'household_period', 'fixed_cost': _money(fixed),
                 'fees': fee if compatible else None, 'total_cost': _money(total),
                 'effective_price': _money(total / state['kwh'])
