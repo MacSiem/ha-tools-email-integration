@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.4.3 (2026-11-03)
+
+- Clarify all-day tariff labels, historical rates and missing price components in Polish and English energy reports.
+- Distinguish incomplete readings and known source subtotals from a complete household balance and total, while retaining fixed fees separately.
+
 ## 2.4.2 (2026-10-21)
 
 - Retain known source readings from incomplete household hours as a separate, explicitly partial report subtotal. Keep qualified import balances, costs and missing values unchanged. Include Home Assistant device names for device-scoped energy sensor labels.

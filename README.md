@@ -10,6 +10,8 @@ Part of the [HA Tools](https://github.com/MacSiem) ecosystem.
 
 ## How it works
 
+Energy reports distinguish a complete household balance from partial source readings. When historical tariff data is missing, the report identifies the gap; known combined rates remain visible without inventing a breakdown.
+
 **Add the integration, then open your Energy card. To read a report, choose Preview → period/date → Read report. SMTP is optional.**
 
 For email delivery, open **Settings → Devices & services → HA Tools Email → Configure**, save your SMTP settings, then use the card’s **Send Now** or explicitly save a **Schedule**. Opening a card or reading a report never enables a schedule or sends a message.
