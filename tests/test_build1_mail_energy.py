@@ -224,6 +224,19 @@ class EnergyP1PresentationTests(Build1MailEnergyTests):
                     self.assertNotIn('0.50 + 0.00', output)
                     self.assertNotIn('0,50 + 0,00', output)
 
+    def test_historical_zone_fallback_preserves_explicit_custom_labels_and_rules(self):
+        self.model['period']['kind'] = 'week'
+        self.model['tariff']['applied_history'] = [
+            {'validFrom':'2026-01-01','defaultZone':'flat','rules':[], 'zones':[{'id':'flat','label':'Custom & zone','rate':.4}]},
+            {'validFrom':'2026-01-08','defaultZone':'flat','rules':[{'zone':'flat'}], 'zones':[{'id':'flat','rate':.5}]},
+        ]
+        for language, custom, standard in [('pl','Custom & zone','Strefa standardowa'),('en','Custom & zone','Standard zone')]:
+            result=self.render(language=language)
+            self.assertIn('Custom &amp; zone',result['html'])
+            self.assertIn(custom,result['text'])
+            self.assertIn(standard,result['html'])
+            self.assertIn(standard,result['text'])
+
     def test_partial_and_full_model_are_honest_in_both_formats(self):
         from tests.test_build1_energy_model import inputs_for, model
         inputs = inputs_for()

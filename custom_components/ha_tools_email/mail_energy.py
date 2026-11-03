@@ -216,7 +216,7 @@ class _View:
 
     def zone_label(self, zone, tariff=None):
         tariff = self.tariff if tariff is None else tariff
-        label = str(zone.get('label') or self.tr('no_data'))
+        label = str(zone.get('label') or zone.get('id') or self.tr('no_data'))
         if label.casefold() == 'flat':
             zones = _items(tariff.get('zones'))
             all_day = (len(zones) == 1 and tariff.get('defaultZone') == zone.get('id')

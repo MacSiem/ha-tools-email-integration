@@ -254,6 +254,22 @@ class EnergyP1ActualProducerTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn('1.00 EUR/kWh', output)
                 self.assertIn('2.00 EUR/kWh', output)
 
+    async def test_weekly_history_uses_active_producer_zone_ids_in_pl_and_en(self):
+        from tests.test_tariff_history import version
+        from html import unescape
+        for language, expected in [('pl', 'Całodobowa'), ('en', 'All-day')]:
+            h = Harness(); h.user.is_admin = True; h.now = datetime(2026, 1, 13, 12, tzinfo=UTC)
+            versions = [version('2026-01-01', 1, 'first'), version('2026-01-08', 2, 'second')]
+            for item in versions:
+                item['profile'].update(defaultZone='flat', rules=[], zones=[{'id':'flat','energyRate':1,'variableRate':0}])
+            h.book['tariffs'][0]['versions'] = versions
+            with h.patches():
+                result = await h.subject.async_get_report('week','user',anchor='2026-01-05',language=language,timezone_name='UTC',hour_cycle='24')
+            for output in (result['html'], result['text']):
+                output=unescape(output)
+                self.assertGreaterEqual(output.count(expected), 3)
+                self.assertNotIn(('od 1 sty 2026: Brak danych' if language == 'pl' else 'from 1 Jan 2026: No data'), output)
+
     async def test_missing_price_history_differs_from_missing_tariff_configuration(self):
         for has_tariff, language, expected in [(True, 'en', 'No tariff history for this period'),
                 (False, 'en', 'No tariff configured'), (True, 'pl', 'Brak historii taryfy dla tego okresu'),

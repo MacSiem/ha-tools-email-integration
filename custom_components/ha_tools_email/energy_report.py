@@ -1081,7 +1081,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         combined_index = {c['zone_id']: i for i, c in enumerate(combined)} if valid_combined else {}
         legacy = rate.get('rate_semantics') == 'legacy_combined'
         for zi, zone_row in enumerate(zones):
-            name = str(zone_row.get('label') or tr('Strefa', 'Zone'))
+            name = str(zone_row.get('label') or zone_row.get('id') or tr('Strefa', 'Zone'))
             if name.casefold() == 'flat':
                 all_day = (len(zones) == 1 and profile.get('defaultZone') == zone_row.get('id')
                     and not profile.get('rules') and not profile.get('exceptions'))
