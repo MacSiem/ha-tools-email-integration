@@ -207,3 +207,46 @@ class Build1MailEnergyTests(unittest.TestCase):
         self.assertIn('February 2027', result['subject'])
         self.assertNotIn('For information only', result['text'])
         self.assertIn('period share', result['text'])
+
+class EnergyP1PresentationTests(Build1MailEnergyTests):
+    def test_flat_combined_rate_and_localized_date_in_both_formats(self):
+        self.model['zones'] = [dict(id='flat', label='flat', hours_label='4–3', kwh=23, share=1, cost=11.5)]
+        self.model['tariff'].update(valid_from='2026-01-02', rateSemantics='legacy_combined', defaultZone='flat', rules=[], exceptions=[], zones=[
+            dict(id='flat', label='flat', hours_label='4–3', energy_rate=.5, variable_rate=0, rate=.5)])
+        for language, zone, date in [('pl', 'Całodobowa', '2 sty 2026'), ('en', 'All-day', '2 Jan 2026')]:
+            with self.subTest(language=language):
+                result = self.render(language=language)
+                for format_ in ('html', 'text'):
+                    output = result[format_]
+                    self.assertIn(zone, output)
+                    self.assertIn(date, output)
+                    self.assertNotIn('4–3', output)
+                    self.assertNotIn('0.50 + 0.00', output)
+                    self.assertNotIn('0,50 + 0,00', output)
+
+    def test_partial_and_full_model_are_honest_in_both_formats(self):
+        from tests.test_build1_energy_model import inputs_for, model
+        inputs = inputs_for()
+        inputs['projection']['fixed_share'] = '1'
+        inputs['tariff'] = {'name':'G11', 'valid_from':'2026-01-02', 'price_basis':'gross',
+            'rateSemantics':'legacy_combined', 'defaultZone':'flat', 'rules':[], 'exceptions':[],
+            'zones':[{'id':'flat','label':'flat','energyRate':'.5','variableRate':0,'rate':.5}]}
+        for row in inputs['projection']['hours']:
+            row['zone'] = 'flat'
+            row['costs'].update(energy_cost=None, variable_cost=None, usage_cost='.5')
+        for missing in (False, True):
+            if missing:
+                inputs['projection']['hours'][3]['kwh'] = None
+            self.model = model.build_report(inputs)
+            for language in ('pl', 'en'):
+                result = self.render(language=language)
+                for output in (result['html'], result['text']):
+                    self.assertIn('23/24 h' if missing else '24/24 h', output)
+                    self.assertIn('Całodobowa' if language == 'pl' else 'All-day', output)
+                    self.assertIn('2 sty 2026' if language == 'pl' else '2 Jan 2026', output)
+                self.assertNotIn(' · flat ·', result['text'])
+                if missing:
+                    self.assertIsNone(self.model['unmeasured']['kwh'])
+                else:
+                    self.assertAlmostEqual(9.6, self.model['unmeasured']['kwh'])
+                    self.assertEqual(13, self.model['totals']['total_with_fixed'])

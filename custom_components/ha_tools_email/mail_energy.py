@@ -7,6 +7,8 @@ without it longer periods explicitly report that chart data is unavailable.
 from datetime import datetime, timedelta
 import math
 from zoneinfo import ZoneInfo
+from datetime import date as calendar_date
+import re
 
 from . import energy_format as fmt
 from .mail_frame import E, FONT, L, button, h2, hr, kpi_cell, paragraph, render_frame, safe_external_url, section
@@ -214,9 +216,32 @@ class _View:
 
     def zone_label(self, zone):
         label = str(zone.get('label') or self.tr('no_data'))
+        if label.casefold() == 'flat':
+            zones = _items(self.tariff.get('zones'))
+            all_day = (len(zones) == 1 and self.tariff.get('defaultZone') == zone.get('id')
+                and not self.tariff.get('rules') and not self.tariff.get('exceptions'))
+            if all_day:
+                return 'Całodobowa' if self.lang == 'pl' else 'All-day'
+            return 'Strefa standardowa' if self.lang == 'pl' else 'Standard zone'
         if self.lang == 'en':
             return {'tania': 'cheap', 'droga': 'expensive'}.get(label.casefold(), label)
         return label
+
+    def zone_hours(self, zone):
+        hours = str(zone.get('hours_label') or '')
+        if not hours:
+            return ''
+        # These are observed hourly buckets, not a tariff schedule.
+        if re.fullmatch(r'\d{1,2}–\d{1,2}(?:, \d{1,2}–\d{1,2})*', hours):
+            hours = re.sub(r'(\d{1,2})–(\d{1,2})',
+                lambda m: f'{int(m[1]):02d}:00–{int(m[2]):02d}:00', hours)
+        return ('pomiary: ' if self.lang == 'pl' else 'readings: ') + hours
+
+    def tariff_date(self):
+        try:
+            return self.date(calendar_date.fromisoformat(self.tariff.get('valid_from')))
+        except (TypeError, ValueError):
+            return self.tr('no_data')
 
     def fixed_label(self, fixed):
         label = str(fixed.get('label') or self.tr('fixed'))
@@ -356,7 +381,9 @@ class _View:
             visible = daily and (len(points) <= 7 or idx % 7 == 0) or not daily and date is not None and date.hour in (0, 6, 12, 18)
             axis_label = f'{date.hour:02d}' if not daily and date is not None and self.cycle not in ('12', 'h12', 12) and date_key not in repeated else label
             labels.append((idx, axis_label)) if visible else None
-            self.lines.append(f'- {tip}{"*" if p.get("zone") == "cheap" else ""} · {p.get("zone") or ""} · {self.tr("previous")}: {self.energy(previous)}')
+            zone = next((z for z in self.zones if z.get('id') == p.get('zone')), None)
+            name = self.zone_label(zone) if zone else ''
+            self.lines.append(f'- {tip}{"*" if p.get("zone") == "cheap" else ""} · {name} · {self.tr("previous")}: {self.energy(previous)}')
         # Whitespace between inline groups remains a line-break opportunity;
         # each marker and its label/date travel together in mail clients.
         legend_groups = []
@@ -364,7 +391,7 @@ class _View:
             color = self.color(z.get('id'))
             dot = f'<span class="{color}" style="display:inline-block;width:10px;height:10px;border-radius:3px;background-color:{L[color]}"></span>'
             label = self.zone_label(z)
-            hours = str(z.get('hours_label') or '')
+            hours = self.zone_hours(z)
             # The standard cheap/expensive labels match the reference legend;
             # custom/unknown labels retain their exact name and explicit hours.
             standard_cheap = color == 'cheap' and label.casefold() in ('tania', 'cheap')
@@ -407,7 +434,7 @@ class _View:
                 segments.append(f'<td class="{cls}" width="{width:.4f}%" height="12" bgcolor="{L[cls]}" style="height:12px;background-color:{L[cls]};line-height:0;font-size:0">&nbsp;</td>')
             label = self.zone_label(z)
             label = label[:1].upper() + label[1:]
-            hours = str(z.get('hours_label') or '')
+            hours = self.zone_hours(z)
             values = (self.energy(z.get('kwh')), self.share(share), self.money(z.get('cost')))
             dot = f'<span class="{cls}" style="display:inline-block;width:10px;height:10px;border-radius:3px;background-color:{L[cls]}"></span>'
             cells = f'<td class="tx bd zone-label" style="padding:8px 0;border-top:1px solid {L["bd"]};font:400 14px/20px {FONT};color:{L["tx"]}">{dot}&nbsp;{E(label)} <span class="tx2 zone-hours" style="font:400 12px/16px {FONT};color:{L["tx2"]}">{E(hours)}</span></td>'
@@ -480,14 +507,19 @@ class _View:
                     sub += ': ' + details
             value = self.money(self.totals.get(key))
             display_label = self.tr(label) + (f' — {fixed_period_label}' if fixed_period_label else '')
+            if not self.complete and key in ('energy_cost', 'variable_cost', 'usage_cost'):
+                display_label += ' (znane pomiary)' if self.lang == 'pl' else ' (known readings)'
             display_sub = sub.partition(' · ')[2] if fixed_period_label else sub
             rows.append(self.row(display_label, value, bold=bold, sub=display_sub))
-            self.lines.append(f'- {self.tr(label)}: {value}' + (f' · {sub}' if sub else ''))
+            self.lines.append(f'- {display_label}: {value}' + (f' · {sub}' if sub else ''))
         rate_rows = []
         for zone in _items(self.tariff.get('zones')):
             zone_label = self.zone_label(zone)
-            label = f'{zone_label[:1].upper() + zone_label[1:]} ({zone.get("hours_label") or ""})'
-            components = f'{self.n(zone.get("energy_rate"), 2)} + {self.n(zone.get("variable_rate"), 2)} = '
+            hours = self.zone_hours(zone)
+            label = zone_label[:1].upper() + zone_label[1:] + (f' ({hours})' if hours else '')
+            legacy = self.tariff.get('rateSemantics') == 'legacy_combined'
+            components = (('Składniki nieznane · ' if self.lang == 'pl' else 'Components unknown · ') if legacy else
+                f'{self.n(zone.get("energy_rate"), 2)} + {self.n(zone.get("variable_rate"), 2)} = ')
             total_rate = self.rate(zone.get('rate'))
             value = components + total_rate
             label_padding = '4px 8px 4px 0' if self.lang == 'en' else '4px 0'
@@ -495,7 +527,8 @@ class _View:
             self.lines.append(f'- {label}: {value}')
         basis = self.tariff.get('price_basis', self.m.get('price_basis'))
         basis_label = self.tr(basis) if basis in ('gross', 'net') else self.tr('basis_unknown')
-        rate_note = f'{basis_label}: {"energia + dystrybucja zmienna" if self.lang == "pl" else "energy + variable distribution"} · {self.tr("tariff")} {self.tariff.get("name") or self.tr("no_data")} {self.tr("from")} {self.tariff.get("valid_from") or self.tr("no_data")}'
+        rate_description = (('stawka łączna' if self.lang == 'pl' else 'combined rate') if self.tariff.get('rateSemantics') == 'legacy_combined' else ('energia + dystrybucja zmienna' if self.lang == 'pl' else 'energy + variable distribution'))
+        rate_note = f'{basis_label}: {rate_description} · {self.tr("tariff")} {self.tariff.get("name") or self.tr("no_data")} {self.tr("from")} {self.tariff_date()}'
         extras = paragraph(rate_note, line_height=16)
         self.lines.append(rate_note)
         for alt in _items(self.m.get('alternatives')):

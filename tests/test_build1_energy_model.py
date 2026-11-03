@@ -260,3 +260,20 @@ class ProducerProjectionTests(unittest.TestCase):
         self.assertEqual(7, len(result['devices']))
         projection['hours'][0]['costs']['usage_cost'] = '999'
         self.assertNotEqual('999', enabled.report_projection()['hours'][0]['costs']['usage_cost'])
+
+class EnergyP1BalanceTests(unittest.TestCase):
+    def test_incomplete_hours_never_claim_full_unmeasured_balance(self):
+        inputs = inputs_for()
+        inputs['projection']['fixed_share'] = '1'
+        full = model.build_report(inputs)
+        self.assertEqual(24, full['coverage']['measured_hours'])
+        self.assertAlmostEqual(9.6, full['unmeasured']['kwh'])
+        self.assertEqual(13, full['totals']['total_with_fixed'])
+        inputs['projection']['hours'][3]['kwh'] = None
+        partial = model.build_report(inputs)
+        self.assertEqual(23, partial['coverage']['measured_hours'])
+        self.assertEqual('unknown', partial['unmeasured']['status'])
+        self.assertIsNone(partial['unmeasured']['kwh'])
+        self.assertIsNone(partial['unmeasured']['cost'])
+        self.assertIsNone(partial['unmeasured']['share'])
+        self.assertIsNone(partial['totals']['total_with_fixed'])
