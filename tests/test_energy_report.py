@@ -605,3 +605,45 @@ class EnergyReportTest(unittest.TestCase):
         rows = self.rows(result)
         self.assertEqual('17.2500', rows['comparisons.previous.delta_kwh']['value'])
         self.assertEqual('13.37', rows['comparisons.previous.costs.delta_cost']['value'])
+
+class EnergyP1RollingRatesTest(EnergyReportTest):
+    def test_flat_legacy_combined_is_visible_without_fabricating_components(self):
+        rate = self.snapshot['rates'][0]
+        rate.update(rate_semantics='legacy_combined', zone_usage_rates=[{'zone_id':'flat','usage_rate':'0.75'}])
+        rate['profile'].update(defaultZone='flat', rules=[], exceptions=[], zones=[
+            {'id':'flat','label':'flat','energyRate':.75,'variableRate':0}])
+        for language, label in [('pl','Całodobowa'), ('en','All-day')]:
+            result = self.render(language=language)
+            for output in (result['html'], result['text']):
+                self.assertIn(label, output)
+                self.assertIn('0,75' if language == 'pl' else '0.75', output)
+                self.assertIn('Składniki nieznane' if language == 'pl' else 'Components unknown', output)
+
+    def test_history_uses_zone_id_when_profile_label_is_missing(self):
+        rate=self.snapshot['rates'][0]
+        rate['profile'].update(defaultZone='flat',rules=[],zones=[{'id':'flat','energyRate':.75,'variableRate':0}])
+        for language,label in [('pl','Całodobowa'),('en','All-day')]:
+            result=self.render(language=language)
+            self.assertIn(label, ReportDOM(result['html']).root.find(data_section='rate-history-0')[0].text())
+            self.assertIn(label,result['text'])
+
+    def test_history_preserves_custom_labels_and_does_not_call_ruled_flat_all_day(self):
+        rate=self.snapshot['rates'][0]; profile=rate['profile']
+        profile.update(defaultZone='flat',rules=[],zones=[{'id':'flat','label':'Custom & zone','energyRate':.75,'variableRate':0}])
+        for language,standard in [('pl','Strefa standardowa'),('en','Standard zone')]:
+            result=self.render(language=language)
+            self.assertIn('Custom &amp; zone',result['html']);self.assertIn('Custom & zone',result['text'])
+            profile['zones'][0].pop('label');profile['rules']=[{'zone':'flat','intervals':[{'from':'08:00','to':'09:00'}]}]
+            result=self.render(language=language);self.assertIn(standard,result['text'])
+            profile['zones'][0]['label']='Custom & zone';profile['rules']=[]
+
+    def test_malformed_or_missing_combined_projection_is_not_reconstructed(self):
+        rate = self.snapshot['rates'][0]
+        rate['profile'].update(defaultZone='flat', rules=[], zones=[{'id':'flat','label':'flat','energyRate':.75,'variableRate':0}])
+        for projection in (None, [], [{'zone_id':'other','usage_rate':'0.75'}],
+                           [{'zone_id':'flat','usage_rate':'NaN'}], [{'zone_id':'flat','usage_rate':None}]):
+            with self.subTest(projection=projection):
+                rate['zone_usage_rates'] = projection
+                result=self.render()
+                body=ReportDOM(result['html']).root.find(data_section='rate-history-0')[0].text()
+                self.assertIn('Unknown',body)

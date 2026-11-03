@@ -3,13 +3,18 @@ import copy
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import importlib.util
+import sys
+import types
 import json
 from pathlib import Path
 import unittest
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location('build1_model', ROOT / 'custom_components/ha_tools_email/energy_model.py')
+package = types.ModuleType('_build1_energy_model_package')
+package.__path__ = [str(ROOT / 'custom_components/ha_tools_email')]
+sys.modules[package.__name__] = package
+SPEC = importlib.util.spec_from_file_location(package.__name__ + '.energy_model', ROOT / 'custom_components/ha_tools_email/energy_model.py')
 model = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(model)
 
@@ -260,3 +265,27 @@ class ProducerProjectionTests(unittest.TestCase):
         self.assertEqual(7, len(result['devices']))
         projection['hours'][0]['costs']['usage_cost'] = '999'
         self.assertNotEqual('999', enabled.report_projection()['hours'][0]['costs']['usage_cost'])
+
+class EnergyP1BalanceTests(unittest.TestCase):
+    def test_incomplete_hours_never_claim_full_unmeasured_balance(self):
+        inputs = inputs_for()
+        inputs['projection']['fixed_share'] = '1'
+        full = model.build_report(inputs)
+        self.assertEqual(24, full['coverage']['measured_hours'])
+        self.assertAlmostEqual(9.6, full['unmeasured']['kwh'])
+        self.assertEqual(13, full['totals']['total_with_fixed'])
+        inputs['projection']['hours'][3]['kwh'] = None
+        partial = model.build_report(inputs)
+        self.assertEqual(23, partial['coverage']['measured_hours'])
+        self.assertEqual('unknown', partial['unmeasured']['status'])
+        self.assertAlmostEqual(9.2, partial['unmeasured']['kwh'])
+        self.assertEqual(partial['unmeasured']['kwh'], partial['unmeasured']['recorded_kwh'])
+        self.assertIsNone(partial['unmeasured']['cost'])
+        self.assertIsNone(partial['unmeasured']['share'])
+        self.assertIsNone(partial['totals']['total_with_fixed'])
+
+class EnergyP1HourLabelTests(unittest.TestCase):
+    def test_hour_ranges_are_union_of_local_starts_with_exclusive_end(self):
+        self.assertEqual('4–3', model._hours_label(list(range(4,24)) + [0,1,2]))
+        self.assertEqual('0–24', model._hours_label(list(range(24)) + [2]))
+        self.assertEqual('1–3, 5–6', model._hours_label([1,2,2,5]))

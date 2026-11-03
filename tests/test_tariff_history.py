@@ -69,7 +69,8 @@ class TariffHistoryTest(unittest.TestCase):
                           'legacy_combined_cost': '0.01'}, result['known_costs'])
         self.assertEqual('0.03', result['usage_cost'])
         self.assertIsNone(result['energy_cost'])
-        self.assertIsNone(result['total_cost'])
+        self.assertEqual('0.03', result['total_cost'])
+        self.assertFalse(result['components_complete'])
 
     def test_conflicting_embedded_validity_is_rejected_before_pricing(self):
         v = version()

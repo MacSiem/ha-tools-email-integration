@@ -46,3 +46,23 @@ class EnergyRecorderTest(unittest.TestCase):
 
     def test_non_energy_metadata_cannot_be_counted_as_kwh(self):
         self.assertIsNone(self.compose(unit="kW", unit_class="power")["summary"]["total_kwh"])
+
+class EnergyP1WholeSourceTest(unittest.TestCase):
+    def test_recorder_omitting_entire_configured_source_keeps_two_expected_sources(self):
+        from tests.helper_composer_schema2 import ComposerFixture
+        from tests.test_energy_measurements import measurements
+        end = datetime(2026,9,30,12,tzinfo=timezone.utc); start=end-timedelta(days=1)
+        points=[{'start':(start+timedelta(hours=i)).timestamp(),'change':1} for i in range(24)]
+        def recorded(a,b,ids): return {'sensor.a':points}
+        fx=ComposerFixture(end, preferences={'energy_sources':[{'type':'grid','stat_energy_from':'sensor.a'},
+            {'type':'grid','stat_energy_from':'sensor.b'}]},
+            rows={'sensor.a':{'unit':'kWh','unit_class':'energy'},'sensor.b':{'unit':'kWh','unit_class':'energy'}},points=recorded)
+        with fx.patches(): payload=asyncio.run(fx.compose())
+        raw=fx.adapter_reads[0]['result']
+        evidence=measurements.measurement_evidence(raw,start,end)
+        self.assertEqual({'sensor.a','sensor.b'},set(raw['source_ids']))
+        self.assertEqual(48,evidence['coverage']['expected_source_seconds']/3600)
+        self.assertEqual(24,evidence['coverage']['measured_source_seconds']/3600)
+        self.assertIsNone(evidence['kwh'])
+        self.assertEqual(24,evidence['observed_source_kwh'])
+        self.assertTrue(all(row['expected_sources']==2 and row['kwh'] is None for row in evidence['hourly_buckets']))

@@ -19,6 +19,8 @@ from decimal import Decimal, localcontext
 from math import ceil
 from zoneinfo import ZoneInfo
 
+from .energy_measurements import calendar_grid
+
 SCHEMA = 'ha_tools.energy_report/1'
 ZERO = Decimal(0)
 COSTS = ('energy_cost', 'variable_cost', 'usage_cost')
@@ -135,14 +137,49 @@ def _coverage(hours, start, end):
     return (value if any_known else None), measured / Decimal(str(seconds))
 
 
-def _comparisons(requests, total, coverage, scope):
+def _comparison_cells(period, hours, timezone_name, kind):
+    """Use the shared calendar grid on qualified household-hour values.
+
+    A short final interval keeps its actual duration in the frame, so only an
+    equally long observed interval can be paired with it.
+    """
+    start, end = _instant(period['start']), _instant(period['end'])
+    seconds = (end-start).total_seconds()
+    count = ceil(seconds / 3600)
+    grid_end = start + timedelta(hours=count)
+    grid = calendar_grid(start, grid_end, timezone_name,
+                         {'day':'daily','week':'weekly','month':'monthly','year':'yearly'}[kind])
+    cells = {}
+    for row in hours:
+        a, b = _instant(row['from']), _instant(row['to'])
+        stamp = int(a.timestamp()*1000)
+        if stamp not in grid or b != min(a+timedelta(hours=1),end):
+            raise ValueError('invalid_comparison_hour')
+        frame = (*grid[stamp], int((b-a).total_seconds()))
+        if frame in cells:
+            raise ValueError('duplicate_comparison_frame')
+        cells[frame] = _decimal(row.get('kwh'))
+    frames = [(*frame, int(min(3600, (end-datetime.fromtimestamp(stamp/1000,timezone.utc)).total_seconds())))
+              for stamp, frame in grid.items()]
+    if len(set(frames)) != len(frames):
+        raise ValueError('duplicate_comparison_frame')
+    return frames, cells
+
+
+def _comparisons(requests, total, coverage, scope, current_period, current_hours):
     result = []
+    timezone_name, kind = current_period['timezone'], current_period['kind']
+    _, coverage = _coverage(current_hours, current_period['start'], current_period['end'])
+    try:
+        current_frames, current_cells = _comparison_cells(current_period, current_hours, timezone_name, kind)
+    except ValueError:
+        current_frames, current_cells = [], {}
     for request in requests:
         key = request['key']
         baselines = request.get('baselines', []) if key == 'avg_7d' else [request]
         if key == 'avg_7d' and len(baselines) > 7:
             raise ValueError('too_many_mean_baselines')
-        qualified, qualifications, dates = [], [], set()
+        qualified, qualifications, dates, windows, closed = [], [], set(), [], []
         for baseline in baselines:
             period = baseline.get('period')
             if period and 'hours' in baseline:
@@ -156,17 +193,52 @@ def _comparisons(requests, total, coverage, scope):
                 reason = None if allowed else ('scope_mismatch' if not same_scope else 'insufficient_coverage')
             else:
                 value, ratio, allowed, reason = None, ZERO, False, 'baseline_evidence_missing'
+            if allowed:
+                try:
+                    frames = _comparison_cells(period, baseline['hours'], timezone_name, kind)
+                except ValueError:
+                    allowed, reason = False, 'unsupported_comparison_grid'
             qualifications.append({'coverage': ratio, 'qualified': allowed, 'reason': reason})
             if allowed:
                 qualified.append(value)
+                windows.append(frames)
+                calendar_end = period.get('calendar_end')
+                closed.append((_instant(period['end']) == _instant(calendar_end))
+                              if calendar_end else scope == 'full_period')
         value = sum(qualified, ZERO) / len(qualified) if qualified else None
-        eligible = value is not None and coverage >= Decimal('.9')
-        delta = total - value if total is not None and value is not None else None
+        eligible = value is not None and coverage >= Decimal('.9') and bool(current_frames)
+        compared_current, compared_baseline, comparison_scope = None, None, None
+        if eligible:
+            complete = (coverage == 1 and current_period['end'] == current_period['calendar_end']
+                        and all(closed) and all(q['coverage'] == 1 for q in qualifications if q['qualified']))
+            if complete:
+                compared_current, compared_baseline, comparison_scope = total, value, 'calendar_totals'
+            else:
+                grids = [(current_frames,current_cells), *windows]
+                common = set.intersection(*(set(f for f in frames if cells.get(f) is not None) for frames,cells in grids))
+                # Match the shared comparator: reject incompatible frame order and
+                # require 90% common evidence on every participating period.
+                orders = [[frame for frame in frames if frame in common] for frames,_ in grids]
+                if (common and all(order == orders[0] for order in orders[1:]) and
+                        all(Decimal(sum(frame[-1] for frame in common)) /
+                            Decimal(sum(frame[-1] for frame in frames)) >= Decimal('.9')
+                            for frames,_ in grids)):
+                    compared_current = sum((current_cells[f] for f in orders[0]), ZERO)
+                    compared_baseline = sum((sum((cells[f] for f in order),ZERO)
+                                             for order,(_,cells) in zip(orders[1:],windows)),ZERO)/len(windows)
+                    comparison_scope = 'common_measurements'
+                else:
+                    eligible = False
+        delta = compared_current - compared_baseline if eligible and compared_current is not None else None
         result.append({'key': key, 'label': request.get('label', key), 'kwh': value,
-            'delta_kwh': delta, 'delta_pct': 100 * delta / value
-                if eligible and value != 0 and delta is not None else None,
+            'compared_current_kwh': compared_current, 'compared_baseline_kwh': compared_baseline,
+            'comparison_scope': comparison_scope, 'delta_kwh': delta,
+            'delta_pct': 100 * delta / compared_baseline
+                if delta is not None and compared_baseline != 0 else None,
             'coverage_ok': eligible, 'reason': None if eligible else
-                ('current_coverage_below_90' if coverage < Decimal('.9') else 'baseline_unqualified'),
+                ('current_coverage_below_90' if coverage < Decimal('.9') else
+                 'unsupported_comparison_grid' if not current_frames else
+                 'insufficient_common_coverage' if value is not None else 'baseline_unqualified'),
             'qualified_days': len(qualified), 'requested_days': 7 if key == 'avg_7d' else 1,
             'denominator': len(qualified), 'qualifications': qualifications})
     return result
@@ -322,7 +394,7 @@ def _build_report(inputs):
     totals.update(import_kwh=imported,
         recorded_import_kwh=_known_sum(row['recorded_kwh'] for row in hourly if not row['future']),
         fixed_share=fixed,
-        total_with_fixed=usage + fixed if usage is not None and fixed is not None else None,
+        total_with_fixed=usage + fixed if coverage['complete'] and usage is not None and fixed is not None else None,
         effective_rate=_ratio(usage, imported))
     peak = max(observed, key=lambda row: row['kwh']) if observed else None
     totals.update(peak_hour=peak['hour'] if peak else None, peak_kwh=peak['kwh'] if peak else None)
@@ -357,7 +429,7 @@ def _build_report(inputs):
     residual_supported = (partitioned and not double_counting and remainder is not None
         and all(value is not None for value in residuals))
     remainder_cost = usage - device_cost if residual_supported and usage is not None and device_cost is not None else None
-    unmeasured = {'kwh': remainder, 'share': share(remainder), 'cost': remainder_cost,
+    unmeasured = {'kwh': remainder, 'recorded_kwh': remainder, 'share': share(remainder), 'cost': remainder_cost,
         'status': 'double_counting' if double_counting else 'ok' if partitioned and all(value is not None for value in residuals) else 'unknown',
         'tolerance_adjustment_kwh': adjusted,
         'raw_balance_kwh': imported - measured if imported is not None and measured is not None else None}
@@ -425,7 +497,8 @@ def _build_report(inputs):
         issues.append({'code':'consumer_domain_mismatch','severity':'warning','data':{'consumer_domain':domain}})
     if not identity_ok:
         issues.append({'code': 'incomparable_currency_or_basis', 'severity': 'warning', 'data': {}})
-    comparisons = _comparisons(inputs.get('comparisons', []), imported, coverage_ratio, inputs.get('scope', 'full_period'))
+    comparisons = _comparisons(inputs.get('comparisons', []), imported, coverage_ratio, inputs.get('scope', 'full_period'),
+        {**period, 'calendar_end': end, 'end': cutoff}, list(provided.values()))
     tariff = deepcopy(inputs.get('tariff', {}))
     fixed_rows = tariff.get('fixed', [])
     monthly = _sum((_decimal(row.get('monthly')) for row in fixed_rows))
@@ -434,7 +507,7 @@ def _build_report(inputs):
             if 'fixed_monthly' in tariff else monthly,
         days_in_month=monthrange(start.astimezone(zone).year, start.astimezone(zone).month)[1],
         history=deepcopy(projection.get('rates', [])))
-    tariff['zones'] = [{**meta,
+    tariff['zones'] = [{**meta, 'label': meta.get('label') or meta['id'],
         'energy_rate': _decimal(meta.get('energy_rate', meta.get('energyRate'))),
         'variable_rate': _decimal(meta.get('variable_rate', meta.get('variableRate'))),
         'hours_label': next((row['hours_label'] for row in zones if row['id'] == meta['id']), '')}

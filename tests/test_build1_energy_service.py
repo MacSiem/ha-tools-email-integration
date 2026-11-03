@@ -225,3 +225,70 @@ class Build1ServiceTest(unittest.TestCase):
         duplicate.add_chunk({'sensor.cost': points+points[:1]}, metadata, start, end)
         self.assertIsNone(duplicate.report_hours()['hours'][0]['usage_cost'])
         self.assertEqual('unknown', projected.finish()['period_cost']['fixed_fees_status'])
+
+class EnergyP1ActualProducerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_flat_profile_through_collector_to_calendar_mail(self):
+        h = Harness(); h.user.is_admin = True; h.now = datetime(2026, 1, 11, 12, tzinfo=UTC)
+        profile = h.book['tariffs'][0]['versions'][0]['profile']
+        profile.update(defaultZone='flat', rules=[], zones=[{'id':'flat','label':'flat','energyRate':1,'variableRate':0}])
+        h.book['tariffs'][0]['versions'][0]['rate_semantics'] = 'legacy_combined'
+        with h.patches():
+            result = await h.subject.async_get_report('day', 'user', anchor='2026-01-10', language='en', timezone_name='UTC', hour_cycle='24')
+        for output in (result['html'], result['text']):
+            self.assertIn('All-day', output)
+            self.assertIn('Components unknown', output)
+            self.assertIn('1 Jan 2026', output)
+
+    async def test_mixed_history_is_explicit_on_weekly_mail(self):
+        from tests.test_tariff_history import version
+        h = Harness(); h.user.is_admin = True; h.now = datetime(2026, 1, 13, 12, tzinfo=UTC)
+        h.book['tariffs'][0]['versions'] = [version('2026-01-01', 1, 'first'), version('2026-01-08', 2, 'second')]
+        for now in (datetime(2026, 1, 13, 12, tzinfo=UTC), datetime(2026, 1, 9, 12, tzinfo=UTC)):
+            h.now = now
+            with h.patches():
+                result = await h.subject.async_get_report('week', 'user', anchor='2026-01-05', language='en', timezone_name='UTC', hour_cycle='24')
+            for output in (result['html'], result['text']):
+                self.assertIn('Rates changed during this period', output)
+                self.assertIn('8 Jan 2026', output)
+                self.assertIn('1 Jan 2026', output)
+                self.assertIn('1.00 EUR/kWh', output)
+                self.assertIn('2.00 EUR/kWh', output)
+
+    async def test_weekly_history_uses_active_producer_zone_ids_in_pl_and_en(self):
+        from tests.test_tariff_history import version
+        from html import unescape
+        for language, expected in [('pl', 'Całodobowa'), ('en', 'All-day')]:
+            h = Harness(); h.user.is_admin = True; h.now = datetime(2026, 1, 13, 12, tzinfo=UTC)
+            versions = [version('2026-01-01', 1, 'first'), version('2026-01-08', 2, 'second')]
+            for item in versions:
+                item['profile'].update(defaultZone='flat', rules=[], zones=[{'id':'flat','energyRate':1,'variableRate':0}])
+            h.book['tariffs'][0]['versions'] = versions
+            with h.patches():
+                result = await h.subject.async_get_report('week','user',anchor='2026-01-05',language=language,timezone_name='UTC',hour_cycle='24')
+            for output in (result['html'], result['text']):
+                output=unescape(output)
+                self.assertGreaterEqual(output.count(expected), 3)
+                self.assertNotIn(('od 1 sty 2026: Brak danych' if language == 'pl' else 'from 1 Jan 2026: No data'), output)
+
+    async def test_missing_price_history_differs_from_missing_tariff_configuration(self):
+        for has_tariff, language, expected in [(True, 'en', 'No tariff history for this period'),
+                (False, 'en', 'No tariff configured'), (True, 'pl', 'Brak historii taryfy dla tego okresu'),
+                (False, 'pl', 'Brak skonfigurowanej taryfy')]:
+            h = Harness(); h.user.is_admin = True; h.now = datetime(2026, 1, 11, 12, tzinfo=UTC)
+            if has_tariff:
+                h.book['tariffs'][0]['versions'][0]['valid_from'] = '2026-01-11'
+            else:
+                h.book['active_tariff_id'] = None
+            with h.patches():
+                result = await h.subject.async_get_report('day', 'user', anchor='2026-01-10', language=language, timezone_name='UTC', hour_cycle='24')
+            for output in (result['html'], result['text']):
+                self.assertIn(expected, output)
+
+    async def test_partial_tariff_history_is_not_treated_as_configuration_error(self):
+        h = Harness(); h.user.is_admin = True; h.now = datetime(2026, 1, 13, 12, tzinfo=UTC)
+        h.book['tariffs'][0]['versions'][0]['valid_from'] = '2026-01-08'
+        with h.patches():
+            result = await h.subject.async_get_report('week', 'user', anchor='2026-01-05', language='en', timezone_name='UTC', hour_cycle='24')
+        for output in (result['html'], result['text']):
+            self.assertIn('Some tariff history is missing', output)
+            self.assertNotIn('No tariff configured', output)

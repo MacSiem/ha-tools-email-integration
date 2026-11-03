@@ -33,19 +33,18 @@ def _mean_fees(fees):
     return ({'components': {key: _money(value) if known[key] else None for key, value in totals.items()},
              'known_components': {key: _money(value) for key, value in totals.items()},
              'complete': all(known[key] for key in FEE_KEYS),
+             'total_known': all(row[0]['total_known'] for row in fees),
              'periods': [deepcopy(row[0]) for row in fees]}, totals, known,
             set().union(*(row[3] for row in fees)))
 
 
 def _side(state, fee_data, *, eligible, complete):
-    fee, _, _, identities = fee_data
+    fee, fee_totals, _, identities = fee_data
     usage = finish_usage_cost(state, eligible=eligible, identity_constraints=identities)
-    fixed = (sum((Decimal(fee['components'][key]) for key in FEE_KEYS), Decimal(0))
-             if fee['complete'] and usage['compatible'] else None)
+    fixed = (sum((Decimal(_money(value)) for value in fee_totals.values()), Decimal(0))
+             if fee['total_known'] and usage['compatible'] else None)
     total = (Decimal(usage['usage_cost']) + fixed
-             if complete and usage['pricing_complete'] and fixed is not None
-             and all(usage[key] is not None for key in
-                     ('energy_cost', 'variable_cost', 'legacy_combined_cost')) else None)
+             if complete and usage['usage_cost'] is not None and fixed is not None else None)
     return {**usage, 'fixed_scope': 'household_period', 'fixed_cost': _money(fixed),
             'fees': deepcopy(fee) if usage['compatible'] else None,
             'total_cost': _money(total), 'effective_price': _money(total / state['kwh'])
