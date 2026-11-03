@@ -20,7 +20,7 @@ _LABELS = {
     'comparison': ('Porównanie', 'Comparison'), 'hour_chart': ('Zużycie w ciągu doby', 'Consumption throughout the day'),
     'daily_chart': ('Zużycie w kolejnych dniach', 'Daily consumption'),
     'chart_note': ('kolor = strefa taryfy; kreska = poprzedni okres; luka = brak pomiaru', 'colour = tariff zone; tick = previous period; gap = missing reading'),
-    'comparison_note': ('ten sam zakres godzin; % przy wystarczającym pokryciu', 'matching hours; % requires sufficient coverage'),
+    'comparison_note': ('pełne okresy lub wspólne godziny; % przy wystarczającym pokryciu', 'full periods or matched hours; % requires sufficient coverage'),
     'zones': ('Strefy taryfy', 'Tariff zones'), 'devices': ('Urządzenia', 'Devices'),
     'devices_note': ('4 największe, pozostałe zmierzone i niezmierzone (import − suma urządzeń)', 'Top 4, other measured and unmeasured (import − devices)'),
     'rooms': ('Pokoje', 'Rooms'), 'rooms_note': ('suma urządzeń w obszarach HA; bez rozdzielania niezmierzonej energii', 'Devices grouped by HA area; unmeasured energy is not allocated'),
@@ -157,7 +157,7 @@ class _View:
 
     def change(self, comparison):
         value = comparison.get('delta_pct')
-        if self.complete and comparison.get('coverage_ok') is True and _numeric(value):
+        if (self.complete or comparison.get('comparison_scope') == 'common_measurements') and comparison.get('coverage_ok') is True and _numeric(value):
             return fmt.percent(value, role='change', language=self.lang)
         return None
 
@@ -236,7 +236,7 @@ class _View:
         if re.fullmatch(r'\d{1,2}–\d{1,2}(?:, \d{1,2}–\d{1,2})*', hours):
             hours = re.sub(r'(\d{1,2})–(\d{1,2})',
                 lambda m: f'{int(m[1]):02d}:00–{int(m[2]):02d}:00', hours)
-        return ('godziny lokalne pomiarów (bez rozróżnienia dat i powtórzeń): ' if self.lang == 'pl' else 'local reading hours (dates and repeated hours not distinguished): ') + hours
+        return ('Godziny pomiarów: ' if self.lang == 'pl' else 'Reading hours: ') + hours
 
     def tariff_date(self):
         try:
@@ -246,6 +246,14 @@ class _View:
 
     def fixed_label(self, fixed):
         label = str(fixed.get('label') or self.tr('fixed'))
+        key = fixed.get('id')
+        canonical = {'subscription': ('Abonament', 'Subscription'), 'capacity': ('Opłata mocowa', 'Capacity charge'),
+                     'distribution': ('Dystrybucja stała', 'Fixed distribution'), 'other': ('Pozostałe', 'Other')}
+        if key in canonical and label == key:
+            return canonical[key][self.lang == 'en']
+        if (key == 'fixed' and label == 'opłaty stałe' and
+                self.tariff.get('fixedFeeSemantics') == 'legacy_combined'):
+            return 'Opłaty stałe' if self.lang == 'pl' else 'Fixed charges'
         if self.lang == 'en':
             return {'opłata stała sieciowa': 'fixed network fee', 'opłata abonamentowa': 'subscription fee',
                     'opłata mocowa': 'capacity fee', 'opłata handlowa': 'retail fee'}.get(label.casefold(), label)
@@ -305,7 +313,14 @@ class _View:
             quantity = self.n(delta, 2 if self.kind == 'day' else 1, signed=True) + ' kWh' if known else '—'
             value = arrow + quantity + change_text
             description = f'vs {self.comparison_label(c)}'
+            if c.get('comparison_scope') == 'calendar_totals':
+                description += ' · ' + ('Pełne okresy' if self.lang == 'pl' else 'Full periods')
+            if c.get('comparison_scope') == 'common_measurements':
+                matched = ('Wspólne godziny' if self.lang == 'pl' else 'Matched hours')
+                description += f' · {matched}: {self.energy(c.get("compared_current_kwh"))} / {self.energy(c.get("compared_baseline_kwh"))}'
             baseline = self.energy(c.get("kwh"), "tile")
+            if c.get('comparison_scope') == 'common_measurements':
+                baseline = ('Suma okresu: ' if self.lang == 'pl' else 'Period total: ') + baseline
             label = f'{description} · {baseline}'
             rows.append(self.comparison_row(description, baseline, value, cls))
             self.lines.append(f'- {label}: {value}')
@@ -447,7 +462,13 @@ class _View:
         gap = '<td width="4" style="width:4px;line-height:0;font-size:0">&nbsp;</td>'
         bar = f'<table role="presentation" width="100%" style="border-radius:6px"><tr>{gap.join(segments)}</tr></table>' if segments else ''
         table_class = ' class="energy-zones-en"' if self.lang == 'en' else ''
-        return section(bar + f'<table role="presentation" width="100%"{table_class} style="margin-top:8px">{"".join(rows)}</table>' if rows else paragraph(self.tr('no_data')), padding='4px 24px 0')
+        note = ('Godziny nie rozróżniają dat ani powtórzeń przy zmianie czasu.' if self.lang == 'pl' else 'Hours do not distinguish dates or repeated hours when clocks change.')
+        if any(z.get('hours_label') for z in self.zones):
+            self.lines.append(note)
+        content = bar + f'<table role="presentation" width="100%"{table_class} style="margin-top:8px">{"".join(rows)}</table>' if rows else paragraph(self.tr('no_data'))
+        if any(z.get('hours_label') for z in self.zones):
+            content += paragraph(note, margin='8px 0 0', line_height=16)
+        return section(content, padding='4px 24px 0')
 
     def rank_block(self, items, *, rooms=False):
         items = _items(items)

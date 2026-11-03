@@ -206,7 +206,8 @@ class HistoricalRatesTest(unittest.TestCase):
         legacy = history.price_book(book, rows, {'from': rows[0]['from'], 'to': rows[-1]['to']})['tariffs'][0]
         self.assertEqual('0.01', legacy['usage_cost'])
         self.assertIsNone(legacy['energy_cost'])
-        self.assertIsNone(legacy['total_cost'])
+        self.assertEqual('0.01', legacy['total_cost'])
+        self.assertFalse(legacy['components_complete'])
         self.assertEqual({'energy_cost': None, 'variable_cost': None, 'legacy_combined_cost': '0.005'}, legacy['rows'][0]['costs'])
 
 

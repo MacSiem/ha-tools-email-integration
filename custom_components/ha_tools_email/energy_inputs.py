@@ -70,7 +70,8 @@ def report_period(period):
 
 
 def baseline_fact(period, hours, scope):
-    return {'period': {'start': period['start'], 'end': period['end']},
+    return {'period': {'start': period['start'], 'end': period['end'],
+                       'calendar_end': period.get('calendar_end')},
             'hours': deepcopy(hours), 'scope': scope}
 
 

@@ -3,13 +3,18 @@ import copy
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import importlib.util
+import sys
+import types
 import json
 from pathlib import Path
 import unittest
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location('build1_model', ROOT / 'custom_components/ha_tools_email/energy_model.py')
+package = types.ModuleType('_build1_energy_model_package')
+package.__path__ = [str(ROOT / 'custom_components/ha_tools_email')]
+sys.modules[package.__name__] = package
+SPEC = importlib.util.spec_from_file_location(package.__name__ + '.energy_model', ROOT / 'custom_components/ha_tools_email/energy_model.py')
 model = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(model)
 

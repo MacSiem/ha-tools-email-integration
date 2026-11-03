@@ -170,7 +170,8 @@ class ComparisonCostsTest(unittest.TestCase):
         self.assertIsNone(a['energy_cost']); self.assertIsNone(a['variable_cost'])
         self.assertEqual({'energy_cost': '0.01', 'variable_cost': '0.01',
                           'legacy_combined_cost': '0.01'}, a['known_costs'])
-        self.assertEqual('0.03', a['usage_cost']); self.assertIsNone(a['total_cost'])
+        self.assertEqual('0.03', a['usage_cost']); self.assertEqual('0.03', a['total_cost'])
+        self.assertIsNone(a['energy_cost']); self.assertIsNone(a['variable_cost'])
         self.assertEqual('0.01', result['costs']['baseline']['legacy_combined_cost'])
 
     def test_no_hour_or_chunk_rounding_and_local_decimal_context(self):
