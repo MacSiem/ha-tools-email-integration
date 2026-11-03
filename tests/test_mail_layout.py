@@ -173,7 +173,7 @@ class MailLayoutTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(end.isoformat(),payload['summary']['period']['to'])
                 self.assertIn('Czas techniczny UTC',payload['body'])
                 self.assertTrue(payload['body'].endswith('Wygenerowano przez HA Tools Email'))
-                self.assertTrue(payload['subject'].startswith('HA Log Digest – dzienny'))
+                self.assertTrue(payload['subject'].startswith('Raport dziennika HA – dzienny'))
         from tests.helper_composer_schema2 import ComposerFixture,csv_facts,service
         import importlib
         scheduler=importlib.import_module(service.__package__+'.scheduler')
