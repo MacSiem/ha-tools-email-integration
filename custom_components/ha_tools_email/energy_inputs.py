@@ -16,7 +16,7 @@ from .analysis_provider import async_read_energy_chunk
 from .composer import async_get_energy_metadata
 from .energy_measurements import measurement_evidence
 from .energy_model import build_report
-from .tariff_history import HistoricalTariffRates, calculate_energy_amounts, _fees, _version_at
+from .tariff_history import HistoricalTariffRates, calculate_energy_amounts, _bounds, _fees, _version_at
 from .tariff_profiles import book_to_profile
 
 UTC = timezone.utc
@@ -313,13 +313,38 @@ async def async_collect_inputs(service, configuration, period, context, accumula
             requests.append({'key': 'avg_7d', 'baselines': rows})
         else:
             requests.append({'key': labels[key], **(rows[0] if rows else {})})
-    tariff = {}
+    tariff = {'availability_reason': 'no_tariff_config'} if not active and native is None else {}
     if active:
         # Choose the version at the measured window end, rather than silently
         # labelling historical costs with the newest user profile.
         version = _version_at(active['versions'], (measured_until-timedelta(microseconds=1)).timestamp()*1000)
-        if version is not None:
+        if version is None:
+            start_ms, end_ms = start.timestamp() * 1000, measured_until.timestamp() * 1000
+            intervals = [_bounds(row) for row in active['versions']]
+            has_history = any(a is not None and a < end_ms and (b is None or b > start_ms) for a, b in intervals)
+            tariff = {'history_incomplete': True} if has_history else {'availability_reason': 'no_tariff_history'}
+        else:
             tariff = await service._cpu(partial(book_to_profile, book, version_id=version['id']), guard)
+            tariff['applied_history'] = []
+            start_ms, end_ms = start.timestamp() * 1000, measured_until.timestamp() * 1000
+            covered_until, history_gap = start_ms, False
+            for historical in active['versions']:
+                valid_from, valid_to = _bounds(historical)
+                if valid_from is None or valid_from >= end_ms or valid_to is not None and valid_to <= start_ms:
+                    continue
+                if valid_from > covered_until:
+                    history_gap = True
+                covered_until = max(covered_until, min(end_ms, valid_to if valid_to is not None else end_ms))
+                historic_profile = deepcopy(historical['profile'])
+                historic_profile.update(validFrom=historical.get('valid_from'),
+                    rateSemantics=historical['rate_semantics'])
+                for item in historic_profile['zones']:
+                    amount = (calculate_energy_amounts(1, item.get('energyRate'), item.get('variableRate'),
+                        historic_profile.get('rateSemantics', 'components'))['usage_cost']
+                        if not historic_profile.get('dynamic') else None)
+                    item['rate'] = float(amount) if amount is not None else None
+                tariff['applied_history'].append(historic_profile)
+            tariff['history_incomplete'] = history_gap or covered_until < end_ms
             for item in tariff['zones']:
                 amounts = calculate_energy_amounts(1,item.get('energyRate'),item.get('variableRate'),
                     tariff.get('rateSemantics','components'))

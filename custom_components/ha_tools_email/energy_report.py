@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 # These are semantic numeric fields, not arbitrary strings that happen to be numbers.
-_NUMBERS = frozenset(('kwh', 'energyRate', 'variableRate', 'effective_price', 'percent',
+_NUMBERS = frozenset(('kwh', 'energyRate', 'variableRate', 'usage_rate', 'effective_price', 'percent',
     'ratio', 'day_fraction', 'subscription', 'capacity', 'distribution', 'other',
     'legacy_combined', 'legacy_combined_monthly', 'quantum', 'current', 'baseline',
     'common_current', 'common_baseline', 'hours', 'calendar_hours', 'observed_hours',
@@ -136,6 +136,13 @@ def validate_report_preferences(language, timezone_name, hour_cycle, *, date_lan
         return ZoneInfo(timezone_name)
     except (ValueError, ZoneInfoNotFoundError) as err:
         raise ValueError('report_timezone_required') from err
+
+
+def _finite_decimal(value):
+    try:
+        return Decimal(value).is_finite()
+    except (InvalidOperation, ValueError):
+        return False
 
 
 def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, date_language=None):
@@ -275,9 +282,9 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                 unit = 'kWh'
             elif key in ('amount', 'recorded_amount', 'price') and 'native_pricing' in path:
                 unit = (currency or unknown) + ('/kWh' if key == 'price' else '')
-            elif key.endswith('_cost') or key in ('energyRate', 'variableRate', 'effective_price', 'legacy_combined_monthly'):
+            elif key.endswith('_cost') or key in ('energyRate', 'variableRate', 'usage_rate', 'effective_price', 'legacy_combined_monthly'):
                 unit = currency or unknown
-                if key in ('energyRate', 'variableRate', 'effective_price'):
+                if key in ('energyRate', 'variableRate', 'usage_rate', 'effective_price'):
                     unit += '/kWh'
                 elif key == 'legacy_combined_monthly':
                     unit += '/miesiąc' if pl else '/month'
@@ -1060,8 +1067,25 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         rate_caption += ' · ' + str(rate.get('currency') or unknown) + '/kWh · ' + exact((*rp, 'price_basis'))
         profile = rate.get('profile') or {}
         rate_rows = []
-        for zi, zone_row in enumerate(profile.get('zones') or []):
+        zones = profile.get('zones') or []
+        combined = rate.get('zone_usage_rates')
+        ids = [z.get('id') for z in zones]
+        valid_combined = (isinstance(combined, list) and len(combined) == len(ids)
+            and all(isinstance(i, str) and i for i in ids) and len(set(ids)) == len(ids)
+            and isinstance(rate.get('currency'), str) and rate['currency'].isupper() and len(rate['currency']) == 3
+            and rate.get('price_basis') in ('gross', 'net')
+            and all(isinstance(c, Mapping) and c.get('zone_id') in ids and
+                (c.get('usage_rate') is None or isinstance(c.get('usage_rate'), str) and
+                 _finite_decimal(c['usage_rate'])) for c in combined)
+            and len({c['zone_id'] for c in combined}) == len(ids))
+        combined_index = {c['zone_id']: i for i, c in enumerate(combined)} if valid_combined else {}
+        legacy = rate.get('rate_semantics') == 'legacy_combined'
+        for zi, zone_row in enumerate(zones):
             name = str(zone_row.get('label') or tr('Strefa', 'Zone'))
+            if name.casefold() == 'flat':
+                all_day = (len(zones) == 1 and profile.get('defaultZone') == zone_row.get('id')
+                    and not profile.get('rules') and not profile.get('exceptions'))
+                name = tr('Całodobowa', 'All-day') if all_day else tr('Strefa standardowa', 'Standard zone')
             schedules = []
             for rule in profile.get('rules') or []:
                 if rule.get('zone') != zone_row.get('id'):
@@ -1072,16 +1096,18 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                 else:
                     schedules.append(tr('Godziny według reguł taryfy; szczegóły w CSV', 'Hours follow tariff rules; details in CSV'))
             if not schedules and zone_row.get('id') == profile.get('defaultZone'):
-                schedules.append(tr('Pozostałe godziny', 'Other hours'))
+                schedules.append(tr('Całą dobę', 'All day') if len(zones) == 1 and not profile.get('rules') and not profile.get('exceptions') else tr('Pozostałe godziny', 'Other hours'))
             if profile.get('exceptions'):
                 schedules = [tr('Godziny i wyjątki według taryfy; szczegóły w CSV',
                     'Hours and exceptions follow the tariff; details in CSV')]
             if schedules:
                 name += '\n' + ', '.join(schedules)
-            rate_rows.append([name, exact((*rp, 'profile', 'zones', zi, 'energyRate')),
-                exact((*rp, 'profile', 'zones', zi, 'variableRate'))])
+            ci = combined_index.get(zone_row.get('id'))
+            total = exact((*rp, 'zone_usage_rates', ci, 'usage_rate')) if ci is not None else unknown
+            rate_rows.append([name, tr('Składniki nieznane', 'Components unknown') if legacy else exact((*rp, 'profile', 'zones', zi, 'energyRate')),
+                unknown if legacy else exact((*rp, 'profile', 'zones', zi, 'variableRate')), total])
         matrix(rate_caption, [tr('Strefa i godziny', 'Zone and hours'), tr('Energia', 'Energy'),
-            tr('Składnik zmienny', 'Variable component')], rate_rows, section='rate-history-' + str(index))
+            tr('Składnik zmienny', 'Variable component'), tr('Razem', 'Total')], rate_rows, section='rate-history-' + str(index))
         monthly = selected((*rp, 'fixed_monthly'), ('subscription', 'capacity', 'distribution', 'other'))
         if rate.get('legacy_combined_monthly') is not None:
             monthly += selected(rp, ('legacy_combined_monthly',))

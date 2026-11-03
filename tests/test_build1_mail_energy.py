@@ -236,17 +236,21 @@ class EnergyP1PresentationTests(Build1MailEnergyTests):
             row['costs'].update(energy_cost=None, variable_cost=None, usage_cost='.5')
         for missing in (False, True):
             if missing:
-                inputs['projection']['hours'][3]['kwh'] = None
+                inputs['projection']['hours'][3].update(kwh=None, recorded_kwh='.4', measured_sources=1, expected_sources=2)
             self.model = model.build_report(inputs)
             for language in ('pl', 'en'):
                 result = self.render(language=language)
                 for output in (result['html'], result['text']):
                     self.assertIn('23/24 h' if missing else '24/24 h', output)
+                    if missing:
+                        self.assertIn('Zarejestrowano ze źródeł' if language == 'pl' else 'Recorded from sources', output)
                     self.assertIn('Całodobowa' if language == 'pl' else 'All-day', output)
                     self.assertIn('2 sty 2026' if language == 'pl' else '2 Jan 2026', output)
                 self.assertNotIn(' · flat ·', result['text'])
                 if missing:
-                    self.assertIsNone(self.model['unmeasured']['kwh'])
+                    self.assertAlmostEqual(9.2, self.model['unmeasured']['kwh'])
+                    for output in (result['html'], result['text']):
+                        self.assertIn('znane godziny' if language == 'pl' else 'known hours', output)
                 else:
                     self.assertAlmostEqual(9.6, self.model['unmeasured']['kwh'])
                     self.assertEqual(13, self.model['totals']['total_with_fixed'])

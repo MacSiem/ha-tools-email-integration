@@ -273,7 +273,14 @@ class EnergyP1BalanceTests(unittest.TestCase):
         partial = model.build_report(inputs)
         self.assertEqual(23, partial['coverage']['measured_hours'])
         self.assertEqual('unknown', partial['unmeasured']['status'])
-        self.assertIsNone(partial['unmeasured']['kwh'])
+        self.assertAlmostEqual(9.2, partial['unmeasured']['kwh'])
+        self.assertEqual(partial['unmeasured']['kwh'], partial['unmeasured']['recorded_kwh'])
         self.assertIsNone(partial['unmeasured']['cost'])
         self.assertIsNone(partial['unmeasured']['share'])
         self.assertIsNone(partial['totals']['total_with_fixed'])
+
+class EnergyP1HourLabelTests(unittest.TestCase):
+    def test_hour_ranges_are_union_of_local_starts_with_exclusive_end(self):
+        self.assertEqual('4–3', model._hours_label(list(range(4,24)) + [0,1,2]))
+        self.assertEqual('0–24', model._hours_label(list(range(24)) + [2]))
+        self.assertEqual('1–3, 5–6', model._hours_label([1,2,2,5]))

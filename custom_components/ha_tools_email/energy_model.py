@@ -357,9 +357,7 @@ def _build_report(inputs):
     residual_supported = (partitioned and not double_counting and remainder is not None
         and all(value is not None for value in residuals))
     remainder_cost = usage - device_cost if residual_supported and usage is not None and device_cost is not None else None
-    recorded_remainder = remainder
-    remainder = remainder if residual_supported else None
-    unmeasured = {'kwh': remainder, 'recorded_kwh': recorded_remainder, 'share': share(remainder), 'cost': remainder_cost,
+    unmeasured = {'kwh': remainder, 'recorded_kwh': remainder, 'share': share(remainder), 'cost': remainder_cost,
         'status': 'double_counting' if double_counting else 'ok' if partitioned and all(value is not None for value in residuals) else 'unknown',
         'tolerance_adjustment_kwh': adjusted,
         'raw_balance_kwh': imported - measured if imported is not None and measured is not None else None}

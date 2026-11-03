@@ -214,12 +214,13 @@ class _View:
             label = self.tr('no_data')
         return f'{label} ({self.n(measured, 0)}/{self.n(expected, 0)} h)'
 
-    def zone_label(self, zone):
+    def zone_label(self, zone, tariff=None):
+        tariff = self.tariff if tariff is None else tariff
         label = str(zone.get('label') or self.tr('no_data'))
         if label.casefold() == 'flat':
-            zones = _items(self.tariff.get('zones'))
-            all_day = (len(zones) == 1 and self.tariff.get('defaultZone') == zone.get('id')
-                and not self.tariff.get('rules') and not self.tariff.get('exceptions'))
+            zones = _items(tariff.get('zones'))
+            all_day = (len(zones) == 1 and tariff.get('defaultZone') == zone.get('id')
+                and not tariff.get('rules') and not tariff.get('exceptions'))
             if all_day:
                 return 'Całodobowa' if self.lang == 'pl' else 'All-day'
             return 'Strefa standardowa' if self.lang == 'pl' else 'Standard zone'
@@ -235,7 +236,7 @@ class _View:
         if re.fullmatch(r'\d{1,2}–\d{1,2}(?:, \d{1,2}–\d{1,2})*', hours):
             hours = re.sub(r'(\d{1,2})–(\d{1,2})',
                 lambda m: f'{int(m[1]):02d}:00–{int(m[2]):02d}:00', hours)
-        return ('pomiary: ' if self.lang == 'pl' else 'readings: ') + hours
+        return ('godziny lokalne pomiarów (bez rozróżnienia dat i powtórzeń): ' if self.lang == 'pl' else 'local reading hours (dates and repeated hours not distinguished): ') + hours
 
     def tariff_date(self):
         try:
@@ -463,6 +464,8 @@ class _View:
             width = min(100, max(1.5, value / maximum * 100)) if _numeric(value) and value > 0 and not blocked and not included else 0
             bar = (f'<table role="presentation" width="100%"><tr><td class="{cls}" width="{width:.4f}%" height="10" bgcolor="{L[cls]}" style="height:10px;background-color:{L[cls]};line-height:0;font-size:0">&nbsp;</td><td class="grid" style="background-color:{L["grid"]};line-height:0;font-size:0">&nbsp;</td></tr></table>') if width else ''
             name = self.item_name(i)
+            if self.is_unmeasured(i) and i.get('status') == 'unknown' and _numeric(value):
+                name += ' (znane godziny)' if self.lang == 'pl' else ' (known hours)'
             if included:
                 name = f'↳ {name} ({self.tr("included")})'
             name_html = E(name)
@@ -511,7 +514,8 @@ class _View:
                 display_label += ' (znane pomiary)' if self.lang == 'pl' else ' (known readings)'
             display_sub = sub.partition(' · ')[2] if fixed_period_label else sub
             rows.append(self.row(display_label, value, bold=bold, sub=display_sub))
-            self.lines.append(f'- {display_label}: {value}' + (f' · {sub}' if sub else ''))
+            plain_label = self.tr(label) if fixed_period_label else display_label
+            self.lines.append(f'- {plain_label}: {value}' + (f' · {sub}' if sub else ''))
         rate_rows = []
         for zone in _items(self.tariff.get('zones')):
             zone_label = self.zone_label(zone)
@@ -531,6 +535,34 @@ class _View:
         rate_note = f'{basis_label}: {rate_description} · {self.tr("tariff")} {self.tariff.get("name") or self.tr("no_data")} {self.tr("from")} {self.tariff_date()}'
         extras = paragraph(rate_note, line_height=16)
         self.lines.append(rate_note)
+        reason = self.tariff.get('availability_reason')
+        if reason in ('no_tariff_config', 'no_tariff_history'):
+            note = (('Brak skonfigurowanej taryfy' if self.lang == 'pl' else 'No tariff configured')
+                    if reason == 'no_tariff_config' else
+                    ('Brak historii taryfy dla tego okresu' if self.lang == 'pl' else 'No tariff history for this period'))
+            extras += paragraph(note, margin='8px 0 0')
+            self.lines.append(note)
+        if self.tariff.get('history_incomplete') is True:
+            note = ('Brakuje części historii taryfy w okresie pomiarów.' if self.lang == 'pl' else
+                    'Some tariff history is missing from the measured period.')
+            extras += paragraph(note, margin='8px 0 0')
+            self.lines.append(note)
+        history = _items(self.tariff.get('applied_history'))
+        if len(history) > 1:
+            note = ('Stawki zmieniły się w tym okresie; powyżej stawki z końca zakresu pomiarów.' if self.lang == 'pl' else
+                    'Rates changed during this period; above are rates at the end of the measured window.')
+            extras += paragraph(note, margin='8px 0 0')
+            self.lines.append(note)
+            for version in history:
+                try:
+                    date = self.date(calendar_date.fromisoformat(version.get('validFrom')))
+                except (TypeError, ValueError):
+                    date = self.tr('no_data')
+                values = ', '.join(self.zone_label(zone, version) + ': ' + self.rate(zone.get('rate'))
+                                   for zone in _items(version.get('zones')))
+                line = f'{self.tr("from")} {date}: {values or self.tr("no_data")}'
+                extras += paragraph(line, margin='4px 0 0')
+                self.lines.append(line)
         for alt in _items(self.m.get('alternatives')):
             delta = alt.get('delta')
             difference = f' — {"o " if self.lang == "pl" else ""}{self.money(abs(delta))} {self.tr("more" if delta > 0 else "less")}' if _numeric(delta) and delta != 0 else ''
@@ -579,7 +611,14 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
     if comparison:
         v.lines.append(comparison)
     v.lines.append(f'{zone_label}: {v.share(cheap.get("share"))} · {v.energy(cheap.get("kwh"))}')
-    blocks = ['<!-- block:3 -->' + section('<table role="presentation" width="100%"><tr>' + kpis + '</tr></table>', padding='16px 24px 0')]
+    recorded_note = ''
+    recorded = v.totals.get('recorded_import_kwh')
+    if not v.complete and _numeric(recorded):
+        recorded_note = (('Zarejestrowano ze źródeł: ' if v.lang == 'pl' else 'Recorded from sources: ') +
+            v.energy(recorded) + ('. Częściowa suma, nie pełny bilans.' if v.lang == 'pl' else '. Partial subtotal, not a complete balance.'))
+        v.lines.append(recorded_note)
+    blocks = ['<!-- block:3 -->' + section('<table role="presentation" width="100%"><tr>' + kpis + '</tr></table>' +
+        (paragraph(recorded_note, margin='8px 0 0') if recorded_note else ''), padding='16px 24px 0')]
     sections = [(4, 'comparison', 'comparison_note', v.comparison_block),
                 (5, 'hour_chart' if v.kind == 'day' else 'daily_chart', 'chart_note', v.chart),
                 (6, 'zones', None, v.zone_block),
