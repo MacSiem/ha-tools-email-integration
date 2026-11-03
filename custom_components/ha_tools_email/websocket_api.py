@@ -1144,11 +1144,12 @@ async def _ws_preview_log_digest(hass, connection, msg) -> None:
     except (ValueError, TypeError, KeyError):
         connection.send_error(msg["id"], "invalid_payload", "Invalid calendar timezone.")
         return
-    entries = await async_get_system_log_entries(hass)
-    # Reuse the existing pure composer, with a bounded timestamp filter. Missing
-    # timestamps remain explicitly incomplete; counts are lifetime aggregates.
-    from .composer import _entry_time
-    entries = [row for row in entries if _entry_time(row) is None or _entry_time(row) < end]
+    # Match the mail producer: collapse retained identities before applying the
+    # calendar, and never assign an undated aggregate to a particular period.
+    from .composer import _entry_time, _group_retained_logs
+    retained = _group_retained_logs(await async_get_system_log_entries(hass), until=now)
+    undated = sum(_entry_time(row) is None for row in retained)
+    entries = [row for row in retained if _entry_time(row) is not None and _entry_time(row) < end]
     payload = build_log_digest_payload(entries, cadence=cadence, now=now, since=start - timedelta(microseconds=1))
     summary = payload["summary"]
     result = {key: summary[key] for key in
@@ -1165,7 +1166,7 @@ async def _ws_preview_log_digest(hass, connection, msg) -> None:
                   period={"from": start.isoformat(), "to": end.isoformat(),
                           "semantics": "previous_completed_calendar_period"},
                   source={"name": "system_log", "count_semantics": "retained_aggregates",
-                          "complete": False, "retained_entries": len(entries),
+                          "complete": False, "retained_entries": len(entries), "undated_entries": undated,
                           "reason": "retained_last_observed_aggregates_not_full_event_history"})
     connection.send_result(msg["id"], result)
 

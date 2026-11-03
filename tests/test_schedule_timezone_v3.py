@@ -548,7 +548,9 @@ class PreviewCalendarTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(ws, '_utcnow', lambda: datetime(2026, 3, 30, 7, tzinfo=UTC)):
             await ws._ws_preview_log_digest(hass, conn, {'id': 1, 'cadence': 'daily', 'timezone': 'Europe/Warsaw'})
             await ws._ws_preview_log_digest(hass, conn, {'id': 2, 'cadence': 'daily', 'timezone': 'No/SuchZone'})
-        self.assertEqual(3, results[0][1]['total'])
+        # A retained row without a timestamp cannot be assigned to this calendar day.
+        self.assertEqual(2, results[0][1]['total'])
+        self.assertEqual(1, results[0][1]['source']['undated_entries'])
         self.assertEqual('Europe/Warsaw', results[0][1]['effective_timezone'])
         period = results[0][1]['period']
         self.assertEqual(23, (datetime.fromisoformat(period['to']) - datetime.fromisoformat(period['from'])).total_seconds() / 3600)

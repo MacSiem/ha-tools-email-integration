@@ -73,19 +73,20 @@ def _chart(key: str, title: str, unit: str, rows: list[dict[str, Any]], *,
                      'Unknown means a gap or unavailable value; zero is measured zero.')
 
 
-def build_log_chart_model(summary: dict[str, Any]) -> dict[str, Any]:
+def build_log_chart_model(summary: dict[str, Any], *, language: str = "en") -> dict[str, Any]:
     """Counts come from the same normalized retained aggregates as the mail tables."""
     note = LOG_CAVEAT
+    pl = language == 'pl'
     charts = [
-        _chart('log-levels', 'Retained occurrences by level', 'occurrences',
+        _chart('log-levels', 'Zachowane wystąpienia według poziomu' if pl else 'Retained occurrences by level', 'wystąpień' if pl else 'occurrences',
                [_row(k, v) for k, v in sorted(summary.get('level_counts', {}).items())],
                note=note, limit=24, granularity='category'),
-        _chart('log-loggers', 'Retained occurrences by logger', 'occurrences',
+        _chart('log-loggers', 'Zachowane wystąpienia według źródła' if pl else 'Retained occurrences by logger', 'wystąpień' if pl else 'occurrences',
                [_row(k, v) for k, v in summary.get('logger_counts', {}).items()],
                note=note, limit=10, granularity='category'),
     ]
     return dict(schema=1, charts=charts, interactive_url=None,
-                context=note, unique_problems=summary.get('unique_problems'))
+                context=note, unique_problems=summary.get('unique_problems'), language=language)
 
 
 def _window(summary: dict[str, Any]) -> tuple[datetime, datetime] | None:
@@ -217,19 +218,23 @@ def build_energy_chart_model(summary: dict[str, Any], hourly_buckets: list[dict[
                 interactive_url=safe_energy_url(interactive_url))
 
 
-def _scale_text(chart: dict[str, Any]) -> str:
+def _scale_text(chart: dict[str, Any], pl: bool = False) -> str:
+    if pl:
+        if chart['scale_min'] is None or chart['scale_max'] is None:
+            return f'Skala niedostępna. Oś zera: 0 {chart["unit"]}.'
+        return f'Skala: {_number(chart["scale_min"])} → {_number(chart["scale_max"])} {chart["unit"]}. Oś zera: 0 {chart["unit"]}.'
     if chart['scale_min'] is None or chart['scale_max'] is None:
         return f'Scale unavailable (no measured values). Zero axis: 0 {chart["unit"]}.'
     return (f'Scale: {_number(chart["scale_min"])} → {_number(chart["scale_max"])} {chart["unit"]}. '
             f'Zero axis: 0 {chart["unit"]}.')
 
 
-def _bar(chart: dict[str, Any], row: dict[str, Any]) -> str:
+def _bar(chart: dict[str, Any], row: dict[str, Any], pl: bool = False) -> str:
     value, low, high = row['value'], chart['scale_min'], chart['scale_max']
     if value is None:
-        return '<span style="font-size:14px;color:#475569">Unknown / gap</span>'
+        return '<span style="font-size:14px;color:#475569">' + ('Brak danych' if pl else 'Unknown / gap') + '</span>'
     if value == 0:
-        return '<span style="font-size:14px;color:#475569">0 · measured zero</span>'
+        return '<span style="font-size:14px;color:#475569">' + ('0 · zmierzone zero' if pl else '0 · measured zero') + '</span>'
     # Normalize before subtraction to avoid overflow in geometry for very large finite values.
     magnitude = max(abs(low), abs(high))
     negative, positive = abs(low)/magnitude, high/magnitude
@@ -263,6 +268,9 @@ def _side(width: float, fill: float, *, negative: bool) -> str:
 def _chart_note(chart: dict[str, Any], model: dict[str, Any]) -> str:
     # Only the exact shared log prefix moves; all distinct factual notes stay verbatim.
     note = chart['note']
+    if model.get('language') == 'pl' and model.get('context') == LOG_CAVEAT:
+        return (f'Pokazano {chart["displayed_rows"]} z {chart["total_rows"]} wierszy; pominięto {chart["omitted_rows"]}. ' +
+                'Brak danych oznacza lukę lub niedostępną wartość; zero to zmierzone zero.')
     return note.removeprefix(LOG_CAVEAT).lstrip() if model.get('context') == LOG_CAVEAT else note
 
 
@@ -270,6 +278,7 @@ def render_charts_html(model: dict[str, Any], *, embedded: bool = False,
                        include_context: bool = True, context_only: bool = False,
                        row_label: Callable[[dict[str, Any], dict[str, Any]], str] | None = None) -> str:
     sections = []
+    pl = model.get('language') == 'pl' and model.get('context') == LOG_CAVEAT
     for chart in ([] if context_only else model['charts']):
         rows = []
         for row in chart['rows']:
@@ -278,30 +287,28 @@ def render_charts_html(model: dict[str, Any], *, embedded: bool = False,
                         f'<strong>{escape(row_label(chart, row) if row_label else row["label"])}</strong></td></tr>'
                         '<tr><td style="padding:0 0 8px"><table role="presentation" width="100%" '
                         'cellspacing="0" cellpadding="0" style="width:100%;table-layout:fixed"><tr>'
-                        f'<td style="width:65%;padding-right:8px">{_bar(chart, row)}</td>'
+                        f'<td style="width:65%;padding-right:8px">{_bar(chart, row, pl)}</td>'
                         '<td class="mail-bar-value" style="width:35%;text-align:right;word-break:break-word">'
-                        f'{escape(row["display"])} {escape(chart["unit"])}</td></tr></table></td></tr>')
+                        f'{escape("Brak danych" if pl and row["display"] == "Unknown" else row["display"])} {escape(chart["unit"])}</td></tr></table></td></tr>')
         if not rows:
-            rows.append('<tr><td style="padding:10px 0">No retained chart data.</td></tr>')
+            rows.append('<tr><td style="padding:10px 0">' + ('Brak zachowanych danych wykresu.' if pl else 'No retained chart data.') + '</td></tr>')
         sections.append('<table class="mail-card" width="100%" cellspacing="0" cellpadding="0" '
                         'style="width:100%;table-layout:fixed;border-collapse:collapse;margin:18px 0;'
                         'font-size:14px;line-height:1.5;color:#0f172a;background:#ffffff">'
                         '<caption style="text-align:left;font-size:16px;font-weight:700;'
                         f'word-break:break-word">{escape(chart["title"])}{" ¹" if model.get("context") == LOG_CAVEAT else ""}</caption>'
                         '<tbody><tr><td style="padding:6px 0;word-break:break-word">'
-                        f'{escape(_scale_text(chart))}</td></tr>{"".join(rows)}'
+                        f'{escape(_scale_text(chart, pl))}</td></tr>{"".join(rows)}'
                         '<tr><td style="padding:10px 0;color:#475569;word-break:break-word">'
                         f'{escape(_chart_note(chart, model))}</td></tr></tbody></table>')
     if not context_only and model.get('unique_problems') is not None:
-        sections.append(f'<p style="font-size:14px">Unique problems: {_number(_finite(model["unique_problems"]))} '
-                        '(distinct retained groups; a separate metric from occurrences).</p>')
+        sections.append(f'<p style="font-size:14px">' + (f'Unikalne problemy: {_number(_finite(model["unique_problems"]))} (osobne zachowane grupy; inna miara niż wystąpienia).' if pl else f'Unique problems: {_number(_finite(model["unique_problems"]))} (distinct retained groups; a separate metric from occurrences).') + '</p>')
     link = safe_energy_url(model.get('interactive_url'))
     if link:
         sections.append(f'<p style="font-size:14px;word-break:break-word"><a href="{escape(link, quote=True)}" '
                         'style="color:#1d4ed8">Open Home Assistant Energy reference</a></p>')
     if include_context and model.get('context') == LOG_CAVEAT:
-        sections.append('<section class="mail-how-to-read"><h2 style="font-size:16px">How to read these numbers ¹</h2>'
-                        f'<p>{escape(LOG_CAVEAT)}</p></section>')
+        sections.append('<section class="mail-how-to-read"><h2 style="font-size:16px">' + ('Jak czytać te liczby ¹' if pl else 'How to read these numbers ¹') + '</h2><p>' + escape('Wystąpienia w zachowanych agregatach; nie są to dokładne zdarzenia ani pełna historia.' if pl else LOG_CAVEAT) + '</p></section>')
     style = ("font-family:Arial,sans-serif;color:#0f172a" if embedded else
              "max-width:692px;margin:0 auto;padding:14px;font-family:Arial,sans-serif;background:#ffffff;color:#0f172a")
     return HTML_START + f'<div style="{style}">' + ''.join(sections) + '</div>' + HTML_END
@@ -311,19 +318,19 @@ def render_charts_plain(model: dict[str, Any], *, include_context: bool = True,
                         context_only: bool = False,
                         row_label: Callable[[dict[str, Any], dict[str, Any]], str] | None = None) -> str:
     lines = []
+    pl = model.get('language') == 'pl' and model.get('context') == LOG_CAVEAT
     for chart in ([] if context_only else model['charts']):
-        lines.extend([chart['title'] + (' ¹' if model.get('context') == LOG_CAVEAT else ''), _scale_text(chart)])
-        lines.extend(f'{row_label(chart, row) if row_label else row["label"]}: {row["display"]} {chart["unit"]}'
+        lines.extend([chart['title'] + (' ¹' if model.get('context') == LOG_CAVEAT else ''), _scale_text(chart, pl)])
+        lines.extend(f'{row_label(chart, row) if row_label else row["label"]}: {("Brak danych" if pl and row["display"] == "Unknown" else row["display"])} {chart["unit"]}'
                      for row in chart['rows'])
         lines.append(_chart_note(chart, model))
     if not context_only and model.get('unique_problems') is not None:
-        lines.append(f'Unique problems: {_number(_finite(model["unique_problems"]))} '
-                     '(distinct retained groups; separate from occurrences).')
+        lines.append((f'Unikalne problemy: {_number(_finite(model["unique_problems"]))} (osobne zachowane grupy; inna miara niż wystąpienia).' if pl else f'Unique problems: {_number(_finite(model["unique_problems"]))} (distinct retained groups; separate from occurrences).'))
     link = safe_energy_url(model.get('interactive_url'))
     if link:
         lines.append(f'Home Assistant Energy reference: {link}')
     if include_context and model.get('context') == LOG_CAVEAT:
-        lines.extend(['How to read these numbers ¹', LOG_CAVEAT])
+        lines.extend(['Jak czytać te liczby ¹', 'Wystąpienia w zachowanych agregatach; nie są to dokładne zdarzenia ani pełna historia.'] if pl else ['How to read these numbers ¹', LOG_CAVEAT])
     return '\n'.join(lines)
 
 

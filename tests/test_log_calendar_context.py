@@ -30,5 +30,5 @@ class CalendarLogContextTest(unittest.TestCase):
         self.assertIn("Current diagnostics", payload["html"])
         self.assertIn("Current &lt;failure&gt;", payload["html"])
         self.assertIn("outside the requested report period", payload["body"])
-        self.assertNotIn("Total counted warnings/errors: 0", payload["body"])
+        self.assertNotIn("Total retained occurrences: 0", payload["body"])
 

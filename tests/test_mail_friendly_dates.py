@@ -187,8 +187,8 @@ class FriendlyEnergyMailDatesTest(unittest.TestCase):
                 for field in ('body', 'html'):
                     self.assertIn(name, unescape(payload[field]))
             for field in ('body', 'html'):
-                self.assertEqual(1, unescape(log[field]).count(m.LOG_CAVEAT))
-                self.assertIn('Unique problems: 1', log[field])
+                self.assertEqual(1, unescape(log[field]).count("Wystąpienia w zachowanych agregatach; nie są to dokładne zdarzenia ani pełna historia." if language == "pl" else m.LOG_CAVEAT))
+                self.assertIn('Unikalne problemy: 1' if language == 'pl' else 'Unique problems: 1', log[field])
 
     def test_direct_energy_html_formats_cost_and_usage_rows_without_mutating_model(self):
         start = datetime(2026, 10, 25, tzinfo=UTC)

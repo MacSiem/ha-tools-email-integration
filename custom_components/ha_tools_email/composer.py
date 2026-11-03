@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from calendar import monthrange
+import ast
 from datetime import datetime, timedelta, timezone
 from html import escape
+import re
 from math import fsum, isfinite
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -120,7 +122,7 @@ def _title(kind: str, cadence: str, presentation: dict[str, Any]) -> str:
     label = ({"daily": "dzienny", "weekly": "tygodniowy", "monthly": "miesięczny"}.get(cadence, cadence)
              if pl else _cadence_label(cadence))
     if kind == KIND_LOG_DIGEST:
-        return f"HA Log Digest – {label}"
+        return f"Raport dziennika HA – {label}" if pl else f"HA Log Digest – {label}"
     return f"Raport energii – {label}" if pl else f"{label} Energy Report"
 
 
@@ -139,7 +141,7 @@ def _finish_plain(payload: dict[str, Any], date: datetime, presentation: dict[st
     body = payload['body'].rstrip()
     caveat = 'Occurrences in retained aggregates; not exact events or complete event history.'
     if payload['summary'].get('visualization', {}).get('context') == caveat:
-        body += '\n\nHow to read these numbers ¹\n' + caveat
+        body += ('\n\nJak czytać te liczby ¹\nWystąpienia w zachowanych agregatach; nie są to dokładne zdarzenia ani pełna historia.' if presentation['language'] == 'pl' else '\n\nHow to read these numbers ¹\n' + caveat)
     payload['body'] = body + ending
 
 
@@ -228,8 +230,9 @@ def build_log_digest_payload(
     presentation = presentation or _presentation()
     title = _title(KIND_LOG_DIGEST, cadence, presentation)
     subject = _subject(title, now, presentation)
-    summary["visualization"] = build_log_chart_model(summary)
-    body = _date_line(now, presentation) + "\n" + _render_log_plain(title, summary) + "\n\nStatic chart data\n" + render_charts_plain(summary["visualization"], include_context=False)
+    summary["visualization"] = build_log_chart_model(summary, language=presentation["language"])
+    chart_label = "Dane wykresów" if presentation["language"] == "pl" else "Static chart data"
+    body = _date_line(now, presentation) + "\n" + _render_log_plain(title, summary, presentation) + "\n\n" + chart_label + "\n" + render_charts_plain(summary["visualization"], include_context=False)
     html = render_log_digest_html(title, summary, now, presentation=presentation)
     payload = {
         "subject": _mail_text(subject),
@@ -326,79 +329,85 @@ def render_log_digest_html(
 ) -> str:
     """Render compact HTML for a log digest."""
     now = _aware(now or datetime.now(timezone.utc))
+    presentation = presentation or _presentation()
+    pl = presentation["language"] == "pl"
+    tr = lambda en, polish: polish if pl else en
     level_rows = "".join(
         "<tr>"
         f"<td>{_severity_badge(level)}</td>"
-        f"<td style=\"text-align:right;font-weight:700\">{_log_count_text(count)}</td>"
+        f"<td style=\"text-align:right;font-weight:700\">{_log_count_text(count, pl)}</td>"
         "</tr>"
         for level, count in sorted(summary["level_counts"].items())
     )
     if not level_rows:
-        level_rows = '<tr><td colspan="2">No warnings or errors found.</td></tr>'
+        level_rows = '<tr><td colspan="2">' + tr('No warnings or errors found.', 'Brak ostrzeżeń i błędów.') + '</td></tr>'
 
     logger_rows = "".join(
         "<tr>"
         f"<td>{escape(logger)}</td>"
-        f"<td style=\"text-align:right\">{_log_count_text(count)}</td>"
+        f"<td style=\"text-align:right\">{_log_count_text(count, pl)}</td>"
         "</tr>"
         for logger, count in list(summary["logger_counts"].items())[:10]
     )
     if not logger_rows:
-        logger_rows = '<tr><td colspan="2">No logger activity in this digest.</td></tr>'
+        logger_rows = '<tr><td colspan="2">' + tr('No logger activity in this digest.', 'Brak aktywności źródeł w raporcie.') + '</td></tr>'
 
     error_items = "".join(
         "<li>"
         f"{_severity_badge(entry.get('level') or 'UNKNOWN')} "
         f"{escape(str(entry.get('name') or 'unknown'))}: "
-        f"{escape(entry.get('_message') or '')} "
-        f"<span style=\"color:#64748b\">x{_log_count_text(entry.get('count'))}</span>"
+        f"{escape(_log_excerpt(entry.get('_message') or ''))} "
+        f"<span style=\"color:#64748b\">x{_log_count_text(entry.get('count'), pl)}</span>"
         "</li>"
         for entry in summary["recent_errors"]
     )
     if not error_items:
-        error_items = "<li>No recent errors.</li>"
+        error_items = '<li>' + tr('No recent errors.', 'Brak ostatnich błędów.') + '</li>'
 
     warning_items = "".join(
         "<li>"
         f"{_severity_badge(entry.get('level') or 'WARNING')} "
         f"{escape(str(entry.get('name') or 'unknown'))}: "
-        f"{escape(entry.get('_message') or '')} "
-        f"<span style=\"color:#64748b\">x{_log_count_text(entry.get('count'))}</span>"
+        f"{escape(_log_excerpt(entry.get('_message') or ''))} "
+        f"<span style=\"color:#64748b\">x{_log_count_text(entry.get('count'), pl)}</span>"
         "</li>"
         for entry in summary["recent_warnings"]
     )
     if not warning_items:
-        warning_items = "<li>No recent warnings.</li>"
+        warning_items = '<li>' + tr('No recent warnings.', 'Brak ostatnich ostrzeżeń.') + '</li>'
 
     empty_history = summary.get('history_unavailable', False)
-    metric = 'Unavailable' if empty_history else _log_count_text(summary['total'])
-    label = 'Period history' if empty_history else 'Retained warning / error occurrences'
+    metric = tr('Unavailable', 'Niedostępna') if empty_history else _log_count_text(summary['total'], pl)
+    label = tr('Period history', 'Historia okresu') if empty_history else tr('Retained occurrences', 'Wystąpienia w zachowanych wpisach')
     notice = ('The Home Assistant buffer has no retained entries in this report period. '
               'A restart or buffer eviction can remove older entries; this is not evidence of zero errors.'
               if empty_history else
               'Counts describe retained aggregates, not exact events or complete history.')
+    if pl:
+        notice = ('Bufor Home Assistant nie zawiera zachowanych wpisów w tym okresie. Restart lub usunięcie starszych wpisów nie dowodzi braku błędów.' if empty_history else 'Liczby dotyczą zachowanych agregatów, nie dokładnych zdarzeń ani pełnej historii.')
     if empty_history:
         return _report_frame(title, now,
             '<div class="mail-card" style="padding:22px;background:#fff7e6;border:1px solid #e4be71;border-radius:12px">'
-            '<p style="margin:0;color:#704500;font-size:13px;font-weight:700">PERIOD HISTORY</p>'
-            '<p style="margin:6px 0;color:#704500;font-size:30px;font-weight:700">Unavailable</p>'
+            f'<p style="margin:0;color:#704500;font-size:13px;font-weight:700">{escape(label.upper())}</p>'
+            f'<p style="margin:6px 0;color:#704500;font-size:30px;font-weight:700">{escape(metric)}</p>'
             f'<p style="margin:12px 0 0;color:#704500">{notice}</p></div>'
-            + render_charts_html(build_log_chart_model(summary), embedded=True, context_only=True),
+            + render_charts_html(build_log_chart_model(summary, language=presentation["language"]), embedded=True, context_only=True),
             accent='#3b6fd8', presentation=presentation)
     return _report_frame(title, now, f"""
       <div class="mail-card" style="padding:22px;background:#edf3ff;border:1px solid #c5d7f7;border-radius:12px">
       <p style="margin:0;color:#344f7c;font-size:13px;font-weight:700">{label.upper()}</p>
       <p style="margin:6px 0;color:#1e3a5f;font-size:36px;font-weight:700;line-height:1.1">{metric}</p>
       <p style="margin:12px 0 0;color:#344f7c">{notice}</p></div>
-      <h2 style="font-size:16px;margin:18px 0 8px">Counts by level</h2>
+      <h2 style="font-size:16px;margin:18px 0 8px">{tr("Counts by level", "Liczby według poziomu")}</h2>
       <table style="width:100%;table-layout:fixed;border-collapse:collapse">{level_rows}</table>
-      <h2 style="font-size:16px;margin:18px 0 8px">Top loggers</h2>
+      <h2 style="font-size:16px;margin:18px 0 8px">{tr("Top loggers", "Najczęstsze źródła")}</h2>
       <table style="width:100%;table-layout:fixed;border-collapse:collapse">{logger_rows}</table>
-      <h2 style="font-size:16px;margin:18px 0 8px">Top {summary.get("max_entries", 10)} recent errors</h2>
+      <h2 style="font-size:16px;margin:18px 0 8px">{("Ostatnie błędy (do " + str(summary.get("max_entries", 10)) + ")") if pl else ("Top " + str(summary.get("max_entries", 10)) + " recent errors")}</h2>
       <ul style="padding-left:18px;line-height:1.5">{error_items}</ul>
-      <h2 style="font-size:16px;margin:18px 0 8px">Top {summary.get("max_entries", 10)} recent warnings</h2>
+      <h2 style="font-size:16px;margin:18px 0 8px">{("Ostatnie ostrzeżenia (do " + str(summary.get("max_entries", 10)) + ")") if pl else ("Top " + str(summary.get("max_entries", 10)) + " recent warnings")}</h2>
       <ul style="padding-left:18px;line-height:1.5">{warning_items}</ul>
-      {render_charts_html(summary.get("visualization") or build_log_chart_model(summary), embedded=True)}
+      <p>{tr("Full retained details are available locally in the Home Assistant system log.", "Pełne zachowane szczegóły są dostępne lokalnie w dzienniku systemowym Home Assistant.")}</p>
+      {render_charts_html(summary.get("visualization") or build_log_chart_model(summary, language=presentation["language"]), embedded=True)}
       """, accent="#3b6fd8", presentation=presentation)
 
 
@@ -621,8 +630,12 @@ async def async_build_log_digest_payload(
     state = {} if manual_window else await storage.async_get_digest_state(KIND_LOG_DIGEST, cadence)
     since = (window_start - timedelta(microseconds=1) if window_start is not None else
              _parse_datetime(state.get("last_digest")) or _period_start(cadence, now))
-    entries = await async_get_system_log_entries(hass)
+    # Resolve duplicate snapshots before windowing: an aggregate whose latest
+    # observation is outside the period is not a separate historical event.
+    entries = _group_retained_logs(await async_get_system_log_entries(hass), until=now)
     retained_entries = entries
+    unplaced = [row for row in retained_entries if _entry_time(row) is None]
+    entries = [row for row in entries if _entry_time(row) is not None]
     if window_end is not None:
         # Retained aggregates have a last-observed timestamp and lifetime count,
         # not exact event occurrences within a calendar window.
@@ -647,35 +660,50 @@ async def async_build_log_digest_payload(
         # A volatile, bounded buffer cannot prove an empty completed calendar period.
         payload["summary"].update(total=None, counts_complete=False, history_unavailable=True)
         title = _title(KIND_LOG_DIGEST, cadence, presentation)
-        payload["body"] = (_date_line(now, presentation) + "\n" + _render_log_plain(title, payload["summary"])
+        payload["body"] = (_date_line(now, presentation) + "\n" + _render_log_plain(title, payload["summary"], presentation)
                            )
         payload["html"] = render_log_digest_html(title, payload["summary"], now, presentation=presentation)
         explanation = ('Period history unavailable: no retained entries in the requested window. '
                        'Home Assistant restarts and buffer eviction can remove history; zero errors is not confirmed.')
+        if presentation['language'] == 'pl':
+            explanation = 'Historia okresu niedostępna: brak zachowanych wpisów w żądanym zakresie. Restart HA lub usunięcie starszych wpisów nie potwierdza braku błędów.'
         payload["body"] += '\n\n' + explanation
-        if window_end is not None:
-            current = [row for row in retained_entries if _entry_time(row) is not None and
-                       window_end <= _entry_time(row) <= now]
-            if current:
-                current_summary = summarize_log_entries(current, until=now, max_entries=max_entries)
-                payload['summary']['current_context'] = current_summary
-                label = 'Current diagnostics · outside the requested report period'
-                current_model = build_log_chart_model(current_summary)
-                for chart in current_model['charts']:
-                    chart['title'] = 'Current ' + chart['title'].lower()
-                details = ''.join('<li>' + _severity_badge(row.get('level') or 'UNKNOWN') + ' <strong>' + escape(str(row.get('name') or 'unknown')) + '</strong>: '
-                                  + escape(row.get('_message') or '') + '</li>'
-                                  for row in (current_summary['recent_errors'] + current_summary['recent_warnings'])[:max_entries])
-                append_mail_html(payload, '<h2 style="font-size:20px;margin:28px 0 10px">' + label + '</h2>'
-                    + '<p>Available now in the current HA buffer. These lifetime aggregates are separate from the requested period.</p>'
-                    + render_charts_html(current_model, embedded=True, include_context=False) + '<ul>' + details + '</ul>')
-                payload['body'] += ('\n\n' + label + '\n' + _render_log_plain(label, current_summary)
-                                    + '\n' + render_charts_plain(current_model, include_context=False))
-    context = "Counts describe retained aggregates, not exact events or complete history."
+    if window_end is not None:
+        current = [row for row in retained_entries if _entry_time(row) is not None and
+                   window_end <= _entry_time(row) <= now]
+        if current:
+            pl = presentation['language'] == 'pl'
+            current_summary = summarize_log_entries(current, until=now, max_entries=max_entries)
+            payload['summary']['current_context'] = current_summary
+            label = ('Bieżąca diagnostyka · poza okresem raportu' if pl else 'Current diagnostics · outside the requested report period')
+            current_model = build_log_chart_model(current_summary, language=presentation['language'])
+            details = ''.join('<li>' + _severity_badge(row.get('level') or 'UNKNOWN') + ' <strong>' + escape(str(row.get('name') or 'unknown')) + '</strong>: '
+                              + escape(_log_excerpt(row.get('_message') or '')) + '</li>'
+                              for row in (current_summary['recent_errors'] + current_summary['recent_warnings']))
+            context_note = ('Dostępne teraz w buforze HA. Te agregaty obejmujące czas życia są oddzielone od okresu raportu.' if pl else 'Available now in the current HA buffer. These lifetime aggregates are separate from the requested period.')
+            append_mail_html(payload, '<h2 style="font-size:20px;margin:28px 0 10px">' + label + '</h2>'
+                + '<p>' + context_note + '</p>'
+                + render_charts_html(current_model, embedded=True, include_context=False) + '<ul>' + details + '</ul>')
+            payload['body'] += ('\n\n' + label + '\n' + _render_log_plain(label, current_summary, presentation)
+                                + '\n' + render_charts_plain(current_model, include_context=False))
+    if unplaced:
+        pl = presentation['language'] == 'pl'
+        unknown_summary = summarize_log_entries(unplaced, max_entries=max_entries)
+        payload['summary']['undated_context'] = unknown_summary
+        label = 'Nieznany czas · poza liczbami okresu' if pl else 'Unknown time · outside period counts'
+        note = ('Tych zachowanych wpisów nie można przypisać do wybranego okresu.' if pl else
+                'These retained entries cannot be assigned to the selected period.')
+        details = ''.join('<li>' + _severity_badge(row.get('level') or 'UNKNOWN') + ' <strong>' +
+                          escape(str(row.get('name') or 'unknown')) + '</strong>: ' +
+                          escape(_log_excerpt(row.get('_message') or '')) + '</li>'
+                          for row in unknown_summary['recent_errors'] + unknown_summary['recent_warnings'])
+        append_mail_html(payload, '<h2>' + label + '</h2><p>' + note + '</p><ul>' + details + '</ul>')
+        payload['body'] += '\n\n' + label + '\n' + note + '\n' + _render_log_plain(label, unknown_summary, presentation)
+    context = ("Liczby dotyczą zachowanych agregatów, nie dokładnych zdarzeń ani pełnej historii." if presentation["language"] == "pl" else "Counts describe retained aggregates, not exact events or complete history.")
     if window_start is not None and window_end is not None:
         payload["summary"]["period"] = {"from": window_start.isoformat(), "to": window_end.isoformat(),
                                         "semantics": "previous_completed_calendar_period"}
-        context += f" Last-observed window: {_report_date(window_start, presentation)} → {_report_date(window_end, presentation)}."
+        context += (" Okres ostatniej obserwacji: " if presentation["language"] == "pl" else " Last-observed window: ") + f"{_report_date(window_start, presentation)} → {_report_date(window_end, presentation)}."
     payload["body"] += "\n\n" + context
     append_mail_html(payload, f"<p>{escape(context)}</p>")
     if _finalize:
@@ -1191,50 +1219,57 @@ def _clean_energy_devices(
     return rows
 
 
-def _render_log_plain(title: str, summary: dict[str, Any]) -> str:
-    lines = [
-        title,
-        f"Total counted warnings/errors: {_log_count_text(summary['total'])}",
-        "",
-        "Counts by level:",
-    ]
-    if summary["level_counts"]:
-        lines.extend(
-            f"- {level}: {_log_count_text(count)}"
-            for level, count in sorted(summary["level_counts"].items())
-        )
-    else:
-        lines.append("- none")
-    lines.append("")
-    lines.append("Top loggers:")
-    if summary["logger_counts"]:
-        lines.extend(
-            f"- {logger}: {_log_count_text(count)}"
-            for logger, count in list(summary["logger_counts"].items())[:10]
-        )
-    else:
-        lines.append("- none")
-    lines.append("")
-    lines.append(f"Top {summary.get('max_entries', 10)} recent errors:")
-    if summary["recent_errors"]:
-        lines.extend(
-            f"- {entry.get('level')} {entry.get('name')}: {entry.get('_message')} "
-            f"x{_log_count_text(entry.get('count'))}"
-            for entry in summary["recent_errors"]
-        )
-    else:
-        lines.append("- none")
-    lines.append("")
-    lines.append(f"Top {summary.get('max_entries', 10)} recent warnings:")
-    if summary["recent_warnings"]:
-        lines.extend(
-            f"- {entry.get('name')}: {entry.get('_message')} "
-            f"x{_log_count_text(entry.get('count'))}"
-            for entry in summary["recent_warnings"]
-        )
-    else:
-        lines.append("- none")
+def _render_log_plain(title: str, summary: dict[str, Any], presentation: dict[str, Any] | None = None) -> str:
+    pl = (presentation or _presentation())['language'] == 'pl'
+    tr = lambda en, polish: polish if pl else en
+    lines = [title, f"{tr('Total retained occurrences', 'Liczba wystąpień w zachowanych wpisach')}: {_log_count_text(summary['total'], pl)}", '', tr('Counts by level:', 'Liczby według poziomu:')]
+    lines.extend((f"- {level}: {_log_count_text(count, pl)}" for level,count in sorted(summary['level_counts'].items())) if summary['level_counts'] else ['- ' + tr('none','brak')])
+    lines.extend(['', tr('Top loggers:', 'Najczęstsze źródła:')])
+    lines.extend((f"- {logger}: {_log_count_text(count, pl)}" for logger,count in list(summary['logger_counts'].items())[:10]) if summary['logger_counts'] else ['- ' + tr('none','brak')])
+    lines.extend(['', (f"Ostatnie błędy (do {summary.get('max_entries', 10)}):" if pl else f"Top {summary.get('max_entries', 10)} recent errors:")])
+    lines.extend((f"- {entry.get('level')} {entry.get('name')}: {_log_excerpt(entry.get('_message') or '')} x{_log_count_text(entry.get('count'), pl)}" for entry in summary['recent_errors']) if summary['recent_errors'] else ['- ' + tr('none','brak')])
+    lines.extend(['', (f"Ostatnie ostrzeżenia (do {summary.get('max_entries', 10)}):" if pl else f"Top {summary.get('max_entries', 10)} recent warnings:")])
+    lines.extend((f"- {entry.get('name')}: {_log_excerpt(entry.get('_message') or '')} x{_log_count_text(entry.get('count'), pl)}" for entry in summary['recent_warnings']) if summary['recent_warnings'] else ['- ' + tr('none','brak')])
+    lines.append(tr('Full retained details are available locally in the Home Assistant system log.', 'Pełne zachowane szczegóły są dostępne lokalnie w dzienniku systemowym Home Assistant.'))
     return "\n".join(lines)
+
+
+def _log_excerpt(value: str, limit: int = 320) -> str:
+    """Bound long diagnostics, selecting explicit JSON reasons wherever they occur."""
+    text = str(value or '')
+    if len(text) <= limit:
+        return text
+    priority, secondary = [], []
+    pattern = r'(?P<quote>[\'"])(?P<key>reason|cause|error|detail|message)(?P=quote)\s*:\s*(?P<value>"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\')'
+    for match in re.finditer(pattern, text, re.IGNORECASE):
+        encoded = match.group("value")
+        if len(encoded) > 1000:
+            continue
+        try:
+            item = ast.literal_eval(encoded).strip()
+        except (ValueError, SyntaxError, AttributeError):
+            continue
+        if item:
+            target = priority if match.group('key').lower() in ('reason', 'cause', 'error') else secondary
+            if len(target) < 3:
+                target.append(match.group('key') + ': ' + item[:180])
+    parts = (priority + secondary)[:3]
+    if parts:
+        lines = text.rstrip().splitlines()
+        first = lines[0].strip()
+        last = lines[-1].strip()
+        # A traceback's final exception is independent evidence from a nested
+        # JSON/repr reason. Reserve room for both before filling with context.
+        terminal = last if 'Traceback' in text and re.match(r'^[A-Za-z_][\w.]*\s*:', last) else ''
+        if terminal:
+            parts = [parts[0][:110], terminal[:130]]
+            if first and len(first) <= 160 and not first.startswith(('{', '[', 'Traceback')):
+                parts.insert(0, first[:60])
+        elif first and len(first) <= 160 and not first.startswith(('{', '[', 'Traceback')):
+            parts.insert(0, first)
+        return (' · '.join(parts))[:limit] + ' …'
+    tail = max(1, limit // 6)
+    return text[:limit-tail-3] + ' … ' + text[-tail:]
 
 
 def _entry_message(entry: dict[str, Any]) -> str:
@@ -1242,6 +1277,7 @@ def _entry_message(entry: dict[str, Any]) -> str:
     if isinstance(message, list):
         return " ".join(str(item) for item in message)
     return str(message or "")
+
 
 
 def _entry_key(entry: dict[str, Any]) -> str:
@@ -1269,8 +1305,8 @@ def _log_count_total(values: Iterable[int | None]) -> int | None:
     return total
 
 
-def _log_count_text(value: int | None) -> str:
-    return str(value) if value is not None else "Unknown"
+def _log_count_text(value: int | None, pl: bool = False) -> str:
+    return str(value) if value is not None else ("Brak danych" if pl else "Unknown")
 
 
 def _log_exact(value: Any) -> tuple:

@@ -26,20 +26,22 @@ class MailUnicodeTests(unittest.TestCase):
     def test_polish_generated_presentation_survives_actual_mime_encoding(self):
         payload=charts.c.build_log_digest_payload([],cadence='monthly',now=charts.NOW,
             presentation=charts.c._presentation('pl_PL','Europe/Warsaw'))
-        self.assertIn('HA Log Digest – miesięczny',payload['subject'])
+        self.assertIn('Raport dziennika HA – miesięczny',payload['subject'])
         self.assertIn('paź',payload['html'])
         self.assertIn('Wygenerowano przez HA Tools Email',payload['body'])
         self.assert_mime_fields(payload)
 
-    def test_long_valid_polish_and_emoji_are_complete_and_html_is_escaped(self):
+    def test_long_valid_polish_and_emoji_are_bounded_and_html_is_escaped(self):
         # Cross the old client 200 UTF-16-unit boundary with a non-BMP scalar.
         text = 'a' * 199 + '😀 Żółć 🧑🏽\u200d💻 <script>alert("x")</script> & koniec' + 'z' * 500
         entry = dict(id='valid', name='Źródło <img src=x>', level='ERROR',
                      message=[text], count=2, timestamp=charts.NOW.timestamp()-1)
         before = copy.deepcopy(entry)
         payload = charts.c.build_log_digest_payload([entry], cadence='daily', now=charts.NOW)
-        self.assertIn(text, payload['body'])
-        self.assertIn(escape(text), payload['html'])
+        self.assertIn('😀 Żółć 🧑🏽\u200d💻 <script>alert("x")</script> & koniec', payload['body'])
+        self.assertIn(escape('😀 Żółć 🧑🏽\u200d💻 <script>alert("x")</script> & koniec'), payload['html'])
+        self.assertNotIn('z' * 500, payload['body'])
+        self.assertEqual(text, payload['summary']['entries'][0]['message'][0])
         self.assertIn('Źródło &lt;img src=x&gt;', payload['html'])
         self.assertNotIn('<script>', payload['html'])
         self.assertNotIn('<img src=x>', payload['html'])

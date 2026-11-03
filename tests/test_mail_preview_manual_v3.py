@@ -168,7 +168,7 @@ class MailPreviewManualTests(unittest.IsolatedAsyncioTestCase):
                             if kind == 'log_digest':
                                 self.assertFalse(mail['source']['complete'])
                                 self.assertEqual('retained_aggregates', mail['source']['count_semantics'])
-                                self.assertIn('not exact events or complete history', mail['html'])
+                                self.assertIn('nie są to dokładne zdarzenia ani pełna historia' if language.startswith('pl') else 'not exact events or complete history', mail['html'])
                             self.enable_send(hass)
                             sent_before = len(self.sent)
                             # Exercise the existing WS -> send_now -> send_report ->
