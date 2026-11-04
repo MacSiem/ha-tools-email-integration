@@ -69,6 +69,19 @@ class PartialSources(unittest.TestCase):
         output = mail.render(result, language='en', timezone_name='UTC', hour_cycle='24')
         self.assertIn('Other measured (known readings)', output['text'])
 
+    def test_short_interval_uses_fractional_source_hours(self):
+        data = sample()
+        row = data['projection']['hours'][0]
+        end = datetime.fromisoformat(row['from']) + timedelta(minutes=5)
+        row['to'] = end.isoformat()
+        data['projection']['hours'] = [row]
+        data['measured_until'] = end.isoformat()
+        result = model.build_report(data)
+        self.assertEqual(result['coverage']['full_hours'], 0)
+        self.assertEqual(result['coverage']['expected_full_hours'], 0)
+        self.assertAlmostEqual(result['coverage']['measured_source_hours'], 1/12)
+        self.assertAlmostEqual(result['coverage']['expected_source_hours'], 1/6)
+
     def test_missing_price_is_not_zero(self):
         data = sample()
         data['projection']['hours'][5]['recorded_cost'] = None

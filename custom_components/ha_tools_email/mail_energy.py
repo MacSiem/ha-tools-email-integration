@@ -208,7 +208,8 @@ class _View:
         return str(c.get('label') or self.tr('previous'))
 
     def coverage_label(self):
-        measured, expected = self.coverage.get('measured_hours'), self.coverage.get('expected_hours')
+        measured = self.coverage.get('full_hours', self.coverage.get('measured_hours'))
+        expected = self.coverage.get('expected_full_hours', self.coverage.get('expected_hours'))
         label = self.tr('full') if self.complete else self.tr('partial')
         if self.coverage.get('status') == 'no_data' or (not _numeric(self.totals.get('recorded_import_kwh')) and not _numeric(self.totals.get('import_kwh'))):
             label = self.tr('no_data')
@@ -218,7 +219,7 @@ class _View:
             result += f' {unit}'
         sm, se = self.coverage.get('measured_source_hours'), self.coverage.get('expected_source_hours')
         if _numeric(sm) and _numeric(se):
-            result += f'; {self.n(sm, 0)}/{self.n(se, 0)} ' + ('źródło-godzin' if self.lang == 'pl' else 'source-hours')
+            result += f'; {self.n(sm, 2) if sm % 1 else self.n(sm, 0)}/{self.n(se, 2) if se % 1 else self.n(se, 0)} ' + ('źródło-godzin' if self.lang == 'pl' else 'source-hours')
         return result
 
     def zone_label(self, zone, tariff=None):

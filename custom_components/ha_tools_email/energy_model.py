@@ -384,8 +384,13 @@ def _build_report(inputs):
     coverage_ratio = Decimal(measured_hours) / expected
     source_rows = [row for row in hourly if not row['future']]
     source_counts_known = all(type(row['measured_sources']) is int and type(row['expected_sources']) is int for row in source_rows)
-    source_measured = sum(row['measured_sources'] for row in source_rows) if source_counts_known else None
-    source_expected = sum(row['expected_sources'] for row in source_rows) if source_counts_known else None
+    def source_hours(field):
+        return sum((Decimal(row[field]) * Decimal(str((_instant(provided[start + timedelta(hours=i)]['to']) - (start + timedelta(hours=i))).total_seconds())) / Decimal(3600)
+                    for i, row in enumerate(source_rows)), ZERO)
+    source_measured = source_hours('measured_sources') if source_counts_known else None
+    source_expected = source_hours('expected_sources') if source_counts_known else None
+    full_hours = sum(row['kwh'] is not None and not row['partial'] for row in source_rows)
+    expected_full_hours = int((cutoff - start).total_seconds() // 3600)
     has_data = any(row['recorded_kwh'] is not None for row in source_rows)
     missing = {}
     for instant, raw in sorted(provided.items()):
@@ -402,6 +407,7 @@ def _build_report(inputs):
     coverage = {'expected_hours': expected, 'measured_hours': measured_hours,
         'ratio': coverage_ratio, 'complete': measured_hours == expected,
         'status': 'complete' if measured_hours == expected else 'partial' if has_data else 'no_data',
+        'full_hours': full_hours, 'expected_full_hours': expected_full_hours,
         'measured_source_hours': source_measured, 'expected_source_hours': source_expected,
         'missing_sources': missing_sources}
     share_ok = coverage['complete'] and partitioned

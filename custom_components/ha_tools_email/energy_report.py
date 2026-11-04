@@ -1225,7 +1225,7 @@ def append_partial_model_csv(csv_data, snapshot_id, model, language):
                          safe(display), safe(unit), json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(',', ':'))))
     labels = (('Stan danych','Status'), ('Pełne godziny','Complete hours'), ('Oczekiwane godziny','Expected hours'),
               ('Zmierzone źródło-godziny','Measured source-hours'), ('Oczekiwane źródło-godziny','Expected source-hours'))
-    for key, label in zip(('status','measured_hours','expected_hours','measured_source_hours','expected_source_hours'),labels):
+    for key, label in zip(('status','full_hours','expected_full_hours','measured_source_hours','expected_source_hours'),labels):
         emit('report_model.coverage.'+key, label[not pl], coverage.get(key))
     totals = model.get('totals', {})
     for key, label, unit in (('recorded_import_kwh',('Znane odczyty źródeł','Known source readings'),'kWh'),
