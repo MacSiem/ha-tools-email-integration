@@ -1211,7 +1211,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
 def append_partial_model_csv(csv_data, snapshot_id, model, language):
     """Append source-scope facts without changing the existing CSV rows."""
     coverage = model.get('coverage', {})
-    if coverage.get('complete') is True:
+    if coverage.get('complete') is True and not coverage.get('missing_devices'):
         return csv_data
     pl = str(language).lower().startswith('pl')
     output = StringIO(newline='')
@@ -1236,6 +1236,11 @@ def append_partial_model_csv(csv_data, snapshot_id, model, language):
         for j, interval in enumerate(source.get('ranges', [])):
             for key in ('start','end'):
                 emit(f'report_model.coverage.missing_sources.{i}.ranges.{j}.{key}', ('Od' if key == 'start' else 'Do') if pl else ('From' if key == 'start' else 'To'), interval.get(key))
+    for i, source in enumerate(coverage.get('missing_devices', [])):
+        emit(f'report_model.coverage.missing_devices.{i}.name', 'Urządzenie bez odczytu' if pl else 'Device with missing readings', source.get('name') or source.get('id'))
+        for j, interval in enumerate(source.get('ranges', [])):
+            for key in ('start','end'):
+                emit(f'report_model.coverage.missing_devices.{i}.ranges.{j}.{key}', ('Od' if key == 'start' else 'Do') if pl else ('From' if key == 'start' else 'To'), interval.get(key))
     for i, row in enumerate(model.get('hourly', [])):
         if not row.get('future'):
             emit(f'report_model.hourly.{i}.recorded_kwh', ('Znane odczyty ' if pl else 'Known readings ') + str(row.get('start') or ''), row.get('recorded_kwh'), 'kWh')

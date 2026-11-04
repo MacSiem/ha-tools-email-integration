@@ -75,6 +75,20 @@ class PartialSources(unittest.TestCase):
                 month = mail.render(model.build_report(data), language='en', timezone_name='UTC', hour_cycle='24')
                 self.assertIn('24.0 kWh', month['text'])
 
+    def test_complete_grid_and_partial_device_are_distinguished(self):
+        data = sample(mode='full')
+        for row in data['projection']['hours'][:3]: row['devices']['b']['kwh'] = None
+        result = model.build_report(data)
+        self.assertTrue(result['coverage']['complete'])
+        self.assertEqual(result['totals']['import_kwh'],48)
+        self.assertEqual(result['coverage']['status'],'complete')
+        self.assertEqual(result['coverage']['missing_devices'][0]['name'],'<script>B</script>')
+        for lang in ('pl','en'):
+            out = mail.render(result, language=lang, timezone_name='UTC', hour_cycle='24')
+            self.assertIn('niepełne dane urządzeń' if lang == 'pl' else 'incomplete device readings', out['subject'])
+            self.assertIn('Brakujące odczyty urządzeń' if lang == 'pl' else 'Missing device readings', out['text'])
+            self.assertIn('&lt;script&gt;B&lt;/script&gt;',out['html'])
+
     def test_device_only_readings_are_partial_without_inventing_grid_import(self):
         data = sample(mode='none')
         for row in data['projection']['hours']:

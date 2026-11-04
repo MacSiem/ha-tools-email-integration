@@ -506,7 +506,7 @@ class _View:
             width = min(100, max(1.5, value / maximum * 100)) if _numeric(value) and value > 0 and not blocked and not included else 0
             bar = (f'<table role="presentation" width="100%"><tr><td class="{cls}" width="{width:.4f}%" height="10" bgcolor="{L[cls]}" style="height:10px;background-color:{L[cls]};line-height:0;font-size:0">&nbsp;</td><td class="grid" style="background-color:{L["grid"]};line-height:0;font-size:0">&nbsp;</td></tr></table>') if width else ''
             name = self.item_name(i)
-            if group_partial or (not self.complete and i.get('measurement_complete') is False and _numeric(value)):
+            if group_partial or (i.get('measurement_complete') is False and _numeric(value)):
                 name += ' (znane odczyty)' if self.lang == 'pl' else ' (known readings)'
             if self.is_unmeasured(i) and i.get('status') == 'unknown' and _numeric(value):
                 name += ' (znane godziny)' if self.lang == 'pl' else ' (known hours)'
@@ -655,7 +655,8 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
     if v.double:
         pre_parts.append(v.tr('double'))
     preheader = ' · '.join(p for p in pre_parts if p)
-    subject_prefix = (v.tr('no_data') if v.coverage.get('status') == 'no_data' or v.coverage.get('status') is None and not _numeric(available) else v.tr('partial')) if not v.complete else ''
+    device_gaps = _items(v.coverage.get('missing_devices'))
+    subject_prefix = (('niepełne dane urządzeń' if v.lang == 'pl' else 'incomplete device readings') if v.complete and device_gaps else '') or ((v.tr('no_data') if v.coverage.get('status') == 'no_data' or v.coverage.get('status') is None and not _numeric(available) else v.tr('partial')) if not v.complete else '')
     subject_summary = summary if v.complete or _numeric(available) else ''
     subject = f'{v.tr("energy")}: {v.subject_label()} — ' + (subject_prefix + (' — ' if subject_summary else '') if subject_prefix else '') + subject_summary + (f' ({change})' if change else '')
     kpis = (kpi_cell(partial_label, v.n(available), 'kWh', comparison, 'warn' if _numeric(first.get('delta_kwh')) and first['delta_kwh'] > 0 and change else 'good' if change else 'tx2')
@@ -680,9 +681,14 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
     missing_note = (('Brakujące źródła: ' if v.lang == 'pl' else 'Missing sources: ') + '; '.join(missing_lines)) if missing_lines else ''
     if missing_note:
         v.lines.append(missing_note)
+    device_lines = [str(source.get('name') or source.get('id') or '') + ': ' + ', '.join(v.missing_range(r) for r in _items(source.get('ranges'))) for source in device_gaps]
+    device_note = (('Brakujące odczyty urządzeń: ' if v.lang == 'pl' else 'Missing device readings: ') + '; '.join(device_lines)) if device_lines else ''
+    if device_note:
+        v.lines.append(device_note)
     blocks = ['<!-- block:3 -->' + section('<table role="presentation" width="100%"><tr>' + kpis + '</tr></table>' +
         (paragraph(recorded_note, margin='8px 0 0') if recorded_note else '') +
-        (paragraph(missing_note, margin='8px 0 0') if missing_note else ''), padding='16px 24px 0')]
+        (paragraph(missing_note, margin='8px 0 0') if missing_note else '') +
+        (paragraph(device_note, margin='8px 0 0') if device_note else ''), padding='16px 24px 0')]
     sections = [(4, 'comparison', 'comparison_note', v.comparison_block),
                 (5, 'hour_chart' if v.kind == 'day' else 'daily_chart', 'chart_note', v.chart),
                 (6, 'zones', None, v.zone_block),

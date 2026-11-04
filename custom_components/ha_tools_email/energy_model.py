@@ -405,12 +405,27 @@ def _build_report(inputs):
     missing_sources = [{'id': sid, 'name': sources.get(sid, {}).get('name') or sid,
         'ranges': [{'start': a.astimezone(zone).isoformat(), 'end': b.astimezone(zone).isoformat()} for a, b in ranges]}
         for sid, ranges in sorted(missing.items())]
+    missing_devices = []
+    for sid, cells in device_hours.items():
+        ranges = []
+        for i, cell in enumerate(cells):
+            if not cell['eligible'] or cell['kwh'] is not None:
+                continue
+            a = start + timedelta(hours=i)
+            b = min(a + timedelta(hours=1), cutoff)
+            if ranges and ranges[-1][1] == a:
+                ranges[-1][1] = b
+            else:
+                ranges.append([a, b])
+        if ranges:
+            missing_devices.append({'id': sid, 'name': sources.get(sid, {}).get('name') or sid,
+                'ranges': [{'start': a.astimezone(zone).isoformat(), 'end': b.astimezone(zone).isoformat()} for a, b in ranges]})
     coverage = {'expected_hours': expected, 'measured_hours': measured_hours,
         'ratio': coverage_ratio, 'complete': measured_hours == expected,
         'status': 'complete' if measured_hours == expected else 'partial' if has_data else 'no_data',
         'full_hours': full_hours, 'expected_full_hours': expected_full_hours,
         'measured_source_hours': source_measured, 'expected_source_hours': source_expected,
-        'missing_sources': missing_sources}
+        'missing_sources': missing_sources, 'missing_devices': missing_devices}
     share_ok = coverage['complete'] and partitioned
     imported = _known_sum(row['kwh'] for row in hourly if not row['future'])
     observed = [row for row in hourly if row['kwh'] is not None and not row['future']]
@@ -476,6 +491,7 @@ def _build_report(inputs):
         quantity = _sum((row['kwh'] for row in other), empty=ZERO)
         ranking.append({'id': '_other_measured', 'name': 'Pozostałe zmierzone', 'kwh': quantity,
             'recorded_kwh': _known_sum(row['kwh'] for row in other),
+            'measurement_complete': all(row['measurement_complete'] for row in other),
             'share': share(quantity), 'cost': _sum(row['cost'] for row in other),
             'color': 'other', 'count': len(other), 'children': deepcopy(other)})
     ranking.append({'id': '_unmeasured', 'name': 'Niezmierzone', **unmeasured, 'color': 'unmeasured'})
@@ -495,7 +511,8 @@ def _build_report(inputs):
             quantity = _sum(row['kwh'] for row in members)
             if key is None and quantity == 0:
                 continue
-            result.append({**group, 'kwh': quantity, 'recorded_kwh': _known_sum(row['kwh'] for row in members), 'share': share(quantity),
+            result.append({**group, 'kwh': quantity, 'recorded_kwh': _known_sum(row['kwh'] for row in members),
+                'measurement_complete': all(row['measurement_complete'] for row in members), 'share': share(quantity),
                 'cost': _sum(row['cost'] for row in members), 'devices': len(members)})
         result.sort(key=lambda row: (-(row['kwh'] or ZERO), row['name']))
         result.append({level + '_id': '_unmeasured', 'name': 'Niezmierzone', **unmeasured})
