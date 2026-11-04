@@ -12,6 +12,7 @@ pkg.__path__ = [str(Path(__file__).resolve().parents[1] / 'custom_components/ha_
 sys.modules[pkg.__name__] = pkg
 model = importlib.import_module(pkg.__name__ + '.energy_model')
 mail = importlib.import_module(pkg.__name__ + '.mail_energy')
+export = importlib.import_module(pkg.__name__ + '.energy_report')
 
 def sample(count=24, mode='partial'):
     start = datetime(2026, 11, 3, tzinfo=timezone.utc)
@@ -85,6 +86,12 @@ class PartialSources(unittest.TestCase):
         self.assertIsNone(next(row for row in result['devices'] if row['id']=='b')['share'])
         self.assertIsNone(result['unmeasured']['share'])
         self.assertEqual(result['coverage']['missing_devices'][0]['name'],'<script>B</script>')
+        import csv, io, json
+        header='snapshot_id,section,field,label,value,unit,raw_json\r\n'
+        rows=list(csv.DictReader(io.StringIO(export.append_partial_model_csv(header,'snapshot',result,'en'))))
+        named=next(row for row in rows if row['field']=='report_model.coverage.missing_devices.0.name')
+        self.assertEqual(json.loads(named['raw_json']),'<script>B</script>')
+        self.assertTrue(any(row['field']=='report_model.coverage.missing_devices.0.ranges.0.end' for row in rows))
         for lang in ('pl','en'):
             out = mail.render(result, language=lang, timezone_name='UTC', hour_cycle='24')
             self.assertIn('niepełne dane urządzeń' if lang == 'pl' else 'incomplete device readings', out['subject'])
