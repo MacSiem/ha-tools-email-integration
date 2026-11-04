@@ -178,6 +178,7 @@ class EnergyAnalysisAccumulator:
         self._period.update(start=self._start.isoformat(), end=self._end.isoformat())
         self._cursor = self._start
         self._rows, self._issues = [], []
+        self._report_missing = {}
         self._ids, self._provenance, self._signature = None, None, None
         self._measured_seconds = 0
         self._consumers = (ConsumerPeriod(consumers, membership, consumer_domain, self._book, self._hours,
@@ -215,6 +216,9 @@ class EnergyAnalysisAccumulator:
         if self._ids is None:
             self._ids, self._provenance = ids, deepcopy(provenance)
             self._signature = _digest({'source_ids': ids, 'provenance': provenance})
+        if self._include_report_hours:
+            for row in evidence['hourly_buckets']:
+                self._report_missing[row['from']] = [sid for sid in ids if row['from'] not in evidence['per_source'][sid]]
         self._rows.extend(evidence['hourly_buckets'])
         self._measured_seconds += evidence['coverage']['measured_source_seconds']
         for issue in evidence['issues']:
@@ -361,7 +365,7 @@ class EnergyAnalysisAccumulator:
                      if price.get('rate_semantics') == 'components' else [costs.get('legacy_combined_cost')])
             costs['usage_cost'] = (str(sum((Decimal(value) for value in parts if value is not None), Decimal(0)))
                                    if known and all(value is not None for value in parts) else None)
-            result.append({**deepcopy(row), 'devices': group['devices'], 'costs': costs,
+            result.append({**deepcopy(row), 'missing_sources': self._report_missing.get(row['from'], []), 'devices': group['devices'], 'costs': costs,
                 'zone': price.get('zone') if price.get('zoneAttribution') == 'single' else None,
                 'classification': price.get('classification'),
                 'currency': active.get('currency') if known else None,

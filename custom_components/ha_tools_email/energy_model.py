@@ -375,16 +375,57 @@ def _build_report(inputs):
             raise ValueError('negative_recorded_import')
         hourly.append({'start': local.isoformat(), 'hour': local.hour, 'fold': local.fold,
             'kwh': kwh, 'zone': raw.get('zone'), 'classification': raw.get('classification'), **costs, 'cost': costs['usage_cost'],
-            'recorded_kwh': recorded, 'measured_sources': raw.get('measured_sources'),
+            'recorded_kwh': recorded, 'recorded_cost': _decimal(raw.get('recorded_cost')) if identity_ok else None, 'measured_sources': raw.get('measured_sources'),
             'expected_sources': raw.get('expected_sources'),
             'measured_kwh': measured, 'prev_kwh': previous_value,
             'partial': bool(raw) and _instant(raw['to']) - instant < timedelta(hours=1),
             'future': not eligible})
     expected = ceil((cutoff - start).total_seconds() / 3600)
     coverage_ratio = Decimal(measured_hours) / expected
+    source_rows = [row for row in hourly if not row['future']]
+    source_counts_known = all(type(row['measured_sources']) is int and type(row['expected_sources']) is int for row in source_rows)
+    def source_hours(field):
+        return sum((Decimal(row[field]) * Decimal(str((_instant(provided[start + timedelta(hours=i)]['to']) - (start + timedelta(hours=i))).total_seconds())) / Decimal(3600)
+                    for i, row in enumerate(source_rows)), ZERO)
+    source_measured = source_hours('measured_sources') if source_counts_known else None
+    source_expected = source_hours('expected_sources') if source_counts_known else None
+    full_hours = sum(row['kwh'] is not None and not row['partial'] for row in source_rows)
+    expected_full_hours = int((cutoff - start).total_seconds() // 3600)
+    has_data = (any(row['recorded_kwh'] is not None for row in source_rows) or
+        any(cell['eligible'] and cell['kwh'] is not None for rows in device_hours.values() for cell in rows))
+    missing = {}
+    for instant, raw in sorted(provided.items()):
+        for sid in raw.get('missing_sources', []):
+            intervals = missing.setdefault(sid, [])
+            finish = _instant(raw['to'])
+            if intervals and intervals[-1][1] == instant:
+                intervals[-1][1] = finish
+            else:
+                intervals.append([instant, finish])
+    missing_sources = [{'id': sid, 'name': sources.get(sid, {}).get('name') or sid,
+        'ranges': [{'start': a.astimezone(zone).isoformat(), 'end': b.astimezone(zone).isoformat()} for a, b in ranges]}
+        for sid, ranges in sorted(missing.items())]
+    missing_devices = []
+    for sid, cells in device_hours.items():
+        ranges = []
+        for i, cell in enumerate(cells):
+            if not cell['eligible'] or cell['kwh'] is not None:
+                continue
+            a = start + timedelta(hours=i)
+            b = min(a + timedelta(hours=1), cutoff)
+            if ranges and ranges[-1][1] == a:
+                ranges[-1][1] = b
+            else:
+                ranges.append([a, b])
+        if ranges:
+            missing_devices.append({'id': sid, 'name': sources.get(sid, {}).get('name') or sid,
+                'ranges': [{'start': a.astimezone(zone).isoformat(), 'end': b.astimezone(zone).isoformat()} for a, b in ranges]})
     coverage = {'expected_hours': expected, 'measured_hours': measured_hours,
         'ratio': coverage_ratio, 'complete': measured_hours == expected,
-        'status': 'complete' if measured_hours == expected else 'partial' if measured_hours else 'no_data'}
+        'status': 'complete' if measured_hours == expected else 'partial' if has_data else 'no_data',
+        'full_hours': full_hours, 'expected_full_hours': expected_full_hours,
+        'measured_source_hours': source_measured, 'expected_source_hours': source_expected,
+        'missing_sources': missing_sources, 'missing_devices': missing_devices}
     share_ok = coverage['complete'] and partitioned
     imported = _known_sum(row['kwh'] for row in hourly if not row['future'])
     observed = [row for row in hourly if row['kwh'] is not None and not row['future']]
@@ -393,6 +434,7 @@ def _build_report(inputs):
     fixed = _decimal(projection.get('fixed_share')) if identity_ok else None
     totals.update(import_kwh=imported,
         recorded_import_kwh=_known_sum(row['recorded_kwh'] for row in hourly if not row['future']),
+        recorded_usage_cost=_sum(row['recorded_cost'] for row in source_rows if row['recorded_kwh'] is not None) if has_data else None,
         fixed_share=fixed,
         total_with_fixed=usage + fixed if coverage['complete'] and usage is not None and fixed is not None else None,
         effective_rate=_ratio(usage, imported))
@@ -409,7 +451,7 @@ def _build_report(inputs):
         cost = _sum(row['cost'] for row in rows if row['kwh'] is not None)
         meta = sources.get(sid, {})
         all_devices[sid] = {'id': sid, 'name': meta.get('name') or sid, 'kwh': quantity,
-            'cost': cost, 'effective_rate': _ratio(cost, quantity), 'share': share(quantity),
+            'cost': cost, 'effective_rate': _ratio(cost, quantity), 'share': share(quantity) if all(row['kwh'] is not None for row in rows) else None,
             'area_id': meta.get('area_id'), 'floor_id': meta.get('floor_id'),
             'measurement_complete': all(row['kwh'] is not None for row in rows), 'children': []}
     # Iterative tree assembly, safe for the supported 512-node hierarchy.
@@ -429,7 +471,7 @@ def _build_report(inputs):
     residual_supported = (partitioned and not double_counting and remainder is not None
         and all(value is not None for value in residuals))
     remainder_cost = usage - device_cost if residual_supported and usage is not None and device_cost is not None else None
-    unmeasured = {'kwh': remainder, 'recorded_kwh': remainder, 'share': share(remainder), 'cost': remainder_cost,
+    unmeasured = {'kwh': remainder, 'recorded_kwh': remainder, 'share': share(remainder) if residual_supported else None, 'cost': remainder_cost,
         'status': 'double_counting' if double_counting else 'ok' if partitioned and all(value is not None for value in residuals) else 'unknown',
         'tolerance_adjustment_kwh': adjusted,
         'raw_balance_kwh': imported - measured if imported is not None and measured is not None else None}
@@ -448,7 +490,9 @@ def _build_report(inputs):
     if other:
         quantity = _sum((row['kwh'] for row in other), empty=ZERO)
         ranking.append({'id': '_other_measured', 'name': 'Pozostałe zmierzone', 'kwh': quantity,
-            'share': share(quantity), 'cost': _sum(row['cost'] for row in other),
+            'recorded_kwh': _known_sum(row['kwh'] for row in other),
+            'measurement_complete': all(row['measurement_complete'] for row in other),
+            'share': share(quantity) if all(row['measurement_complete'] for row in other) else None, 'cost': _sum(row['cost'] for row in other),
             'color': 'other', 'count': len(other), 'children': deepcopy(other)})
     ranking.append({'id': '_unmeasured', 'name': 'Niezmierzone', **unmeasured, 'color': 'unmeasured'})
 
@@ -467,7 +511,8 @@ def _build_report(inputs):
             quantity = _sum(row['kwh'] for row in members)
             if key is None and quantity == 0:
                 continue
-            result.append({**group, 'kwh': quantity, 'share': share(quantity),
+            result.append({**group, 'kwh': quantity, 'recorded_kwh': _known_sum(row['kwh'] for row in members),
+                'measurement_complete': all(row['measurement_complete'] for row in members), 'share': share(quantity) if all(row['measurement_complete'] for row in members) else None,
                 'cost': _sum(row['cost'] for row in members), 'devices': len(members)})
         result.sort(key=lambda row: (-(row['kwh'] or ZERO), row['name']))
         result.append({level + '_id': '_unmeasured', 'name': 'Niezmierzone', **unmeasured})
@@ -491,7 +536,7 @@ def _build_report(inputs):
             'rate': _ratio(_sum(row['cost'] for row in measured_rows), quantity),
             'hours': [row['hour'] for row in rows], 'hours_label': _hours_label([row['hour'] for row in rows])})
     if not coverage['complete']:
-        issues.append({'code': 'partial_coverage' if measured_hours else 'no_data', 'severity': 'warning',
+        issues.append({'code': 'partial_coverage' if has_data else 'no_data', 'severity': 'warning',
             'data': {'measured_hours': measured_hours, 'expected_hours': expected}})
     if not partitioned:
         issues.append({'code':'consumer_domain_mismatch','severity':'warning','data':{'consumer_domain':domain}})

@@ -177,6 +177,7 @@ def short_projection(values, configuration, tariff, start, end):
     return {'from': start.isoformat(), 'to': end.isoformat(), 'kwh': kwh,
         'recorded_kwh': str(sum(recorded, Decimal(0))) if recorded else None,
         'measured_sources': len(recorded), 'expected_sources': len(grid_ids),
+        'missing_sources': [sid for sid in grid_ids if values.get(sid) is None],
         'currency': rate.get('currency') if known else None,
         'price_basis': rate.get('price_basis') if known else None,
         'classification': rate.get('classification') if known else None,
@@ -217,6 +218,20 @@ async def async_collect_inputs(service, configuration, period, context, accumula
                 else:
                     projection['fixed_share'] = None
             await service._cpu(add_fee, guard)
+    # Price the recorded subtotal using the same historical tariff engine.
+    # Native HA costs are independent meter facts and cannot be allocated to a subtotal.
+    if active and native is None:
+        rates = HistoricalTariffRates(active)
+        for row in projection['hours']:
+            value = row.get('recorded_kwh')
+            if value is None:
+                continue
+            def stamp(v):
+                return datetime.fromtimestamp(v / 1000, UTC) if isinstance(v, (int, float)) else datetime.fromisoformat(v)
+            rate = rates.resolve_interval(stamp(row['from']).isoformat(), stamp(row['to']).isoformat())
+            if rate and rate.get('available') and (rate.get('currency'), rate.get('price_basis')) == (projection.get('currency'), projection.get('price_basis')):
+                amount = calculate_energy_amounts(Decimal(str(value)), rate['energy_rate'], rate['variable_rate'], rate['rate_semantics'])['usage_cost']
+                row['recorded_cost'] = str(amount) if amount is not None else None
     if native is not None:
         facts = await service._cpu(native.report_hours, guard)
         by_start = {row['from']: row for row in facts['hours']}
@@ -351,6 +366,24 @@ async def async_collect_inputs(service, configuration, period, context, accumula
                     tariff.get('rateSemantics','components'))
                 item['rate'] = float(amounts['usage_cost']) if amounts['usage_cost'] is not None else None
     membership = deepcopy(membership)
+    # Recorder metadata can name an external statistic with no HA entity and no
+    # readings. Prefer an explicit registry/configured name over that fallback.
+    grid_ids = [row['entity_id'] for row in configuration['grid_sensors']]
+    await guard()
+    grid_metadata = await async_get_energy_metadata(service.hass, grid_ids)
+    await guard()
+    for row in configuration['grid_sensors']:
+        sid = row['entity_id']
+        meta = membership.setdefault('sources', {}).setdefault(sid, {})
+        raw = grid_metadata.get(sid) if isinstance(grid_metadata, dict) else None
+        raw = raw[1] if isinstance(raw, tuple) and len(raw) > 1 else raw
+        recorded_name = raw.get('name') if isinstance(raw, dict) else None
+        recorded_name = recorded_name.strip() if isinstance(recorded_name, str) else None
+        if recorded_name and len(recorded_name) > 256:
+            recorded_name = None
+        configured_name = row.get('name')
+        if not meta.get('name') or meta['name'] == sid:
+            meta['name'] = (configured_name if isinstance(configured_name, str) and configured_name != sid else None) or recorded_name or sid
     for row in configuration['consumers']:
         if row.get('name'):
             membership.setdefault('sources', {}).setdefault(row['stat_consumption'], {})['name'] = row['name']

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.4.6 (2026-11-04)
+
+- Energy reports show available source readings when some sources are missing, with source-hour coverage and missing intervals. Full balances and comparisons remain restricted to complete measurements.
+
+
 ## 2.4.5 (2026-11-03)
 
 - Preserve source value types and precision in the Energy report CSV raw_json column alongside the existing readable values.
