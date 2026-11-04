@@ -213,7 +213,9 @@ class _View:
         if self.coverage.get('status') == 'no_data' or (not _numeric(self.totals.get('recorded_import_kwh')) and not _numeric(self.totals.get('import_kwh'))):
             label = self.tr('no_data')
         unit = 'pełne godziny' if self.lang == 'pl' else 'complete hours'
-        result = f'{label} ({self.n(measured, 0)}/{self.n(expected, 0)} {unit})'
+        result = f'{label} ({self.n(measured, 0)}/{self.n(expected, 0)} h)'
+        if _numeric(self.coverage.get('expected_source_hours')):
+            result += f' {unit}'
         sm, se = self.coverage.get('measured_source_hours'), self.coverage.get('expected_source_hours')
         if _numeric(sm) and _numeric(se):
             result += f'; {self.n(sm, 0)}/{self.n(se, 0)} ' + ('źródło-godzin' if self.lang == 'pl' else 'source-hours')
@@ -608,7 +610,7 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
     title = f'{v.tr("energy")} — {v.period_label()}'
     report_label = _REPORTS.get(v.kind, _REPORTS['day'])[v.lang == 'en']
     subtitle = f'{v.clock(v.start)}–{v.clock(v.end, end=True)} · {v.tr("tariff")} {v.tariff.get("name") or v.tr("no_data")} · {v.coverage_label()}'
-    available = v.totals.get('recorded_import_kwh') if not v.complete else v.totals.get('import_kwh')
+    available = (v.totals.get('recorded_import_kwh') if _numeric(v.totals.get('recorded_import_kwh')) else v.totals.get('import_kwh')) if not v.complete else v.totals.get('import_kwh')
     available_cost = v.totals.get('recorded_usage_cost') if not v.complete else v.totals.get('usage_cost')
     partial_label = ('Znane odczyty' if v.lang == 'pl' else 'Known readings') if not v.complete and _numeric(available) else v.tr('import')
     summary = (f'{partial_label}: ' if not v.complete and _numeric(available) else '') + f'{v.energy(available, "tile")} · {v.money(available_cost)}'
