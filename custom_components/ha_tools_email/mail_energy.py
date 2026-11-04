@@ -628,7 +628,7 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
     available_cost = v.totals.get('recorded_usage_cost') if not v.complete else v.totals.get('usage_cost')
     partial_label = ('Znane odczyty' if v.lang == 'pl' else 'Known readings') if not v.complete and _numeric(available) else v.tr('import')
     summary = (f'{partial_label}: ' if not v.complete and _numeric(available) else '') + v.energy(available, 'tile')
-    if v.complete or _numeric(available_cost):
+    if _numeric(available_cost):
         summary += f' · {v.money(available_cost)}'
     first = v.comparisons[0] if v.comparisons else {}
     change = v.change(first)
