@@ -98,6 +98,18 @@ class PartialSources(unittest.TestCase):
             self.assertIn('Brakujące odczyty urządzeń' if lang == 'pl' else 'Missing device readings', out['text'])
             self.assertIn('&lt;script&gt;B&lt;/script&gt;',out['html'])
 
+    def test_complete_grid_group_keeps_known_subtotal_when_a_device_is_missing(self):
+        data=sample(mode='full')
+        for row in data['projection']['hours']: row['devices']['b']['kwh']=None
+        result=model.build_report(data)
+        group=next(row for row in result['ranking'] if row['id']=='_other_measured')
+        self.assertTrue(result['coverage']['complete'])
+        self.assertIsNone(group['kwh']);self.assertEqual(group['recorded_kwh'],24)
+        for lang in ('pl','en'):
+            out=mail.render(result,language=lang,timezone_name='UTC',hour_cycle='24')
+            self.assertIn('24.00 kWh' if lang=='en' else '24,00 kWh',out['text'])
+            self.assertIn('known readings' if lang=='en' else 'znane odczyty',out['text'])
+
     def test_device_only_readings_are_partial_without_inventing_grid_import(self):
         data = sample(mode='none')
         for row in data['projection']['hours']:
@@ -107,6 +119,7 @@ class PartialSources(unittest.TestCase):
         self.assertIsNone(result['totals']['recorded_import_kwh'])
         self.assertIsNone(result['totals']['import_kwh'])
         self.assertEqual(result['devices'][0]['kwh'], 24)
+        result['devices'].insert(0, {'id':'other','name':'Smaller','kwh':2})
         for lang in ('pl','en'):
             out = mail.render(result, language=lang, timezone_name='UTC', hour_cycle='24')
             self.assertIn('dane niepełne' if lang == 'pl' else 'partial data', out['subject'])

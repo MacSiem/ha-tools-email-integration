@@ -500,7 +500,7 @@ class _View:
             blocked = self.double and self.is_unmeasured(i)
             cls = 'unm' if self.is_unmeasured(i) else 'room' if rooms else i.get('color') if i.get('color') in ('d1', 'd2', 'd3', 'd4', 'other') else 'other'
             value = i.get('kwh')
-            group_partial = not self.complete and not _numeric(value) and _numeric(i.get('recorded_kwh')) and not self.is_unmeasured(i)
+            group_partial = (not self.complete or i.get('measurement_complete') is False) and not _numeric(value) and _numeric(i.get('recorded_kwh')) and not self.is_unmeasured(i)
             if group_partial:
                 value = i['recorded_kwh']
             width = min(100, max(1.5, value / maximum * 100)) if _numeric(value) and value > 0 and not blocked and not included else 0
@@ -626,7 +626,8 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
     subtitle = f'{v.clock(v.start)}–{v.clock(v.end, end=True)} · {v.tr("tariff")} {v.tariff.get("name") or v.tr("no_data")} · {v.coverage_label()}'
     available = (v.totals.get('recorded_import_kwh') if _numeric(v.totals.get('recorded_import_kwh')) else v.totals.get('import_kwh')) if not v.complete else v.totals.get('import_kwh')
     available_cost = v.totals.get('recorded_usage_cost') if not v.complete else v.totals.get('usage_cost')
-    device_only = next((item for item in _items(model.get('devices')) if _numeric(item.get('kwh'))), None) if not _numeric(available) and v.coverage.get('status') == 'partial' else None
+    measured_devices = sorted((item for item in _items(model.get('devices')) if _numeric(item.get('kwh'))), key=lambda item: (-item['kwh'], str(item.get('id') or '')))
+    device_only = measured_devices[0] if measured_devices and not _numeric(available) and v.coverage.get('status') == 'partial' else None
     if device_only:
         available = device_only['kwh']
         partial_label = ('Urządzenie: ' if v.lang == 'pl' else 'Device: ') + str(device_only.get('name') or device_only.get('id') or '')
