@@ -210,9 +210,14 @@ class _View:
     def coverage_label(self):
         measured, expected = self.coverage.get('measured_hours'), self.coverage.get('expected_hours')
         label = self.tr('full') if self.complete else self.tr('partial')
-        if measured == 0 or not _numeric(self.totals.get('import_kwh')):
+        if self.coverage.get('status') == 'no_data' or (not _numeric(self.totals.get('recorded_import_kwh')) and not _numeric(self.totals.get('import_kwh'))):
             label = self.tr('no_data')
-        return f'{label} ({self.n(measured, 0)}/{self.n(expected, 0)} h)'
+        unit = 'pełne godziny' if self.lang == 'pl' else 'complete hours'
+        result = f'{label} ({self.n(measured, 0)}/{self.n(expected, 0)} {unit})'
+        sm, se = self.coverage.get('measured_source_hours'), self.coverage.get('expected_source_hours')
+        if _numeric(sm) and _numeric(se):
+            result += f'; {self.n(sm, 0)}/{self.n(se, 0)} ' + ('źródło-godzin' if self.lang == 'pl' else 'source-hours')
+        return result
 
     def zone_label(self, zone, tariff=None):
         tariff = self.tariff if tariff is None else tariff
@@ -334,6 +339,8 @@ class _View:
         points = _items(self.m.get('daily' if daily else 'hourly'))
         if any(not _numeric(point.get(key)) for point in points for key in ('kwh', 'prev_kwh')):
             text += '; luka = brak pomiaru' if self.lang == 'pl' else '; gap = missing reading'
+        if not self.complete:
+            text += '; słupki pokazują znane odczyty, częściowe gdy brakuje źródeł' if self.lang == 'pl' else '; bars show known readings, partial when sources are missing'
         return text
 
     def chart(self):
@@ -343,7 +350,7 @@ class _View:
             msg = self.tr('chart_missing') if daily else self.tr('no_data')
             self.lines.append(msg)
             return section(paragraph(msg))
-        values = [p[k] for p in points for k in ('kwh', 'prev_kwh') if _numeric(p.get(k)) and p[k] >= 0]
+        values = [v for p in points for v in (p.get('recorded_kwh') if _numeric(p.get('recorded_kwh')) else p.get('kwh'), p.get('prev_kwh')) if _numeric(v) and v >= 0]
         maximum = max(values, default=1) or 1
         H = 72
         cols, labels = [], []
@@ -354,11 +361,11 @@ class _View:
         repeated = {d.strftime('%Y-%m-%d %H:%M') for d in starts if d and
                     sum(x is not None and x.strftime('%Y-%m-%d %H:%M') == d.strftime('%Y-%m-%d %H:%M') for x in starts) > 1}
         for idx, p in enumerate(points):
-            current, previous = p.get('kwh'), p.get('prev_kwh')
+            current, previous = (p.get('recorded_kwh') if _numeric(p.get('recorded_kwh')) else p.get('kwh')), p.get('prev_kwh')
             b = min(H, max(0, round(H * current / maximum))) if _numeric(current) else 0
             marker = min(H - 2, max(0, round(H * previous / maximum) - 1)) if _numeric(previous) else None
             pixels = ['grid' if not _numeric(current) else None] * H
-            if daily and _items(p.get('zones')):
+            if daily and _items(p.get('zones')) and p.get('kwh') == current:
                 cursor = H
                 for z in _items(p.get('zones')):
                     if _numeric(z.get('kwh')):
@@ -601,7 +608,10 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
     title = f'{v.tr("energy")} — {v.period_label()}'
     report_label = _REPORTS.get(v.kind, _REPORTS['day'])[v.lang == 'en']
     subtitle = f'{v.clock(v.start)}–{v.clock(v.end, end=True)} · {v.tr("tariff")} {v.tariff.get("name") or v.tr("no_data")} · {v.coverage_label()}'
-    summary = f'{v.energy(v.totals.get("import_kwh"), "tile")} · {v.money(v.totals.get("usage_cost"))}'
+    available = v.totals.get('recorded_import_kwh') if not v.complete else v.totals.get('import_kwh')
+    available_cost = v.totals.get('recorded_usage_cost') if not v.complete else v.totals.get('usage_cost')
+    partial_label = ('Znane odczyty' if v.lang == 'pl' else 'Known readings') if not v.complete and _numeric(available) else v.tr('import')
+    summary = (f'{partial_label}: ' if not v.complete and _numeric(available) else '') + f'{v.energy(available, "tile")} · {v.money(available_cost)}'
     first = v.comparisons[0] if v.comparisons else {}
     change = v.change(first)
     comparison = f'{change} vs {v.comparison_label(first)}' if change else v.coverage_label() if not v.complete else ''
@@ -622,10 +632,10 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
     if v.double:
         pre_parts.append(v.tr('double'))
     preheader = ' · '.join(p for p in pre_parts if p)
-    subject = f'{v.tr("energy")}: {v.subject_label()} — {summary}' + (f' ({change})' if change else '')
-    kpis = (kpi_cell(v.tr('import'), v.n(v.totals.get('import_kwh')), 'kWh', comparison, 'warn' if _numeric(first.get('delta_kwh')) and first['delta_kwh'] > 0 and change else 'good' if change else 'tx2')
+    subject = f'{v.tr("energy")}: {v.subject_label()} — ' + (f'{v.coverage_label()} · ' if not v.complete else '') + summary + (f' ({change})' if change else '')
+    kpis = (kpi_cell(partial_label, v.n(available), 'kWh', comparison, 'warn' if _numeric(first.get('delta_kwh')) and first['delta_kwh'] > 0 and change else 'good' if change else 'tx2')
             + '<td class="kpigap" style="width:2%"></td>'
-            + kpi_cell(v.tr('usage'), v.n(v.totals.get('usage_cost'), 2), 'zł' if v.lang == 'pl' and v.currency == 'PLN' else str(v.currency or ''), v.rate(v.totals.get('effective_rate')))
+            + kpi_cell(('Koszt znanych odczytów' if v.lang == 'pl' else 'Known readings cost') if not v.complete else v.tr('usage'), v.n(available_cost, 2), 'zł' if v.lang == 'pl' and v.currency == 'PLN' else str(v.currency or ''), v.rate(v.totals.get('effective_rate')))
             + '<td class="kpigap" style="width:2%"></td>'
             + kpi_cell(zone_label, v.n(_pct_ratio(cheap.get('share')), 0) if v.complete else '—', '%' if v.complete and _numeric(cheap.get('share')) else '', v.energy(cheap.get('kwh'))))
     v.lines = [title, f'{report_label} · {subtitle}', '', summary]
@@ -638,8 +648,16 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
         recorded_note = (('Zarejestrowano ze źródeł: ' if v.lang == 'pl' else 'Recorded from sources: ') +
             v.energy(recorded) + ('. Częściowa suma, nie pełny bilans.' if v.lang == 'pl' else '. Partial subtotal, not a complete balance.'))
         v.lines.append(recorded_note)
+    missing_lines = []
+    for source in _items(v.coverage.get('missing_sources')):
+        ranges = ', '.join(str(r.get('start', '')) + ' – ' + str(r.get('end', '')) for r in _items(source.get('ranges')))
+        missing_lines.append(str(source.get('name') or source.get('id') or '') + ': ' + ranges)
+    missing_note = (('Brakujące źródła: ' if v.lang == 'pl' else 'Missing sources: ') + '; '.join(missing_lines)) if missing_lines else ''
+    if missing_note:
+        v.lines.append(missing_note)
     blocks = ['<!-- block:3 -->' + section('<table role="presentation" width="100%"><tr>' + kpis + '</tr></table>' +
-        (paragraph(recorded_note, margin='8px 0 0') if recorded_note else ''), padding='16px 24px 0')]
+        (paragraph(recorded_note, margin='8px 0 0') if recorded_note else '') +
+        (paragraph(missing_note, margin='8px 0 0') if missing_note else ''), padding='16px 24px 0')]
     sections = [(4, 'comparison', 'comparison_note', v.comparison_block),
                 (5, 'hour_chart' if v.kind == 'day' else 'daily_chart', 'chart_note', v.chart),
                 (6, 'zones', None, v.zone_block),

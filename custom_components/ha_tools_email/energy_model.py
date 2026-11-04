@@ -375,16 +375,35 @@ def _build_report(inputs):
             raise ValueError('negative_recorded_import')
         hourly.append({'start': local.isoformat(), 'hour': local.hour, 'fold': local.fold,
             'kwh': kwh, 'zone': raw.get('zone'), 'classification': raw.get('classification'), **costs, 'cost': costs['usage_cost'],
-            'recorded_kwh': recorded, 'measured_sources': raw.get('measured_sources'),
+            'recorded_kwh': recorded, 'recorded_cost': _decimal(raw.get('recorded_cost')) if identity_ok else None, 'measured_sources': raw.get('measured_sources'),
             'expected_sources': raw.get('expected_sources'),
             'measured_kwh': measured, 'prev_kwh': previous_value,
             'partial': bool(raw) and _instant(raw['to']) - instant < timedelta(hours=1),
             'future': not eligible})
     expected = ceil((cutoff - start).total_seconds() / 3600)
     coverage_ratio = Decimal(measured_hours) / expected
+    source_rows = [row for row in hourly if not row['future']]
+    source_counts_known = all(type(row['measured_sources']) is int and type(row['expected_sources']) is int for row in source_rows)
+    source_measured = sum(row['measured_sources'] for row in source_rows) if source_counts_known else None
+    source_expected = sum(row['expected_sources'] for row in source_rows) if source_counts_known else None
+    has_data = any(row['recorded_kwh'] is not None for row in source_rows)
+    missing = {}
+    for instant, raw in sorted(provided.items()):
+        for sid in raw.get('missing_sources', []):
+            intervals = missing.setdefault(sid, [])
+            finish = _instant(raw['to'])
+            if intervals and intervals[-1][1] == instant:
+                intervals[-1][1] = finish
+            else:
+                intervals.append([instant, finish])
+    missing_sources = [{'id': sid, 'name': sources.get(sid, {}).get('name') or sid,
+        'ranges': [{'start': a.astimezone(zone).isoformat(), 'end': b.astimezone(zone).isoformat()} for a, b in ranges]}
+        for sid, ranges in sorted(missing.items())]
     coverage = {'expected_hours': expected, 'measured_hours': measured_hours,
         'ratio': coverage_ratio, 'complete': measured_hours == expected,
-        'status': 'complete' if measured_hours == expected else 'partial' if measured_hours else 'no_data'}
+        'status': 'complete' if measured_hours == expected else 'partial' if has_data else 'no_data',
+        'measured_source_hours': source_measured, 'expected_source_hours': source_expected,
+        'missing_sources': missing_sources}
     share_ok = coverage['complete'] and partitioned
     imported = _known_sum(row['kwh'] for row in hourly if not row['future'])
     observed = [row for row in hourly if row['kwh'] is not None and not row['future']]
@@ -393,6 +412,7 @@ def _build_report(inputs):
     fixed = _decimal(projection.get('fixed_share')) if identity_ok else None
     totals.update(import_kwh=imported,
         recorded_import_kwh=_known_sum(row['recorded_kwh'] for row in hourly if not row['future']),
+        recorded_usage_cost=_sum(row['recorded_cost'] for row in source_rows if row['recorded_kwh'] is not None) if has_data else None,
         fixed_share=fixed,
         total_with_fixed=usage + fixed if coverage['complete'] and usage is not None and fixed is not None else None,
         effective_rate=_ratio(usage, imported))
@@ -491,7 +511,7 @@ def _build_report(inputs):
             'rate': _ratio(_sum(row['cost'] for row in measured_rows), quantity),
             'hours': [row['hour'] for row in rows], 'hours_label': _hours_label([row['hour'] for row in rows])})
     if not coverage['complete']:
-        issues.append({'code': 'partial_coverage' if measured_hours else 'no_data', 'severity': 'warning',
+        issues.append({'code': 'partial_coverage' if has_data else 'no_data', 'severity': 'warning',
             'data': {'measured_hours': measured_hours, 'expected_hours': expected}})
     if not partitioned:
         issues.append({'code':'consumer_domain_mismatch','severity':'warning','data':{'consumer_domain':domain}})
