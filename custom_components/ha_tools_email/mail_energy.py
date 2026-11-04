@@ -211,7 +211,7 @@ class _View:
         measured = self.coverage.get('full_hours', self.coverage.get('measured_hours'))
         expected = self.coverage.get('expected_full_hours', self.coverage.get('expected_hours'))
         label = self.tr('full') if self.complete else self.tr('partial')
-        if self.coverage.get('status') == 'no_data' or (not _numeric(self.totals.get('recorded_import_kwh')) and not _numeric(self.totals.get('import_kwh'))):
+        if self.coverage.get('status') == 'no_data' or (self.coverage.get('status') is None and not _numeric(self.totals.get('recorded_import_kwh')) and not _numeric(self.totals.get('import_kwh'))):
             label = self.tr('no_data')
         unit = 'pełne godziny' if self.lang == 'pl' else 'complete hours'
         result = f'{label} ({self.n(measured, 0)}/{self.n(expected, 0)} h)'
@@ -650,7 +650,7 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
     if v.double:
         pre_parts.append(v.tr('double'))
     preheader = ' · '.join(p for p in pre_parts if p)
-    subject_prefix = (v.tr('partial') if _numeric(available) else v.tr('no_data')) if not v.complete else ''
+    subject_prefix = (v.tr('no_data') if v.coverage.get('status') == 'no_data' or v.coverage.get('status') is None and not _numeric(available) else v.tr('partial')) if not v.complete else ''
     subject_summary = summary if v.complete or _numeric(available) else ''
     subject = f'{v.tr("energy")}: {v.subject_label()} — ' + (subject_prefix + (' — ' if subject_summary else '') if subject_prefix else '') + subject_summary + (f' ({change})' if change else '')
     kpis = (kpi_cell(partial_label, v.n(available), 'kWh', comparison, 'warn' if _numeric(first.get('delta_kwh')) and first['delta_kwh'] > 0 and change else 'good' if change else 'tx2')

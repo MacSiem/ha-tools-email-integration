@@ -391,7 +391,8 @@ def _build_report(inputs):
     source_expected = source_hours('expected_sources') if source_counts_known else None
     full_hours = sum(row['kwh'] is not None and not row['partial'] for row in source_rows)
     expected_full_hours = int((cutoff - start).total_seconds() // 3600)
-    has_data = any(row['recorded_kwh'] is not None for row in source_rows)
+    has_data = (any(row['recorded_kwh'] is not None for row in source_rows) or
+        any(cell['eligible'] and cell['kwh'] is not None for rows in device_hours.values() for cell in rows))
     missing = {}
     for instant, raw in sorted(provided.items()):
         for sid in raw.get('missing_sources', []):

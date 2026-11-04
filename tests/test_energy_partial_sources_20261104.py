@@ -75,6 +75,20 @@ class PartialSources(unittest.TestCase):
                 month = mail.render(model.build_report(data), language='en', timezone_name='UTC', hour_cycle='24')
                 self.assertIn('24.0 kWh', month['text'])
 
+    def test_device_only_readings_are_partial_without_inventing_grid_import(self):
+        data = sample(mode='none')
+        for row in data['projection']['hours']:
+            row['devices']['a']['kwh'] = '1'
+        result = model.build_report(data)
+        self.assertEqual(result['coverage']['status'], 'partial')
+        self.assertIsNone(result['totals']['recorded_import_kwh'])
+        self.assertIsNone(result['totals']['import_kwh'])
+        self.assertEqual(result['devices'][0]['kwh'], 24)
+        for lang in ('pl','en'):
+            out = mail.render(result, language=lang, timezone_name='UTC', hour_cycle='24')
+            self.assertIn('dane niepełne' if lang == 'pl' else 'partial data', out['subject'])
+            self.assertNotIn('Brak danych' if lang == 'pl' else 'No data', out['subject'])
+
     def test_groups_expose_known_subtotal_without_claiming_complete_sum(self):
         result = model.build_report(sample())
         other = next(row for row in result['ranking'] if row['id'] == '_other_measured')
