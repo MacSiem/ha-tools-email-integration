@@ -222,6 +222,14 @@ class _View:
             result += f'; {self.n(sm, 2) if sm % 1 else self.n(sm, 0)}/{self.n(se, 2) if se % 1 else self.n(se, 0)} ' + ('źródło-godzin' if self.lang == 'pl' else 'source-hours')
         return result
 
+    def missing_range(self, interval):
+        start, end = _dt(interval.get('start'), self.tz), _dt(interval.get('end'), self.tz)
+        if not start or not end:
+            return self.tr('no_data')
+        if self.start and self.end and start.timestamp() == self.start.timestamp() and end.timestamp() == self.end.timestamp():
+            return 'cały okres' if self.lang == 'pl' else 'entire period'
+        return f'{self.date(start)} {self.clock(start, offset=True)} – {self.date(end)} {self.clock(end, end=True, offset=True)}'
+
     def zone_label(self, zone, tariff=None):
         tariff = self.tariff if tariff is None else tariff
         label = str(zone.get('label') or zone.get('id') or self.tr('no_data'))
@@ -640,10 +648,12 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
     if v.double:
         pre_parts.append(v.tr('double'))
     preheader = ' · '.join(p for p in pre_parts if p)
-    subject = f'{v.tr("energy")}: {v.subject_label()} — ' + (f'{v.coverage_label()} · ' if not v.complete else '') + summary + (f' ({change})' if change else '')
+    subject_prefix = (v.tr('partial') if _numeric(available) else v.tr('no_data')) if not v.complete else ''
+    subject_summary = summary if v.complete or _numeric(available) else ''
+    subject = f'{v.tr("energy")}: {v.subject_label()} — ' + (subject_prefix + (' — ' if subject_summary else '') if subject_prefix else '') + subject_summary + (f' ({change})' if change else '')
     kpis = (kpi_cell(partial_label, v.n(available), 'kWh', comparison, 'warn' if _numeric(first.get('delta_kwh')) and first['delta_kwh'] > 0 and change else 'good' if change else 'tx2')
             + '<td class="kpigap" style="width:2%"></td>'
-            + kpi_cell(('Koszt znanych odczytów' if v.lang == 'pl' else 'Known readings cost') if not v.complete else v.tr('usage'), v.n(available_cost, 2), 'zł' if v.lang == 'pl' and v.currency == 'PLN' else str(v.currency or ''), v.rate(v.totals.get('effective_rate')))
+            + kpi_cell(('Koszt znanych odczytów' if v.lang == 'pl' else 'Known readings cost') if not v.complete else v.tr('usage'), v.n(available_cost, 2), 'zł' if v.lang == 'pl' and v.currency == 'PLN' else str(v.currency or ''), '' if not v.complete else v.rate(v.totals.get('effective_rate')))
             + '<td class="kpigap" style="width:2%"></td>'
             + kpi_cell(zone_label, v.n(_pct_ratio(cheap.get('share')), 0) if v.complete else '—', '%' if v.complete and _numeric(cheap.get('share')) else '', v.energy(cheap.get('kwh'))))
     v.lines = [title, f'{report_label} · {subtitle}', '', summary]
@@ -658,7 +668,7 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
         v.lines.append(recorded_note)
     missing_lines = []
     for source in _items(v.coverage.get('missing_sources')):
-        ranges = ', '.join(str(r.get('start', '')) + ' – ' + str(r.get('end', '')) for r in _items(source.get('ranges')))
+        ranges = ', '.join(v.missing_range(r) for r in _items(source.get('ranges')))
         missing_lines.append(str(source.get('name') or source.get('id') or '') + ': ' + ranges)
     missing_note = (('Brakujące źródła: ' if v.lang == 'pl' else 'Missing sources: ') + '; '.join(missing_lines)) if missing_lines else ''
     if missing_note:

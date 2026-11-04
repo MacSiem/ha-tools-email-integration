@@ -53,11 +53,25 @@ class PartialSources(unittest.TestCase):
         for lang in ('pl','en'):
             rendered = mail.render(result, language=lang, timezone_name='UTC', hour_cycle='24')
             self.assertIn('24',rendered['subject'])
+            self.assertNotIn('source-hours', rendered['subject'])
+            self.assertIn('cały okres' if lang == 'pl' else 'entire period', rendered['text'])
             self.assertIn('&lt;script&gt;B&lt;/script&gt;',rendered['html'])
             self.assertNotIn('<script>B</script>',rendered['html'])
             self.assertIn('<script>B</script>',rendered['text'])
             self.assertIn('data-energy-bar="0"',rendered['html'])
             self.assertIn('1.00 kWh' if lang == 'en' else '1,00 kWh',rendered['text'])
+    def test_subject_and_daily_chart_follow_available_readings(self):
+        for mode in ('full', 'partial', 'zero', 'none'):
+            data = sample(mode=mode)
+            if mode == 'partial': data['period']['kind'] = 'week'
+            result = model.build_report(data)
+            out = mail.render(result, language='en', timezone_name='UTC', hour_cycle='24')
+            self.assertEqual('partial data' in out['subject'], mode in ('partial','zero'))
+            self.assertEqual('No data' in out['subject'], mode == 'none')
+            if mode == 'partial':
+                self.assertEqual(result['daily'][0]['recorded_kwh'],24)
+                self.assertIn('24.00 kWh', out['text'])
+
     def test_groups_expose_known_subtotal_without_claiming_complete_sum(self):
         result = model.build_report(sample())
         other = next(row for row in result['ranking'] if row['id'] == '_other_measured')
