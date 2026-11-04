@@ -114,6 +114,14 @@ class PartialSources(unittest.TestCase):
             self.assertIn(('Urządzenie: A' if lang == 'pl' else 'Device: A'), out['subject'])
             self.assertIn('24', out['subject'])
 
+    def test_plain_mail_shows_individual_device_cost_in_group(self):
+        data=sample()
+        for row in data['projection']['hours']:
+            row['devices']['a']['costs']={'usage_cost':'.5'}
+        result=model.build_report(data)
+        output=mail.render(result, language='en', timezone_name='UTC', hour_cycle='24')
+        self.assertIn('A (included): 24.00 kWh · 12.00 PLN',output['text'])
+
     def test_groups_expose_known_subtotal_without_claiming_complete_sum(self):
         result = model.build_report(sample())
         other = next(row for row in result['ranking'] if row['id'] == '_other_measured')

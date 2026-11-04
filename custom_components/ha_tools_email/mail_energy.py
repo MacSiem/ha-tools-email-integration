@@ -529,7 +529,7 @@ class _View:
                 cells += f'<td class="{text_color} bd{extra}" align="right" style="width:{width_}%;padding:{padding};border-top:1px solid {L["bd"]};font:{weight} {size}px/20px {FONT};color:{L[text_color]}{nowrap}">{E(value)}</td>'
             rows.append(('<tr data-energy-included="true">' if included else '<tr>') + cells + '</tr>')
             if included:
-                self.lines.append(f'  {name}: {self.energy(i.get("kwh"))}')
+                self.lines.append(f'  {name}: {self.energy(i.get("kwh"))}' + (f' · {self.money(i.get("cost"))}' if _numeric(i.get('cost')) else ''))
             else:
                 self.lines.append(f'- {name}: {" · ".join(values)}')
         return section('<table role="presentation" width="100%" style="table-layout:fixed">' + ''.join(rows) + '</table>') if rows else section(paragraph(self.tr('no_data')))
