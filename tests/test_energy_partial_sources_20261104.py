@@ -70,7 +70,10 @@ class PartialSources(unittest.TestCase):
             self.assertEqual(out['subject'].endswith('— No data'), mode == 'none')
             if mode == 'partial':
                 self.assertEqual(result['daily'][0]['recorded_kwh'],24)
-                self.assertIn('24.00 kWh', out['text'])
+                self.assertIn('24.0 kWh', out['text'])
+                data['period']['kind'] = 'month'
+                month = mail.render(model.build_report(data), language='en', timezone_name='UTC', hour_cycle='24')
+                self.assertIn('24.0 kWh', month['text'])
 
     def test_groups_expose_known_subtotal_without_claiming_complete_sum(self):
         result = model.build_report(sample())
