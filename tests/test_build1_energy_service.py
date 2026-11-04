@@ -58,6 +58,25 @@ class Build1ServiceTest(unittest.TestCase):
                 self.assertEqual(json.loads(by_field['report_model.hourly.0.recorded_kwh']['raw_json']), 10)
         asyncio.run(run())
 
+    def test_missing_external_grid_uses_recorder_metadata_name(self):
+        from tests.test_energy_weighted_comparison import readings
+        async def run():
+            h=Harness();h.now=datetime(2026,1,11,12,tzinfo=UTC)
+            h.manager.data['energy_sources'].append({'type':'grid','stat_energy_from':'utility:missing'})
+            h.metadata['utility:missing']={**h.metadata['sensor.grid'],'name':'Named external meter'}
+            async def usage(hass,sensors,start,end,cadence,*,metadata):
+                ids=tuple(row['entity_id'] for row in sensors);n=int((end-start).total_seconds()/3600)
+                return readings(start.isoformat(),end.isoformat(),sources=ids,value=1,missing=[('utility:missing',i) for i in range(n)] if 'utility:missing' in ids else [])
+            async def metadata(hass,ids):
+                return {sid:deepcopy(h.metadata.get(sid)) for sid in ids}
+            h.usage=usage
+            with h.patches(), patch.object(inputs,'async_get_energy_metadata',metadata):
+                result=await h.subject.async_get_build1_model('day','user',date='2026-01-10')
+                missing=result['report_model']['coverage']['missing_sources']
+                self.assertEqual(missing[0]['name'],'Named external meter')
+                self.assertEqual(result['report_model']['coverage']['status'],'partial')
+        asyncio.run(run())
+
     def test_short_projection_prices_internal_decimal_zero_and_tiny_values(self):
         h = Harness()
         configuration = {'grid_sensors': [{'entity_id': 'sensor.grid'}],

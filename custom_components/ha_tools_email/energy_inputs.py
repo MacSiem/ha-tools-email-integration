@@ -366,11 +366,24 @@ async def async_collect_inputs(service, configuration, period, context, accumula
                     tariff.get('rateSemantics','components'))
                 item['rate'] = float(amounts['usage_cost']) if amounts['usage_cost'] is not None else None
     membership = deepcopy(membership)
+    # Recorder metadata can name an external statistic with no HA entity and no
+    # readings. Prefer an explicit registry/configured name over that fallback.
+    grid_ids = [row['entity_id'] for row in configuration['grid_sensors']]
+    await guard()
+    grid_metadata = await async_get_energy_metadata(service.hass, grid_ids)
+    await guard()
     for row in configuration['grid_sensors']:
-        if row.get('name'):
-            meta = membership.setdefault('sources', {}).setdefault(row['entity_id'], {})
-            if not meta.get('name'):
-                meta['name'] = row['name']
+        sid = row['entity_id']
+        meta = membership.setdefault('sources', {}).setdefault(sid, {})
+        raw = grid_metadata.get(sid) if isinstance(grid_metadata, dict) else None
+        raw = raw[1] if isinstance(raw, tuple) and len(raw) > 1 else raw
+        recorded_name = raw.get('name') if isinstance(raw, dict) else None
+        recorded_name = recorded_name.strip() if isinstance(recorded_name, str) else None
+        if recorded_name and len(recorded_name) > 256:
+            recorded_name = None
+        configured_name = row.get('name')
+        if not meta.get('name') or meta['name'] == sid:
+            meta['name'] = (configured_name if isinstance(configured_name, str) and configured_name != sid else None) or recorded_name or sid
     for row in configuration['consumers']:
         if row.get('name'):
             membership.setdefault('sources', {}).setdefault(row['stat_consumption'], {})['name'] = row['name']
