@@ -67,7 +67,7 @@ class PartialSources(unittest.TestCase):
             result = model.build_report(data)
             out = mail.render(result, language='en', timezone_name='UTC', hour_cycle='24')
             self.assertEqual('partial data' in out['subject'], mode in ('partial','zero'))
-            self.assertEqual('No data' in out['subject'], mode == 'none')
+            self.assertEqual(out['subject'].endswith('— No data'), mode == 'none')
             if mode == 'partial':
                 self.assertEqual(result['daily'][0]['recorded_kwh'],24)
                 self.assertIn('24.00 kWh', out['text'])
