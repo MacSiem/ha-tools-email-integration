@@ -32,7 +32,8 @@ class AnalysisReportServiceTest(unittest.IsolatedAsyncioTestCase):
         def render_energy_analysis(snapshot,**options):
             calls.append((deepcopy(snapshot),dict(options)))
             return {'snapshot_id':snapshot['snapshot_id'],'html':'<table>synthetic</table>','text':'synthetic','csv':'synthetic'}
-        renderer=types.SimpleNamespace(validate_report_preferences=validate,render_energy_analysis=render_energy_analysis)
+        renderer=types.SimpleNamespace(validate_report_preferences=validate,render_energy_analysis=render_energy_analysis,
+            append_partial_model_csv=lambda csv_data, snapshot_id, model, language: csv_data)
         return h,calls,renderer
 
     async def test_report_uses_same_calculation_without_smtp_and_carries_fresh_context(self):
