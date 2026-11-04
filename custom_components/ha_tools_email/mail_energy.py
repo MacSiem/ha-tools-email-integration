@@ -626,7 +626,12 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
     subtitle = f'{v.clock(v.start)}–{v.clock(v.end, end=True)} · {v.tr("tariff")} {v.tariff.get("name") or v.tr("no_data")} · {v.coverage_label()}'
     available = (v.totals.get('recorded_import_kwh') if _numeric(v.totals.get('recorded_import_kwh')) else v.totals.get('import_kwh')) if not v.complete else v.totals.get('import_kwh')
     available_cost = v.totals.get('recorded_usage_cost') if not v.complete else v.totals.get('usage_cost')
-    partial_label = ('Znane odczyty' if v.lang == 'pl' else 'Known readings') if not v.complete and _numeric(available) else v.tr('import')
+    device_only = next((item for item in _items(model.get('devices')) if _numeric(item.get('kwh'))), None) if not _numeric(available) and v.coverage.get('status') == 'partial' else None
+    if device_only:
+        available = device_only['kwh']
+        partial_label = ('Urządzenie: ' if v.lang == 'pl' else 'Device: ') + str(device_only.get('name') or device_only.get('id') or '')
+    else:
+        partial_label = ('Znane odczyty' if v.lang == 'pl' else 'Known readings') if not v.complete and _numeric(available) else v.tr('import')
     summary = (f'{partial_label}: ' if not v.complete and _numeric(available) else '') + v.energy(available, 'tile')
     if _numeric(available_cost):
         summary += f' · {v.money(available_cost)}'

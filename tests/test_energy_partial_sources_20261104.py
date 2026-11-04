@@ -88,6 +88,8 @@ class PartialSources(unittest.TestCase):
             out = mail.render(result, language=lang, timezone_name='UTC', hour_cycle='24')
             self.assertIn('dane niepełne' if lang == 'pl' else 'partial data', out['subject'])
             self.assertNotIn('Brak danych' if lang == 'pl' else 'No data', out['subject'])
+            self.assertIn(('Urządzenie: A' if lang == 'pl' else 'Device: A'), out['subject'])
+            self.assertIn('24', out['subject'])
 
     def test_groups_expose_known_subtotal_without_claiming_complete_sum(self):
         result = model.build_report(sample())
