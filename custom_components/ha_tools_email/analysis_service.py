@@ -627,6 +627,11 @@ class EnergyAnalysisService:
                     self._cache = None
                 membership = deepcopy(self.registry.capture(
                     [row['stat_consumption'] for row in configuration['consumers']]))
+                if _report_model:
+                    grid_membership = self.registry.capture(
+                        [row['entity_id'] for row in configuration['grid_sensors']])
+                    for sid, meta in grid_membership.get('sources', {}).items():
+                        membership.setdefault('sources', {}).setdefault(sid, deepcopy(meta))
                 self._assert_current(context)
                 if _report_model and period['hours'] == 0:
                     from .energy_inputs import async_collect_inputs, empty_completed_projection
