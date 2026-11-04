@@ -555,7 +555,7 @@ class _View:
             value = self.money(self.totals.get(key))
             display_label = self.tr(label) + (f' — {fixed_period_label}' if fixed_period_label else '')
             if not self.complete and key in ('energy_cost', 'variable_cost', 'usage_cost'):
-                display_label += ' (znane pomiary)' if self.lang == 'pl' else ' (known readings)'
+                display_label += ' (godziny z kompletem źródeł)' if self.lang == 'pl' else ' (complete-source hours)'
             display_sub = sub.partition(' · ')[2] if fixed_period_label else sub
             rows.append(self.row(display_label, value, bold=bold, sub=display_sub))
             plain_label = self.tr(label) if fixed_period_label else display_label
