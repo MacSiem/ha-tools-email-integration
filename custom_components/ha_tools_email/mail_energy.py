@@ -491,9 +491,14 @@ class _View:
             blocked = self.double and self.is_unmeasured(i)
             cls = 'unm' if self.is_unmeasured(i) else 'room' if rooms else i.get('color') if i.get('color') in ('d1', 'd2', 'd3', 'd4', 'other') else 'other'
             value = i.get('kwh')
+            group_partial = not self.complete and not _numeric(value) and _numeric(i.get('recorded_kwh')) and not self.is_unmeasured(i)
+            if group_partial:
+                value = i['recorded_kwh']
             width = min(100, max(1.5, value / maximum * 100)) if _numeric(value) and value > 0 and not blocked and not included else 0
             bar = (f'<table role="presentation" width="100%"><tr><td class="{cls}" width="{width:.4f}%" height="10" bgcolor="{L[cls]}" style="height:10px;background-color:{L[cls]};line-height:0;font-size:0">&nbsp;</td><td class="grid" style="background-color:{L["grid"]};line-height:0;font-size:0">&nbsp;</td></tr></table>') if width else ''
             name = self.item_name(i)
+            if group_partial or (not self.complete and i.get('measurement_complete') is False and _numeric(value)):
+                name += ' (znane odczyty)' if self.lang == 'pl' else ' (known readings)'
             if self.is_unmeasured(i) and i.get('status') == 'unknown' and _numeric(value):
                 name += ' (znane godziny)' if self.lang == 'pl' else ' (known hours)'
             if included:

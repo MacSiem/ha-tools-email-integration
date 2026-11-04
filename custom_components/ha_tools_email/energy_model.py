@@ -468,6 +468,7 @@ def _build_report(inputs):
     if other:
         quantity = _sum((row['kwh'] for row in other), empty=ZERO)
         ranking.append({'id': '_other_measured', 'name': 'Pozostałe zmierzone', 'kwh': quantity,
+            'recorded_kwh': _known_sum(row['kwh'] for row in other),
             'share': share(quantity), 'cost': _sum(row['cost'] for row in other),
             'color': 'other', 'count': len(other), 'children': deepcopy(other)})
     ranking.append({'id': '_unmeasured', 'name': 'Niezmierzone', **unmeasured, 'color': 'unmeasured'})
@@ -487,7 +488,7 @@ def _build_report(inputs):
             quantity = _sum(row['kwh'] for row in members)
             if key is None and quantity == 0:
                 continue
-            result.append({**group, 'kwh': quantity, 'share': share(quantity),
+            result.append({**group, 'kwh': quantity, 'recorded_kwh': _known_sum(row['kwh'] for row in members), 'share': share(quantity),
                 'cost': _sum(row['cost'] for row in members), 'devices': len(members)})
         result.sort(key=lambda row: (-(row['kwh'] or ZERO), row['name']))
         result.append({level + '_id': '_unmeasured', 'name': 'Niezmierzone', **unmeasured})

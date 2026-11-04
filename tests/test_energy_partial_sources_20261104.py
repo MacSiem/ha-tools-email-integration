@@ -58,6 +58,17 @@ class PartialSources(unittest.TestCase):
             self.assertIn('<script>B</script>',rendered['text'])
             self.assertIn('data-energy-bar="0"',rendered['html'])
             self.assertIn('1.00 kWh' if lang == 'en' else '1,00 kWh',rendered['text'])
+    def test_groups_expose_known_subtotal_without_claiming_complete_sum(self):
+        result = model.build_report(sample())
+        other = next(row for row in result['ranking'] if row['id'] == '_other_measured')
+        room = next(row for row in result['rooms'] if row.get('area_id') is None)
+        for group in (other, room):
+            self.assertIsNone(group['kwh'])
+            self.assertEqual(group['recorded_kwh'],24)
+            self.assertIsNone(group['share'])
+        output = mail.render(result, language='en', timezone_name='UTC', hour_cycle='24')
+        self.assertIn('Other measured (known readings)', output['text'])
+
     def test_missing_price_is_not_zero(self):
         data = sample()
         data['projection']['hours'][5]['recorded_cost'] = None
