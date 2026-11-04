@@ -451,7 +451,7 @@ def _build_report(inputs):
         cost = _sum(row['cost'] for row in rows if row['kwh'] is not None)
         meta = sources.get(sid, {})
         all_devices[sid] = {'id': sid, 'name': meta.get('name') or sid, 'kwh': quantity,
-            'cost': cost, 'effective_rate': _ratio(cost, quantity), 'share': share(quantity),
+            'cost': cost, 'effective_rate': _ratio(cost, quantity), 'share': share(quantity) if all(row['kwh'] is not None for row in rows) else None,
             'area_id': meta.get('area_id'), 'floor_id': meta.get('floor_id'),
             'measurement_complete': all(row['kwh'] is not None for row in rows), 'children': []}
     # Iterative tree assembly, safe for the supported 512-node hierarchy.
@@ -471,7 +471,7 @@ def _build_report(inputs):
     residual_supported = (partitioned and not double_counting and remainder is not None
         and all(value is not None for value in residuals))
     remainder_cost = usage - device_cost if residual_supported and usage is not None and device_cost is not None else None
-    unmeasured = {'kwh': remainder, 'recorded_kwh': remainder, 'share': share(remainder), 'cost': remainder_cost,
+    unmeasured = {'kwh': remainder, 'recorded_kwh': remainder, 'share': share(remainder) if residual_supported else None, 'cost': remainder_cost,
         'status': 'double_counting' if double_counting else 'ok' if partitioned and all(value is not None for value in residuals) else 'unknown',
         'tolerance_adjustment_kwh': adjusted,
         'raw_balance_kwh': imported - measured if imported is not None and measured is not None else None}
@@ -492,7 +492,7 @@ def _build_report(inputs):
         ranking.append({'id': '_other_measured', 'name': 'Pozostałe zmierzone', 'kwh': quantity,
             'recorded_kwh': _known_sum(row['kwh'] for row in other),
             'measurement_complete': all(row['measurement_complete'] for row in other),
-            'share': share(quantity), 'cost': _sum(row['cost'] for row in other),
+            'share': share(quantity) if all(row['measurement_complete'] for row in other) else None, 'cost': _sum(row['cost'] for row in other),
             'color': 'other', 'count': len(other), 'children': deepcopy(other)})
     ranking.append({'id': '_unmeasured', 'name': 'Niezmierzone', **unmeasured, 'color': 'unmeasured'})
 
@@ -512,7 +512,7 @@ def _build_report(inputs):
             if key is None and quantity == 0:
                 continue
             result.append({**group, 'kwh': quantity, 'recorded_kwh': _known_sum(row['kwh'] for row in members),
-                'measurement_complete': all(row['measurement_complete'] for row in members), 'share': share(quantity),
+                'measurement_complete': all(row['measurement_complete'] for row in members), 'share': share(quantity) if all(row['measurement_complete'] for row in members) else None,
                 'cost': _sum(row['cost'] for row in members), 'devices': len(members)})
         result.sort(key=lambda row: (-(row['kwh'] or ZERO), row['name']))
         result.append({level + '_id': '_unmeasured', 'name': 'Niezmierzone', **unmeasured})

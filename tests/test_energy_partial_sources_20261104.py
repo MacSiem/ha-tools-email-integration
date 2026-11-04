@@ -82,6 +82,8 @@ class PartialSources(unittest.TestCase):
         self.assertTrue(result['coverage']['complete'])
         self.assertEqual(result['totals']['import_kwh'],48)
         self.assertEqual(result['coverage']['status'],'complete')
+        self.assertIsNone(next(row for row in result['devices'] if row['id']=='b')['share'])
+        self.assertIsNone(result['unmeasured']['share'])
         self.assertEqual(result['coverage']['missing_devices'][0]['name'],'<script>B</script>')
         for lang in ('pl','en'):
             out = mail.render(result, language=lang, timezone_name='UTC', hour_cycle='24')
