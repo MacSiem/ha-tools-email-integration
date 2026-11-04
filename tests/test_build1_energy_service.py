@@ -15,6 +15,39 @@ UTC = timezone.utc
 
 
 class Build1ServiceTest(unittest.TestCase):
+    def test_partial_grid_flows_through_real_service_collector_and_tariff(self):
+        from tests.test_energy_weighted_comparison import readings
+        async def run():
+            h = Harness(); h.now = datetime(2026, 1, 11, 12, tzinfo=UTC)
+            h.manager.data['energy_sources'].append({'type':'grid','stat_energy_from':'sensor.missing'})
+            h.metadata['sensor.missing'] = dict(h.metadata['sensor.grid'])
+            async def usage(hass, sensors, start, end, cadence, *, metadata):
+                ids = tuple(row['entity_id'] for row in sensors)
+                hours = int((end-start).total_seconds()/3600)
+                missing = [('sensor.missing', i) for i in range(hours)] if 'sensor.missing' in ids else []
+                return readings(start.isoformat(), end.isoformat(), sources=ids,
+                                value=10 if 'sensor.grid' in ids else 2, missing=missing)
+            h.usage = usage
+            old_capture = h.registry.capture
+            def capture(ids):
+                value = old_capture(ids)
+                if 'sensor.missing' in ids:
+                    value['sources']['sensor.missing']['name'] = 'Missing meter'
+                return value
+            h.registry.capture = capture
+            with h.patches():
+                result = await h.subject.async_get_build1_model('day','user',date='2026-01-10')
+                report = result['report_model']
+                self.assertEqual(report['coverage']['status'], 'partial')
+                self.assertEqual((report['coverage']['measured_source_hours'], report['coverage']['expected_source_hours']), (24,48))
+                self.assertEqual(report['coverage']['missing_sources'][0]['name'], 'Missing meter')
+                self.assertEqual(report['totals']['recorded_import_kwh'], 240)
+                self.assertEqual(report['totals']['recorded_usage_cost'], 240)
+                self.assertIsNone(report['totals']['import_kwh'])
+                self.assertIsNone(report['totals']['total_with_fixed'])
+                self.assertTrue(await h.subject.async_validate_result(result,'user'))
+        asyncio.run(run())
+
     def test_short_projection_prices_internal_decimal_zero_and_tiny_values(self):
         h = Harness()
         configuration = {'grid_sensors': [{'entity_id': 'sensor.grid'}],
