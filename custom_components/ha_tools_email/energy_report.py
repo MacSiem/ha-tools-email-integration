@@ -1206,3 +1206,37 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     html_parts.append('</td></tr></table></body></html>')
     return {'snapshot_id': snapshot_id, 'html': ''.join(html_parts),
             'text': '\n'.join(text_parts) + '\n', 'csv': output.getvalue()}
+
+
+def append_partial_model_csv(csv_data, snapshot_id, model, language):
+    """Append source-scope facts without changing the existing CSV rows."""
+    coverage = model.get('coverage', {})
+    if coverage.get('complete') is True:
+        return csv_data
+    pl = str(language).lower().startswith('pl')
+    output = StringIO(newline='')
+    writer = csv.writer(output, lineterminator='\r\n')
+    def safe(value):
+        value = str(value)
+        return "'" + value if value.lstrip(' \t\r\n\ufeff').startswith(('=', '+', '-', '@')) or value.startswith(('\t','\r','\n')) else value
+    def emit(path, label, value, unit=''):
+        display = '' if value is None else str(value)
+        writer.writerow((safe(snapshot_id), 'Partial source readings', safe(path), safe(label),
+                         safe(display), safe(unit), json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(',', ':'))))
+    labels = (('Stan danych','Status'), ('Pełne godziny','Complete hours'), ('Oczekiwane godziny','Expected hours'),
+              ('Zmierzone źródło-godziny','Measured source-hours'), ('Oczekiwane źródło-godziny','Expected source-hours'))
+    for key, label in zip(('status','measured_hours','expected_hours','measured_source_hours','expected_source_hours'),labels):
+        emit('report_model.coverage.'+key, label[not pl], coverage.get(key))
+    totals = model.get('totals', {})
+    for key, label, unit in (('recorded_import_kwh',('Znane odczyty źródeł','Known source readings'),'kWh'),
+                             ('recorded_usage_cost',('Koszt znanych odczytów','Known readings cost'),model.get('currency') or '')):
+        emit('report_model.totals.'+key, label[not pl], totals.get(key), unit)
+    for i, source in enumerate(coverage.get('missing_sources', [])):
+        emit(f'report_model.coverage.missing_sources.{i}.name', 'Brakujące źródło' if pl else 'Missing source', source.get('name') or source.get('id'))
+        for j, interval in enumerate(source.get('ranges', [])):
+            for key in ('start','end'):
+                emit(f'report_model.coverage.missing_sources.{i}.ranges.{j}.{key}', ('Od' if key == 'start' else 'Do') if pl else ('From' if key == 'start' else 'To'), interval.get(key))
+    for i, row in enumerate(model.get('hourly', [])):
+        if not row.get('future'):
+            emit(f'report_model.hourly.{i}.recorded_kwh', ('Znane odczyty ' if pl else 'Known readings ') + str(row.get('start') or ''), row.get('recorded_kwh'), 'kWh')
+    return csv_data + output.getvalue()

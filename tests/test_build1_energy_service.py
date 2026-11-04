@@ -32,7 +32,7 @@ class Build1ServiceTest(unittest.TestCase):
             def capture(ids):
                 value = old_capture(ids)
                 if 'sensor.missing' in ids:
-                    value['sources']['sensor.missing']['name'] = 'Missing meter'
+                    value['sources']['sensor.missing']['name'] = '=Missing meter'
                 return value
             h.registry.capture = capture
             with h.patches():
@@ -40,12 +40,22 @@ class Build1ServiceTest(unittest.TestCase):
                 report = result['report_model']
                 self.assertEqual(report['coverage']['status'], 'partial')
                 self.assertEqual((report['coverage']['measured_source_hours'], report['coverage']['expected_source_hours']), (24,48))
-                self.assertEqual(report['coverage']['missing_sources'][0]['name'], 'Missing meter')
+                self.assertEqual(report['coverage']['missing_sources'][0]['name'], '=Missing meter')
                 self.assertEqual(report['totals']['recorded_import_kwh'], 240)
                 self.assertEqual(report['totals']['recorded_usage_cost'], 240)
                 self.assertIsNone(report['totals']['import_kwh'])
                 self.assertIsNone(report['totals']['total_with_fixed'])
                 self.assertTrue(await h.subject.async_validate_result(result,'user'))
+                artifact = await h.subject._async_render_energy_artifact(result, 'user',
+                    {'language':'en', 'timezone_name':'UTC', 'hour_cycle':'24'})
+                import csv, io, json
+                rows = list(csv.DictReader(io.StringIO(artifact['csv'])))
+                by_field = {row['field']: row for row in rows}
+                named = by_field['report_model.coverage.missing_sources.0.name']
+                self.assertEqual(named['value'], "'=Missing meter")
+                self.assertEqual(json.loads(named['raw_json']), '=Missing meter')
+                self.assertEqual(json.loads(by_field['report_model.totals.recorded_import_kwh']['raw_json']), 240)
+                self.assertEqual(json.loads(by_field['report_model.hourly.0.recorded_kwh']['raw_json']), 10)
         asyncio.run(run())
 
     def test_short_projection_prices_internal_decimal_zero_and_tiny_values(self):

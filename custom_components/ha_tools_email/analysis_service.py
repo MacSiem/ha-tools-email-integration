@@ -958,7 +958,7 @@ class EnergyAnalysisService:
 
     async def _async_render_energy_artifact(self, snapshot, actor, options):
         """Present one authorized snapshot; retain the legacy CSV byte for byte."""
-        from .energy_report import render_energy_analysis
+        from .energy_report import append_partial_model_csv, render_energy_analysis
         # A model-only first-hour DTO has no legacy CSV calculation. Retain the
         # pre-existing report availability boundary rather than inventing rows.
         if 'totals' not in snapshot:
@@ -980,9 +980,12 @@ class EnergyAnalysisService:
             if ('external_url' in mail_options and
                     mail_options['external_url'] != getattr(self.hass.config, 'external_url', None)):
                 raise RuntimeError('energy_external_url_changed')
+            # Preserve the existing rows and append partial-source facts from
+            # this same authorized snapshot; never recalculate them for export.
+            report['csv'] = await self.coordinator._async_run_cpu(partial(
+                append_partial_model_csv, report['csv'], snapshot['snapshot_id'],
+                snapshot['report_model'], options.get('language')))
             # The caller reauthorizes after this await before releasing output.
-            # Copy only presentation fields. CSV/identity belong to this exact
-            # producer snapshot and its unchanged legacy export implementation.
             report = {**report, **{key: presentation[key] for key in
                 ('subject', 'preheader', 'html', 'text', 'notify')}}
             # Bind the actual MIME presentation to its producer without putting
