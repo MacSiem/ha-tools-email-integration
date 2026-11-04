@@ -673,6 +673,12 @@ async def _ws_energy_report(hass, connection, msg):
         except PermissionError:
             connection.send_error(msg['id'],'unauthorized','Energy or source access required.')
             return
+        except ValueError as err:
+            if str(err) == 'energy_analysis_unavailable':
+                connection.send_error(msg['id'],'energy_not_configured','Configure an Energy grid import source.')
+            else:
+                connection.send_error(msg['id'],'energy_report_unavailable','Energy report is unavailable.')
+            return
         except Exception:
             connection.send_error(msg['id'],'energy_report_unavailable','Energy report is unavailable.')
             return

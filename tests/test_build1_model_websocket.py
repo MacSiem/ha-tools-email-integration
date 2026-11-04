@@ -27,3 +27,11 @@ class ModelWebsocketTest(unittest.IsolatedAsyncioTestCase):
   with patch.object(ws,'_feature_authorized',AsyncMock(return_value=True)):
    await ws._ws_energy_report(hass,connection,{'id':2,'period':'day','language':'en','timezone':'UTC','hour_cycle':'24'})
   self.assertEqual([(2,report)],results);service.async_get_report.assert_awaited_once()
+
+ async def test_unconfigured_grid_is_distinct_from_other_errors(self):
+  for failure,code in [(ValueError('energy_analysis_unavailable'),'energy_not_configured'),(ValueError('private failure'),'energy_report_unavailable'),(RuntimeError('private failure'),'energy_report_unavailable')]:
+   ws,_=load_websocket();service=types.SimpleNamespace(async_get_build1_model=AsyncMock(side_effect=failure))
+   errors=[];hass=types.SimpleNamespace(data={'ha_tools_email':{'energy_analysis':service}});connection=types.SimpleNamespace(user=types.SimpleNamespace(id='owner'),send_result=Mock(),send_error=lambda *a:errors.append(a))
+   with patch.object(ws,'_feature_authorized',AsyncMock(return_value=True)):
+    await ws._ws_energy_report(hass,connection,{'id':1,'representation':'model','period':'day','mode':'full'})
+   self.assertEqual(errors[-1][1],code);self.assertNotIn('private',errors[-1][2]);connection.send_result.assert_not_called()
