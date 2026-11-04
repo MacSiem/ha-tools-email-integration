@@ -230,7 +230,8 @@ async def async_collect_inputs(service, configuration, period, context, accumula
                 return datetime.fromtimestamp(v / 1000, UTC) if isinstance(v, (int, float)) else datetime.fromisoformat(v)
             rate = rates.resolve_interval(stamp(row['from']).isoformat(), stamp(row['to']).isoformat())
             if rate and rate.get('available') and (rate.get('currency'), rate.get('price_basis')) == (projection.get('currency'), projection.get('price_basis')):
-                row['recorded_cost'] = str(calculate_energy_amounts(Decimal(str(value)), rate['energy_rate'], rate['variable_rate'], rate['rate_semantics'])['usage_cost']) if calculate_energy_amounts(Decimal(str(value)), rate['energy_rate'], rate['variable_rate'], rate['rate_semantics'])['usage_cost'] is not None else None
+                amount = calculate_energy_amounts(Decimal(str(value)), rate['energy_rate'], rate['variable_rate'], rate['rate_semantics'])['usage_cost']
+                row['recorded_cost'] = str(amount) if amount is not None else None
     if native is not None:
         facts = await service._cpu(native.report_hours, guard)
         by_start = {row['from']: row for row in facts['hours']}
@@ -367,7 +368,9 @@ async def async_collect_inputs(service, configuration, period, context, accumula
     membership = deepcopy(membership)
     for row in configuration['grid_sensors']:
         if row.get('name'):
-            membership.setdefault('sources', {}).setdefault(row['entity_id'], {})['name'] = row['name']
+            meta = membership.setdefault('sources', {}).setdefault(row['entity_id'], {})
+            if not meta.get('name'):
+                meta['name'] = row['name']
     for row in configuration['consumers']:
         if row.get('name'):
             membership.setdefault('sources', {}).setdefault(row['stat_consumption'], {})['name'] = row['name']
