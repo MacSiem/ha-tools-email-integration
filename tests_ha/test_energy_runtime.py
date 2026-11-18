@@ -275,3 +275,30 @@ async def test_native_enum_metadata_does_not_invalidate_statistics_during_transi
     await hass.async_block_till_done()
     assert (registry.async_get(zone_id).capabilities or {}).get('options', []) == []
     assert hass.states.get(zone_id).state == 'unavailable'
+
+async def test_single_zone_next_cheap_has_explicit_state_and_identity_survives_change(hass, hass_storage, freezer):
+    freezer.move_to('2026-10-18T12:30:00+00:00')
+    await hass.config.async_set_time_zone('UTC')
+    entry, storage = await _setup(hass)
+    registry = er.async_get(hass)
+    uid = f'{entry.entry_id}_energy_next_cheap'
+    entity_id = registry.async_get_entity_id('sensor', DOMAIN, uid)
+    tariff = profile()
+    tariff['zones'][0].pop('classification')
+    await storage.async_save_tariff(tariff, expected_revision=0)
+    coordinator = hass.data[DOMAIN]['energy_snapshot']
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    state = hass.states.get(entity_id)
+    assert state.state == 'none_in_tariff'
+    assert state.attributes['device_class'] == 'enum'
+    tariff['zones'][0]['classification'] = 'expensive'
+    tariff['zones'].append({'id': 'night', 'energyRate': .4, 'variableRate': .1,
+                            'classification': 'cheap'})
+    tariff['rules'] = [{'zone': 'night', 'intervals': [{'from': '22:00', 'to': '06:00'}]}]
+    await storage.async_save_tariff(tariff, expected_revision=1)
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    assert registry.async_get_entity_id('sensor', DOMAIN, uid) == entity_id
+    assert hass.states.get(entity_id).state == '2026-10-18T22:00:00+00:00'
+    assert hass.states.get(entity_id).attributes['device_class'] == 'timestamp'

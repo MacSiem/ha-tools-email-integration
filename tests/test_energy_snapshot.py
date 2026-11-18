@@ -122,6 +122,12 @@ class SnapshotTests(unittest.TestCase):
         p['zones'][0]['classification'] = 'lowest'
         self.assertEqual('invalid_profile', self.snapshot(p)['current']['reason'])
 
+    def test_single_zone_is_explicitly_without_cheap_period(self):
+        p = classified()
+        p['zones'] = [p['zones'][0]]
+        p['rules'] = []
+        self.assertEqual('none_in_tariff', self.snapshot(p)['next_cheap']['status'])
+
     def test_no_private_fields_in_snapshot(self):
         measured = usage()
         measured.update(source_ids=['sensor.PRIVATE'], devices=[{'name': 'PRIVATE'}],

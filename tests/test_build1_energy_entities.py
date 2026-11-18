@@ -137,6 +137,18 @@ class NativeSensorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('zone_options', entities['zone']._unrecorded_attributes)
         self.assertIn('measurement_through', entities['today']._unrecorded_attributes)
 
+    async def test_single_zone_next_cheap_is_explicit_and_keeps_identity(self):
+        entities, coordinator = await self.sensors()
+        p = classified()
+        p['zones'] = [p['zones'][0]]
+        p['rules'] = []
+        coordinator.data = build({'profile': p, 'revision': 4})
+        entity = entities['next_cheap']
+        self.assertTrue(entity.available)
+        self.assertEqual('none_in_tariff', entity.native_value)
+        self.assertEqual(['none_in_tariff'], entity.options)
+        self.assertEqual('stable_energy_next_cheap', entity._attr_unique_id)
+
     async def test_transient_unavailable_snapshot_keeps_enum_metadata_without_stale_value(self):
         entities, coordinator = await self.sensors()
         zone = entities['zone']

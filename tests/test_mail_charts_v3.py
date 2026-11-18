@@ -296,3 +296,16 @@ class MailChartSpecification(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class PolishLogInflectionTest(unittest.TestCase):
+    def test_occurrences_in_html_and_plain(self):
+        cases = {0: 'wystąpień', 1: 'wystąpienie', 2: 'wystąpienia',
+                 4: 'wystąpienia', 5: 'wystąpień', 12: 'wystąpień',
+                 22: 'wystąpienia', 25: 'wystąpień', 101: 'wystąpień'}
+        for count, noun in cases.items():
+            with self.subTest(count=count):
+                model = m.build_log_chart_model({'level_counts': {'ERROR': count},
+                    'logger_counts': {'fixture': count}}, language='pl')
+                for rendered in (m.render_charts_html(model), m.render_charts_plain(model)):
+                    self.assertIn(f'{count} {noun}', rendered)

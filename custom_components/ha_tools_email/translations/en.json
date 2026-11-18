@@ -109,7 +109,8 @@
         "name": "Usage price now"
       },
       "energy_next_cheap": {
-        "name": "Next cheap period"
+        "name": "Next cheap period",
+        "state": {"none_in_tariff": "None in tariff"}
       },
       "energy_today": {
         "name": "Grid energy imported today"
