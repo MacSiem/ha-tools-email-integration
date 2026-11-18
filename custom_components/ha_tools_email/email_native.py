@@ -124,7 +124,8 @@ class EmailNativeCoordinator:
                     row['warnings_24h'] = sum(item['count'] for item in log_rows if item['level'] == 'WARNING')
         if (not self.running or self.hass.data.get(DOMAIN) is not bucket
                 or bucket.get('email_native') is not self or bucket.get('storage') is not self.storage
-                or generation != bucket.get('schedule_generation')
+                or zone != self.hass.config.time_zone or generation != bucket.get('schedule_generation')
+                or consumed != bucket.get('schedule_consumed_periods', {})
                 or not self.storage.report_status_context_is_current(token)):
             return
         self.data, self.identities = result['schedules'], result['identities']
