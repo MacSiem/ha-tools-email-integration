@@ -30,7 +30,7 @@ def _publish(coordinator, issue_id, present):
     registry = ir.async_get(coordinator.hass)
     old = registry.async_get_issue(DOMAIN, issue_id)
     coordinator._energy_repairs_active = True
-    if present and old is None:
+    if present and (old is None or getattr(old, 'active', True) is False):
         ir.async_create_issue(coordinator.hass, DOMAIN, issue_id,
             is_fixable=False, is_persistent=False, severity=ir.IssueSeverity.WARNING,
             translation_key=issue_id)
@@ -198,7 +198,7 @@ async def async_publish_stale_sources(coordinator):
             issue_id = _stale_id(sid)
             old = registry.async_get_issue(DOMAIN, issue_id)
             if stale:
-                if old is None:
+                if old is None or getattr(old, 'active', True) is False:
                     name = state.name if state is not None else sid
                     link = f'/config/entities/entity/{sid}' if not external else '/config/energy'
                     ir.async_create_issue(coordinator.hass, DOMAIN, issue_id,
