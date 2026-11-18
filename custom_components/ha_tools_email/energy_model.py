@@ -568,9 +568,14 @@ def _build_report(inputs):
         markers = previous_comparison['chart'].get('markers', [])
         mapped = {row['current_from']: _decimal(row.get('baseline_kwh'))
                   for row in markers if row.get('status') == 'ready'}
-        for hour in hourly:
-            stamp = int(_instant(hour['start']).timestamp() * 1000)
-            hour['prev_kwh'] = mapped.get(stamp)
+        if previous_comparison['chart'].get('grain') == 'hour':
+            for hour in hourly:
+                stamp = int(_instant(hour['start']).timestamp() * 1000)
+                hour['prev_kwh'] = mapped.get(stamp)
+    daily = _daily_rows(hourly, zone)
+    if previous_comparison and (previous_comparison.get('chart') or {}).get('grain') == 'day':
+        for row in daily:
+            row['prev_kwh'] = mapped.get(int(_instant(row['start']).timestamp() * 1000))
     tariff = deepcopy(inputs.get('tariff', {}))
     fixed_rows = tariff.get('fixed', [])
     monthly = _sum((_decimal(row.get('monthly')) for row in fixed_rows))
@@ -589,7 +594,7 @@ def _build_report(inputs):
     tariff['fixed'] = [{**row, 'share': _decimal(row.get('share'))} for row in fixed_rows]
     return {'schema': SCHEMA, 'period': period, 'coverage': coverage, 'currency': currency,
         'price_basis': basis, 'device_cost_basis': 'purchase_price_excluding_pv' if domain == 'site_consumption' else 'grid_purchase_price', 'totals': totals, 'zones': zones, 'hourly': hourly,
-        'daily': _daily_rows(hourly,zone),
+        'daily': daily,
         'devices': devices, 'ranking': ranking, 'unmeasured': unmeasured,
         'rooms': grouped('area'), 'floors': grouped('floor'), 'comparisons': comparisons,
         'alternatives': deepcopy(inputs.get('alternatives', [])),

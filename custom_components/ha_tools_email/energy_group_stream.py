@@ -302,8 +302,9 @@ class GroupComparisonAccumulator:
         counts, common_count = state['own_count'], state['common_count']
         own = [count / total for count, total in zip(counts, expected)]
         common = [common_count / total for total in expected]
-        complete = counts == expected
-        ready = complete or self._calendar_plan.aligned and all(value >= .9 for value in (*own, *common))
+        grids = self._calendar_plan.grids
+        complete = counts == expected and set(grids[0].values()) == set(grids[1].values())
+        ready = complete or self._calendar_plan.aligned and bool(common_count)
         selected = state['own'] if complete else state['common']
         row = {'status': 'ready' if ready else 'unknown',
             'reason': None if ready else ('unsupported_common_calendar_order'

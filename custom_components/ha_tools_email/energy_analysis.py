@@ -180,7 +180,7 @@ class EnergyAnalysisAccumulator:
         self._rows, self._issues = [], []
         self._report_missing = {}
         self._source_first = {}
-        self._seen_sources, self._missing_sources = set(), set()
+        self._seen_sources, self._missing_sources, self._expected_sources = set(), set(), set()
         self._ids, self._provenance, self._signature = None, None, None
         self._measured_seconds = 0
         self._expected_seconds = 0
@@ -224,6 +224,8 @@ class EnergyAnalysisAccumulator:
             for row in evidence['hourly_buckets']:
                 self._report_missing[row['from']] = [sid for sid in ids if row['from'] in evidence['expected_per_source'][sid] and row['from'] not in evidence['per_source'][sid]]
         for sid, cells in evidence['per_source'].items():
+            if evidence['expected_per_source'][sid]:
+                self._expected_sources.add(sid)
             if cells:
                 self._seen_sources.add(sid)
             if len(set(cells) & evidence['expected_per_source'][sid]) < len(evidence['expected_per_source'][sid]):
@@ -257,7 +259,7 @@ class EnergyAnalysisAccumulator:
         coverage = {'complete': complete, 'ratio': self._measured_seconds / expected_seconds if expected_seconds else 0,
                     'expected_source_seconds': expected_seconds,
                     'measured_source_seconds': self._measured_seconds,
-                    'measured_sources': len(self._seen_sources), 'expected_sources': len(self._ids),
+                    'measured_sources': len(self._seen_sources & self._expected_sources), 'expected_sources': len(self._expected_sources),
                     'missing_sources': sorted(self._missing_sources)}
         price_coverage = {'from': self._period['start'], 'to': self._period['end'],
                           'complete': complete, 'unit': 'kWh', 'source_signature': self._signature,
