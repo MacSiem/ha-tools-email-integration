@@ -21,7 +21,8 @@ class AnalysisComparisonsTest(unittest.IsolatedAsyncioTestCase):
             result = await h.subject.async_get_analysis('year', 'user', anchor='2024-06-15', comparison='previous')
             compared = result['comparisons']['previous']
             self.assertEqual('ready', compared['status'])
-            self.assertEqual((87840, 87600, 240), tuple(compared[k] for k in ('current_kwh', 'baseline_kwh', 'delta_kwh')))
+            self.assertEqual((87600, 87600, 0), tuple(compared[k] for k in ('current_kwh', 'baseline_kwh', 'delta_kwh')))
+            self.assertEqual((87840, 87600), (compared['full_current_kwh'], compared['full_baseline_kwh']))
             self.assertEqual(212, len(h.queries))
             self.assertEqual(106, sum(ids == ('sensor.device',) for ids, _, _ in h.queries))
             self.assertTrue(all(0 < (end-start).total_seconds() <= 168*3600 for _, start, end in h.queries))
@@ -74,9 +75,10 @@ class AnalysisComparisonsTest(unittest.IsolatedAsyncioTestCase):
         with h.patches():
             result = await h.subject.async_get_analysis('day', 'user', anchor='2026-10-10', comparison='mean7')
             compared = result['comparisons']['mean7']
-            self.assertEqual('unknown', compared['status'])
+            self.assertEqual('ready', compared['status'])
+            self.assertEqual('common_measurements', compared['comparison_scope'])
             self.assertAlmostEqual(16/24, compared['coverage']['common_current'])
-            self.assertIsNone(compared['delta_kwh'])
+            self.assertEqual(0, compared['delta_kwh'])
             self.assertEqual(16, len(h.queries))
 
     async def test_invalid_comparison_before_private_io_and_ws_only_passes_supported_fields(self):
@@ -111,8 +113,9 @@ class AnalysisComparisonsTest(unittest.IsolatedAsyncioTestCase):
             result = await h.subject.async_get_analysis('day', 'user', anchor='2026-10-10', comparison='previous')
             self.assertEqual(plain['totals'], result['totals'])
             self.assertEqual(.5, result['coverage']['ratio'])
-            self.assertEqual('unknown', result['comparisons']['previous']['status'])
-            self.assertIsNone(result['comparisons']['previous']['delta_kwh'])
+            self.assertEqual('ready', result['comparisons']['previous']['status'])
+            self.assertEqual('common_measurements', result['comparisons']['previous']['comparison_scope'])
+            self.assertEqual(0, result['comparisons']['previous']['delta_kwh'])
             self.assertTrue(await h.subject.async_validate_result(result, 'user'))
 
     async def test_mean_seven_accepts_twenty_six_hour_civil_day(self):
@@ -122,7 +125,7 @@ class AnalysisComparisonsTest(unittest.IsolatedAsyncioTestCase):
             result = await h.subject.async_get_analysis('day', 'user', anchor='2026-10-25', comparison='mean7')
             self.assertEqual(26, result['period']['hours'])
             self.assertEqual('ready', result['comparisons']['mean7']['status'])
-            self.assertEqual((260, 240), tuple(result['comparisons']['mean7'][key]
+            self.assertEqual((240, 240), tuple(result['comparisons']['mean7'][key]
                 for key in ('current_kwh', 'baseline_kwh')))
 
 
@@ -171,12 +174,15 @@ class ComparisonChartServiceTest(unittest.IsolatedAsyncioTestCase):
         with h.patches():
             result = await h.subject.async_get_analysis('day', 'user', anchor='2026-10-25', comparison='mean7')
             compared = result['comparisons']['mean7']; rows = compared['chart']['markers']
-            self.assertEqual((250, 240), (compared['current_kwh'], compared['baseline_kwh']))
+            self.assertEqual((240, 240), (compared['current_kwh'], compared['baseline_kwh']))
+            self.assertEqual((250, 240), (compared['full_current_kwh'], compared['full_baseline_kwh']))
             self.assertEqual(25, len(rows))
             self.assertEqual('unknown', rows[3]['status'])
             self.assertIsNone(rows[3]['baseline_kwh'])
             self.assertEqual('ready', rows[4]['status'])
-            self.assertFalse(compared['chart']['reconciles_comparison_energy'])
+            self.assertTrue(compared['chart']['reconciles_comparison_energy'])
+            for key in ('current_kwh', 'baseline_kwh'):
+                self.assertEqual(compared[key], sum(float(row[key]) for row in rows if row['status'] == 'ready'))
 
     async def test_unsupported_week_baseline_has_explicit_unknown_chart(self):
         h = self.harness()

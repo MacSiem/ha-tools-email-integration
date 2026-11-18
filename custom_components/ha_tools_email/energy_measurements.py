@@ -11,9 +11,9 @@ MAX_PERIOD_HOURS = 366 * 24
 MAX_EVIDENCE_CELLS = MAX_SOURCES * 7 * 24
 
 
-def validated_source_ids(snapshot):
+def validated_source_ids(snapshot, *, allow_empty=False):
     ids = snapshot.get('source_ids') if isinstance(snapshot, dict) else None
-    if (not isinstance(ids, list) or not 1 <= len(ids) <= MAX_SOURCES
+    if (not isinstance(ids, list) or not (0 if allow_empty else 1) <= len(ids) <= MAX_SOURCES
             or any(not isinstance(sid, str) or not sid for sid in ids)
             or len(set(ids)) != len(ids)):
         raise ValueError('invalid_source_ids')
@@ -96,9 +96,9 @@ def measurement_evidence(snapshot, start, end):
     per_source is internal verified evidence, never a public registry/measurement
     export. A partial source hour cannot become a complete household hour.
     """
-    ids, grid = validated_source_ids(snapshot), hour_grid(start, end)
-    expected = len(ids) * len(grid)
-    if expected > MAX_EVIDENCE_CELLS:
+    ids, grid = validated_source_ids(snapshot, allow_empty=True), hour_grid(start, end)
+    maximum = len(ids) * len(grid)
+    if maximum > MAX_EVIDENCE_CELLS:
         raise ValueError('measurement_chunk_too_large')
     provenance = snapshot.get('measurement_provenance')
     provenance = provenance if isinstance(provenance, dict) else {}
@@ -113,26 +113,36 @@ def measurement_evidence(snapshot, start, end):
         except ValueError:
             per_source[sid] = {}
             issues.append({'reason': 'invalid_source_intervals', 'source_id': sid})
-    measured = sum(len(cells) for cells in per_source.values())
+    first = snapshot.get('source_first')
+    first = first if isinstance(first, dict) else {}
+    expected_per_source = {}
+    for sid in ids:
+        marker = first.get(sid, 'unknown')
+        # Missing lifecycle proof is conservative. Explicit None means Recorder
+        # has no retained reading for that source yet.
+        expected_per_source[sid] = {stamp for stamp in grid if marker == 'unknown' or
+            isinstance(marker, (int, float)) and not isinstance(marker, bool) and stamp >= int(marker // 3600000) * 3600000}
+    expected = sum(map(len, expected_per_source.values()))
+    measured = sum(len(set(cells) & expected_per_source[sid]) for sid, cells in per_source.items())
     hourly = []
     for stamp in grid:
-        values = [cells.get(stamp) for cells in per_source.values()]
-        value = _sum(values) if all(value is not None for value in values) else None
+        values = [per_source[sid].get(stamp) for sid in ids if stamp in expected_per_source[sid]]
+        value = _sum(values) if values and all(value is not None for value in values) else None
         known = [value for value in values if value is not None]
         hourly.append({'from': stamp, 'to': stamp + 3600000, 'kwh': value,
                        'recorded_kwh': _sum(known) if known else None,
-                       'measured_sources': len(known), 'expected_sources': len(ids)})
+                       'measured_sources': len(known), 'expected_sources': len(values)})
     observed = _sum(value for cells in per_source.values() for value in cells.values()) if measured else None
     known_hours = [row['kwh'] for row in hourly if row['kwh'] is not None]
     recorded = _sum(known_hours) if known_hours else None
     if (measured and observed is None) or (known_hours and recorded is None):
         issues.append({'reason': 'unrepresentable_measurement_sum'})
-    complete = measured == expected and all(row['kwh'] is not None for row in hourly) and not issues
-    coverage = {'complete': complete, 'ratio': measured / expected,
+    complete = bool(expected) and measured == expected and all(row['kwh'] is not None for row in hourly) and not issues
+    coverage = {'complete': complete, 'ratio': measured / expected if expected else 0,
                 'expected_source_seconds': expected * 3600, 'measured_source_seconds': measured * 3600}
     return {'status': 'ready' if complete else 'partial' if measured else 'no_data',
             'kwh': recorded if complete else None, 'recorded_household_kwh': recorded,
             'observed_source_kwh': observed, 'coverage': coverage, 'hourly_buckets': hourly,
-            'per_source': per_source, 'source_ids': ids, 'issues': issues,
+            'per_source': per_source, 'expected_per_source': expected_per_source, 'source_ids': ids, 'issues': issues,
             'measurement_provenance': {sid: deepcopy(provenance[sid]) for sid in ids
                                        if valid_provenance(provenance.get(sid))}}

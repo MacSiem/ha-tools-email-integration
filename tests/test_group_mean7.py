@@ -67,9 +67,11 @@ class GroupMeanSevenTest(unittest.TestCase):
         projections, periods, rates = self.fixture(hours=10, holes={1:{0},2:{1}})
         result = self.compare(projections, periods, rates)
         row = result['areas']['office']
-        self.assertEqual('unknown', row['status'])
+        self.assertEqual('ready', row['status'])
+        self.assertEqual('common_measurements', row['comparison_scope'])
         self.assertEqual(.8, row['coverage']['common_current'])
-        self.assertIsNone(row['delta_kwh']); self.assertIsNone(row['delta_usage_cost'])
+        self.assertEqual(Decimal(16), Decimal(row['delta_kwh']))
+        self.assertIsNotNone(row['delta_usage_cost'])
         self.assertEqual('ready', result['areas']['kitchen']['status'])
         self.assertEqual(Decimal(40), Decimal(result['areas']['kitchen']['current_kwh']))
 

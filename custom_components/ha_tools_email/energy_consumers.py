@@ -42,7 +42,7 @@ class ConsumerPeriod:
     def __init__(self, consumers, membership, domain, book, hours, *, include_statistics_hours=False, include_report_hours=False):
         require_statistics_projection(include_statistics_hours, hours)
         if type(include_report_hours) is not bool or (include_report_hours and
-                (not 0 < hours <= 8784 or len(consumers) * hours > 262144)):
+                (not 0 < hours <= 8784 or len(consumers) * hours > 524288)):
             raise ValueError('invalid_report_projection_size')
         self._report_hours = [] if include_report_hours else None
         self._statistics_hours = [] if include_statistics_hours else None
@@ -140,7 +140,7 @@ class ConsumerPeriod:
                         'unmeasured': breakdown['unmeasured']['kwh_decimal']})
                 partition = partition and breakdown['status'] == 'ready'
                 issues.update(issue['reason'] for issue in breakdown['issues'])
-                rate = self._rates.resolve_interval(stamp, hour['to']) if self._rates and self._domain == 'grid_import' else None
+                rate = self._rates.resolve_interval(stamp, hour['to']) if self._rates else None
                 hour_amounts = {} if statistics is not None or report is not None else None
                 for sid, cell in {**breakdown['devices'], REMAINDER: breakdown['unmeasured']}.items():
                     state = states[sid]
@@ -168,6 +168,8 @@ class ConsumerPeriod:
                     # parent costs from the existing disjoint subtree amounts.
                     cells = {}
                     for sid in self._ids:
+                        if breakdown['devices'][sid]['measured_kwh_decimal'] is None:
+                            continue
                         members = report_members[sid]
                         costs = {}
                         for key in COSTS:
@@ -232,7 +234,7 @@ class ConsumerPeriod:
             return self._finish(active)
 
     def _finish(self, active):
-        compatible = active is not None and active['compatible'] and self._domain == 'grid_import'
+        compatible = active is not None and active['compatible']
         output = {}
         for sid, state in self._states.items():
             full = state['observations'] == self._hours
@@ -251,7 +253,7 @@ class ConsumerPeriod:
                     row['usage_cost'] = usage
             output[sid] = row
         reconciled = False
-        if compatible and self._partition and active['pricing_complete']:
+        if compatible and self._domain == 'grid_import' and self._partition and active['pricing_complete']:
             allocated = {}
             for key in COMPONENTS:
                 target = active['known_costs'].get(key)
@@ -306,7 +308,7 @@ class ConsumerPeriod:
 
         return {**{key: value for key, value in self._membership.items() if key != 'sources'},
                 'registry_revision': self._membership['revision'],
-                'energy_domain': self._domain, 'partition_complete': self._partition,
+                'energy_domain': self._domain, 'device_cost_basis': 'purchase_price_excluding_pv' if self._domain == 'site_consumption' else 'grid_purchase_price', 'partition_complete': self._partition,
                 'devices': devices, 'areas': {key: aggregate(ids) for key, ids in areas.items()},
                 'floors': {key: aggregate(ids) for key, ids in floors.items()},
                 'unassigned': aggregate(unassigned), 'unmeasured': output[REMAINDER],

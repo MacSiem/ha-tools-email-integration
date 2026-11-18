@@ -61,21 +61,38 @@ class EnergySensor(EnergySnapshotEntity, SensorEntity):
         if self.key in ('today', 'cheap_share_today', 'today_cost'):
             attributes.update(measurement_through=facts.get('measurement_through'),
                 resolution=facts.get('resolution'), coverage_complete=facts.get('coverage_complete'),
+                measured_sources=facts.get('measured_sources'), expected_sources=facts.get('expected_sources'),
+                missing_sources_count=facts.get('missing_sources_count'),
                 reason=facts.get('reason'))
         return attributes
 
     @property
+    def available(self):
+        return self._no_cheap or super().available
+
+    @property
+    def _no_cheap(self):
+        data = self.coordinator.data or {}
+        return self.key == 'next_cheap' and data.get('next_cheap', {}).get('status') == 'none_in_tariff'
+
+    @property
     def native_value(self):
+        if self._no_cheap:
+            return 'none_in_tariff'
         value = self.value
         return datetime.fromisoformat(value) if self.key == 'next_cheap' and value else value
 
     @property
     def device_class(self):
+        if self._no_cheap:
+            return SensorDeviceClass.ENUM
         return {'zone': SensorDeviceClass.ENUM, 'next_cheap': SensorDeviceClass.TIMESTAMP,
                 'today_cost': SensorDeviceClass.MONETARY, 'today': SensorDeviceClass.ENERGY}.get(self.key)
 
     @property
     def options(self):
+        if self._no_cheap:
+            return ['none_in_tariff']
         if self.key != 'zone':
             return None
         data = self.coordinator.data

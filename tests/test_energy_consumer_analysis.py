@@ -137,7 +137,7 @@ class ConsumerAnalysisTest(unittest.TestCase):
         self.add(builder, MID, END, 30, (100, 40, 10))
         groups = builder.finish()['groups']
         self.assertEqual('120', groups['areas']['kitchen']['kwh'])
-        self.assertIsNone(groups['areas']['kitchen']['usage_cost'])
+        self.assertEqual('120.00', groups['areas']['kitchen']['usage_cost'])
         self.assertIsNone(groups['unmeasured']['kwh'])
         self.assertFalse(groups['partition_complete'])
         self.assertIn('domain_mismatch', groups['issues'])

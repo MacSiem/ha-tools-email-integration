@@ -5,13 +5,14 @@ from datetime import datetime, timedelta, timezone
 from homeassistant.auth.permissions.const import POLICY_CONTROL
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import issue_registry as ir, device_registry as dr
+from homeassistant.helpers import issue_registry as ir, device_registry as dr, entity_registry as er
 from homeassistant.helpers.event import async_track_time_interval
 
 from .const import DOMAIN, EVENT_REPORT_STATUS_UPDATED
 from .feature_access import feature_access_allowed
 from .report_status import PURPOSE_FEATURES
 from .scheduler import async_send_now
+from .email_entity import schedule_name
 
 
 class EmailNativeCoordinator:
@@ -110,6 +111,23 @@ class EmailNativeCoordinator:
         # schedules, so deletion/re-add never replays old attempts as new events.
         if seen is not None:
             self._seen = seen
+        history = bucket.get('log_history')
+        if history is not None and any(row['kind'] == 'log_digest' for row in result['schedules'].values()):
+            end = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+            log_rows, coverage = await history.async_query(end - timedelta(hours=24), end)
+            for row in result['schedules'].values():
+                if row['kind'] != 'log_digest':
+                    continue
+                row['log_coverage'] = coverage
+                if coverage['complete']:
+                    row['errors_24h'] = sum(item['count'] for item in log_rows if item['level'] in ('ERROR', 'CRITICAL'))
+                    row['warnings_24h'] = sum(item['count'] for item in log_rows if item['level'] == 'WARNING')
+        if (not self.running or self.hass.data.get(DOMAIN) is not bucket
+                or bucket.get('email_native') is not self or bucket.get('storage') is not self.storage
+                or zone != self.hass.config.time_zone or generation != bucket.get('schedule_generation')
+                or consumed != bucket.get('schedule_consumed_periods', {})
+                or not self.storage.report_status_context_is_current(token)):
+            return
         self.data, self.identities = result['schedules'], result['identities']
         # Update only this integration's exact schedule devices; HA preserves
         # name_by_user/area/disabled settings. No source Energy device matches.
@@ -118,9 +136,18 @@ class EmailNativeCoordinator:
         for key, row in self.data.items():
             identifier = (DOMAIN, f'{self.entry.entry_id}_email_{key}')
             for device in own:
-                name = f"HA Tools Email {row['cadence']}"
+                name = schedule_name(row, self.hass.config.language)
                 if identifier in device.identifiers and device.name != name:
                     devices.async_update_device(device.id, name=name)
+        # Retire only Energy counters; preserve all other identities and names.
+        energy_keys = [key for key, row in self.data.items() if row['kind'] == 'energy_report']
+        for key in energy_keys:
+            registry = er.async_get(self.hass)
+            for field in ('errors_24h', 'warnings_24h'):
+                unique_id = f'{self.entry.entry_id}_email_{key}_{field}'
+                entity_id = registry.async_get_entity_id('sensor', DOMAIN, unique_id)
+                if entity_id:
+                    registry.async_remove(entity_id)
         for issue, active in result['repairs'].items():
             if active is True:
                 ir.async_create_issue(self.hass, DOMAIN, issue, is_fixable=False,

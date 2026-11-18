@@ -170,7 +170,7 @@ async def test_native_recorder_external_import_without_state_prices_daily_moneta
     from homeassistant.components.recorder import models
     from homeassistant.components.recorder.statistics import async_add_external_statistics
 
-    freezer.move_to('2026-10-18T12:00:00+00:00')
+    freezer.move_to('2026-10-18T12:05:00+00:00')
     await hass.config.async_set_time_zone('UTC')
     manager = await async_get_manager(hass)
     manager.data = {'energy_sources': [{'type': 'grid', 'flow_from': [
@@ -207,16 +207,16 @@ async def test_native_recorder_external_import_without_state_prices_daily_moneta
         sid = registry.async_get_entity_id('sensor', DOMAIN, f'{entry.entry_id}_energy_{key}')
         assert float(hass.states.get(sid).state) == pytest.approx(expected)
     # Hourly external history cannot supply the current half-hour's real 5-min tail.
-    # Legacy completed-hour totals remain available, but native selected-current
-    # sensors must become unavailable rather than publishing a fabricated zero.
+    # Missing current short cells do not discard completed-hour readings.
+    # Coverage remains explicitly incomplete and no short values are invented.
     freezer.move_to('2026-10-18T12:30:00+00:00')
     incomplete = await coordinator.async_refresh()
     assert incomplete['today']['measurement_complete'] is True
     assert incomplete['today']['usage_cost'] == pytest.approx(hours * 1.2)
     assert incomplete['entity_facts']['coverage_complete'] is False
-    for key in ('today', 'today_cost', 'cheap_share_today'):
+    for key, expected in (('today', hours), ('today_cost', hours * 1.2), ('cheap_share_today', 100)):
         sid = registry.async_get_entity_id('sensor', DOMAIN, f'{entry.entry_id}_energy_{key}')
-        assert hass.states.get(sid).state == 'unavailable'
+        assert float(hass.states.get(sid).state) == pytest.approx(expected)
 
 
 async def test_native_timestamp_and_cheap_transition_publish_aware_values(hass, hass_storage, freezer):
@@ -275,3 +275,30 @@ async def test_native_enum_metadata_does_not_invalidate_statistics_during_transi
     await hass.async_block_till_done()
     assert (registry.async_get(zone_id).capabilities or {}).get('options', []) == []
     assert hass.states.get(zone_id).state == 'unavailable'
+
+async def test_single_zone_next_cheap_has_explicit_state_and_identity_survives_change(hass, hass_storage, freezer):
+    freezer.move_to('2026-10-18T12:30:00+00:00')
+    await hass.config.async_set_time_zone('UTC')
+    entry, storage = await _setup(hass)
+    registry = er.async_get(hass)
+    uid = f'{entry.entry_id}_energy_next_cheap'
+    entity_id = registry.async_get_entity_id('sensor', DOMAIN, uid)
+    tariff = profile()
+    tariff['zones'][0].pop('classification')
+    await storage.async_save_tariff(tariff, expected_revision=0)
+    coordinator = hass.data[DOMAIN]['energy_snapshot']
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    state = hass.states.get(entity_id)
+    assert state.state == 'none_in_tariff'
+    assert state.attributes['device_class'] == 'enum'
+    tariff['zones'][0]['classification'] = 'expensive'
+    tariff['zones'].append({'id': 'night', 'energyRate': .4, 'variableRate': .1,
+                            'classification': 'cheap'})
+    tariff['rules'] = [{'zone': 'night', 'intervals': [{'from': '22:00', 'to': '06:00'}]}]
+    await storage.async_save_tariff(tariff, expected_revision=1)
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    assert registry.async_get_entity_id('sensor', DOMAIN, uid) == entity_id
+    assert hass.states.get(entity_id).state == '2026-10-18T22:00:00+00:00'
+    assert hass.states.get(entity_id).attributes['device_class'] == 'timestamp'

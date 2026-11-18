@@ -18,7 +18,7 @@ def _label(value):
     return value if isinstance(value, str) and len(value) <= 256 else None
 
 
-def _source_name(entity, device):
+def _source_name(entity, device, device_meter_count=1):
     """Keep explicit entity names; scope integration entity labels to their device."""
     explicit = _label(entity.get('name'))
     if explicit:
@@ -27,7 +27,7 @@ def _source_name(entity, device):
     if entity.get('has_entity_name') is True:
         parent = _label(device.get('name_by_user') or device.get('name'))
         if parent:
-            return _label(f'{parent} {original}' if original else parent) or original
+            return _label(f'{parent} {original}' if original and device_meter_count > 1 else parent) or original
     return original
 
 
@@ -45,6 +45,11 @@ def resolve_membership(source_ids, registries, *, captured_at, revision):
     entities, devices, areas, floors = (_mapping(registries.get(key)) for key in
                                        ("entities", "devices", "areas", "floors"))
     floor_supported = isinstance(registries.get("floors"), dict)
+    counts = {}
+    for sid in source_ids:
+        device_id = _mapping(entities.get(sid)).get('device_id')
+        if device_id is not None:
+            counts[device_id] = counts.get(device_id, 0) + 1
     sources = {}
     for sid in source_ids:
         entity = _mapping(entities.get(sid))
@@ -59,7 +64,7 @@ def resolve_membership(source_ids, registries, *, captured_at, revision):
         if not floor:
             floor_id = None
         sources[sid] = {"entity_id": sid if entity else None,
-                        "name": _source_name(entity, device),
+                        "name": _source_name(entity, device, counts.get(entity.get("device_id"), 1)),
                         "area_id": area_id, "area_name": _label(area.get("name")),
                         "floor_id": floor_id, "floor_name": _label(floor.get("name")),
                         "attribution": attribution}

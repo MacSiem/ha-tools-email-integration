@@ -200,6 +200,10 @@ async def test_native_daily_total_statistics_metadata_reset_and_signed_sum(hass,
     ids = records(hass, entry)
     cost_id, price_id = ids['today_cost'].entity_id, ids['price'].entity_id
     baseline = deepcopy(coordinator.data)
+    # One minute after midnight no five-minute cell is ready yet; this is
+    # unavailable evidence, not a reset or an observed zero.
+    assert baseline['entity_facts']['reason'] == 'no_completed_interval'
+    assert hass.states.get(cost_id).state == 'unavailable'
     instance = recorder_mock
 
     async def publish(instant, value, reset):
@@ -213,7 +217,7 @@ async def test_native_daily_total_statistics_metadata_reset_and_signed_sum(hass,
         snapshot['generated_at'] = instant.isoformat()
         snapshot['today'].update(usage_cost=value, **{'from': start.isoformat(), 'to': end.isoformat()})
         snapshot['entity_facts'].update(usage_cost=value,
-            measurement_from=start.isoformat(), measurement_through=cutoff_at(instant).isoformat(),
+            measurement_from=start.isoformat(), measurement_through=cutoff_at(instant, hass.config.time_zone).isoformat(),
             coverage_complete=value is not None,
             reason=None if value is not None else 'measurement_incomplete')
         coordinator.data = snapshot
@@ -223,7 +227,7 @@ async def test_native_daily_total_statistics_metadata_reset_and_signed_sum(hass,
         await _async_recorder_barrier(hass, instance)
         return hass.states.get(cost_id)
 
-    first = await publish(beginning + timedelta(minutes=1), 10, beginning)
+    first = await publish(beginning + timedelta(minutes=11), 10, beginning)
     assert first.attributes['state_class'] == 'total'
     assert first.attributes['last_reset'] == beginning.isoformat()
     assert first.attributes['device_class'] == 'monetary'
@@ -239,9 +243,9 @@ async def test_native_daily_total_statistics_metadata_reset_and_signed_sum(hass,
     # Compile actual Recorder 5-minute rows, including a signed decline and a
     # new cycle starting below zero. Unknown must not invent another reset.
     for index, (instant, value, reset) in enumerate([
-        (beginning + timedelta(minutes=1), 10, beginning),
-        (beginning + timedelta(minutes=6), -2, beginning),
-        (next_day + timedelta(minutes=1), -1, next_day),
+        (beginning + timedelta(minutes=11), 10, beginning),
+        (beginning + timedelta(minutes=16), -2, beginning),
+        (next_day + timedelta(minutes=11), -1, next_day),
     ]):
         state = await publish(instant, value, reset)
         assert float(state.state) == value
@@ -251,13 +255,13 @@ async def test_native_daily_total_statistics_metadata_reset_and_signed_sum(hass,
         instance.queue_task(StatisticsTask(period, False))
         await _async_recorder_barrier(hass, instance)
     rows = await instance.async_add_executor_job(partial(statistics_during_period,
-        hass, beginning, next_day + timedelta(minutes=5), {cost_id}, '5minute', None,
+        hass, beginning, next_day + timedelta(minutes=15), {cost_id}, '5minute', None,
         {'sum', 'state', 'last_reset'}))
     assert [row['sum'] for row in rows[cost_id]] == pytest.approx([0, -12, -13])
-    assert [row['start'] for row in rows[cost_id]] == [beginning.timestamp(),
-        (beginning + timedelta(minutes=5)).timestamp(), next_day.timestamp()]
-    unknown = await publish(next_day + timedelta(minutes=6), None, next_day)
+    assert [row['start'] for row in rows[cost_id]] == [(beginning + timedelta(minutes=10)).timestamp(),
+        (beginning + timedelta(minutes=15)).timestamp(), (next_day + timedelta(minutes=10)).timestamp()]
+    unknown = await publish(next_day + timedelta(minutes=16), None, next_day)
     assert unknown.state == 'unavailable'
-    zero = await publish(next_day + timedelta(minutes=7), 0, next_day)
+    zero = await publish(next_day + timedelta(minutes=17), 0, next_day)
     assert zero.state == '0'
     assert zero.attributes['last_reset'] == next_day.isoformat()

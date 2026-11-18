@@ -230,17 +230,27 @@ def _comparisons(requests, total, coverage, scope, current_period, current_hours
                 else:
                     eligible = False
         delta = compared_current - compared_baseline if eligible and compared_current is not None else None
+        paired = request.get('paired')
+        if isinstance(paired, dict):
+            eligible = paired.get('status') == 'ready'
+            compared_current = _decimal(paired.get('current_kwh')) if eligible else None
+            compared_baseline = _decimal(paired.get('baseline_kwh')) if eligible else None
+            comparison_scope = paired.get('comparison_scope') if eligible else None
+            delta = compared_current - compared_baseline if eligible else None
+            value = compared_baseline
         result.append({'key': key, 'label': request.get('label', key), 'kwh': value,
             'compared_current_kwh': compared_current, 'compared_baseline_kwh': compared_baseline,
             'comparison_scope': comparison_scope, 'delta_kwh': delta,
             'delta_pct': 100 * delta / compared_baseline
                 if delta is not None and compared_baseline != 0 else None,
-            'coverage_ok': eligible, 'reason': None if eligible else
+            'coverage_ok': eligible, 'reason': None if eligible else paired.get('reason') if isinstance(paired, dict) else
                 ('current_coverage_below_90' if coverage < Decimal('.9') else
                  'unsupported_comparison_grid' if not current_frames else
                  'insufficient_common_coverage' if value is not None else 'baseline_unqualified'),
             'qualified_days': len(qualified), 'requested_days': 7 if key == 'avg_7d' else 1,
-            'denominator': len(qualified), 'qualifications': qualifications})
+            'denominator': len(qualified), 'qualifications': qualifications,
+            **({'chart': deepcopy(paired.get('chart')), 'matched_coverage': deepcopy(paired.get('coverage'))}
+               if isinstance(paired, dict) else {})})
     return result
 
 
@@ -276,7 +286,7 @@ def _daily_rows(hourly, zone):
             'energy_cost':_sum(h['energy_cost'] for h in observed if h['kwh'] is not None),
             'variable_cost':_sum(h['variable_cost'] for h in observed if h['kwh'] is not None),
             'measured_kwh':_known_sum(h['measured_kwh'] for h in observed),
-            'complete':bool(observed) and len(observed)==len(hours) and all(h['kwh'] is not None and not h['partial'] for h in hours),
+            'complete':bool(observed) and len(observed)==len(hours) and all(h['full_kwh'] is not None and not h['partial'] for h in hours),
             'partial':any(h['partial'] for h in hours) or bool(observed) and len(observed)!=len(hours),
             'future':not observed,
             'zones':[{'id':z,'kwh':_known_sum(h['kwh'] for h in observed if h['zone']==z)} for z in zones]})
@@ -305,7 +315,7 @@ def _build_report(inputs):
     if not 0 < duration <= 366 * 86400 or duration % 3600:
         raise ValueError('invalid_report_period')
     cutoff = _instant(inputs.get('measured_until', period['end']))
-    if not start < cutoff <= end:
+    if not start <= cutoff <= end:
         raise ValueError('invalid_report_cutoff')
     period['hours'] = int(duration / 3600)
     period['complete'] = bool(period.get('complete', True)) and cutoff == end
@@ -316,8 +326,6 @@ def _build_report(inputs):
     if domain not in ('grid_import','site_consumption'):
         raise ValueError('invalid_consumer_domain')
     partitioned = domain == 'grid_import' or not config
-    if period['hours'] * max(1, len(config)) > 262144:
-        raise ValueError('report_projection_too_large')
     sources = inputs.get('membership', {}).get('sources', {})
     provided = {}
     for row in projection.get('hours', []):
@@ -330,36 +338,50 @@ def _build_report(inputs):
         provided[instant] = row
     if len(provided) > period['hours']:
         raise ValueError('report_projection_too_large')
+    # Bound actual supplied cells rather than the mostly empty calendar product.
+    # A dense year for 44 meters fits, while adversarial projections remain bounded.
+    if sum(len(row.get('devices', {})) for row in provided.values()) > 524288:
+        raise ValueError('report_projection_too_large')
     currency, basis = projection.get('currency'), projection.get('price_basis')
     identities = {(row.get('currency'), row.get('price_basis')) for row in provided.values()
                   if row.get('costs', {}).get('usage_cost') is not None}
     identity_ok = bool(currency and basis) and identities <= {(currency, basis)}
-    issues, hourly, residuals, adjusted, device_hours = [], [], [], ZERO, {sid: [] for sid in config}
+    issues, hourly, residuals, adjusted = [], [], [], ZERO
+    device_facts = {sid: {'known': [], 'quantity': ZERO, 'cost': ZERO, 'cost_missing': False}
+                    for sid in config}
     double_counting, measured_hours = False, 0
     previous = _previous_ticks(inputs.get('previous'),period,zone)
     first_date = start.astimezone(zone).date()
     for offset in range(period['hours']):
         instant = start + timedelta(hours=offset)
         raw = provided.get(instant, {})
-        kwh = _decimal(raw.get('kwh'))
+        full_kwh = _decimal(raw.get('kwh'))
+        kwh = _decimal(raw.get('recorded_kwh', raw.get('kwh')))
         if kwh is not None and kwh < 0:
             raise ValueError('negative_import')
         eligible = instant < cutoff
-        if eligible and kwh is not None:
+        if eligible and full_kwh is not None:
             measured_hours += 1
         costs = {key: _decimal(raw.get('costs', {}).get(key)) if identity_ok and kwh is not None else None for key in COSTS}
         cells = raw.get('devices', {})
         root_values = [_decimal(cells.get(sid, {}).get('kwh')) for sid in roots]
         measured = _sum(root_values, empty=ZERO) if raw and partitioned else None
-        for sid in config:
-            cell = cells.get(sid, {})
+        for sid, cell in cells.items():
+            if sid not in config:
+                continue
             quantity = _decimal(cell.get('kwh'))
             if quantity is not None and quantity < 0:
                 raise ValueError('negative_consumer')
-            device_hours[sid].append({'kwh': quantity,
-                'cost': _decimal(cell.get('costs', {}).get('usage_cost')) if identity_ok and quantity is not None and partitioned else None,
-                'eligible': eligible})
-        residual = kwh - measured if kwh is not None and measured is not None else None
+            if eligible and quantity is not None:
+                facts = device_facts[sid]
+                facts['known'].append(offset)
+                facts['quantity'] += quantity
+                cost = _decimal(cell.get('costs', {}).get('usage_cost')) if identity_ok else None
+                if cost is None:
+                    facts['cost_missing'] = True
+                else:
+                    facts['cost'] += cost
+        residual = full_kwh - measured if full_kwh is not None and measured is not None else None
         if residual is not None and residual < Decimal('-.05'):
             double_counting = True
         elif residual is not None and residual < 0:
@@ -375,13 +397,13 @@ def _build_report(inputs):
             raise ValueError('negative_recorded_import')
         hourly.append({'start': local.isoformat(), 'hour': local.hour, 'fold': local.fold,
             'kwh': kwh, 'zone': raw.get('zone'), 'classification': raw.get('classification'), **costs, 'cost': costs['usage_cost'],
-            'recorded_kwh': recorded, 'recorded_cost': _decimal(raw.get('recorded_cost')) if identity_ok else None, 'measured_sources': raw.get('measured_sources'),
+            'recorded_kwh': recorded, 'full_kwh': full_kwh, 'recorded_cost': _decimal(raw.get('recorded_cost')) if identity_ok else None, 'measured_sources': raw.get('measured_sources'),
             'expected_sources': raw.get('expected_sources'),
             'measured_kwh': measured, 'prev_kwh': previous_value,
             'partial': bool(raw) and _instant(raw['to']) - instant < timedelta(hours=1),
             'future': not eligible})
     expected = ceil((cutoff - start).total_seconds() / 3600)
-    coverage_ratio = Decimal(measured_hours) / expected
+    coverage_ratio = Decimal(measured_hours) / expected if expected else ZERO
     source_rows = [row for row in hourly if not row['future']]
     source_counts_known = all(type(row['measured_sources']) is int and type(row['expected_sources']) is int for row in source_rows)
     def source_hours(field):
@@ -389,10 +411,10 @@ def _build_report(inputs):
                     for i, row in enumerate(source_rows)), ZERO)
     source_measured = source_hours('measured_sources') if source_counts_known else None
     source_expected = source_hours('expected_sources') if source_counts_known else None
-    full_hours = sum(row['kwh'] is not None and not row['partial'] for row in source_rows)
+    full_hours = sum(row['full_kwh'] is not None and not row['partial'] for row in source_rows)
     expected_full_hours = int((cutoff - start).total_seconds() // 3600)
     has_data = (any(row['recorded_kwh'] is not None for row in source_rows) or
-        any(cell['eligible'] and cell['kwh'] is not None for rows in device_hours.values() for cell in rows))
+        any(facts['known'] for facts in device_facts.values()))
     missing = {}
     for instant, raw in sorted(provided.items()):
         for sid in raw.get('missing_sources', []):
@@ -406,23 +428,25 @@ def _build_report(inputs):
         'ranges': [{'start': a.astimezone(zone).isoformat(), 'end': b.astimezone(zone).isoformat()} for a, b in ranges]}
         for sid, ranges in sorted(missing.items())]
     missing_devices = []
-    for sid, cells in device_hours.items():
-        ranges = []
-        for i, cell in enumerate(cells):
-            if not cell['eligible'] or cell['kwh'] is not None:
-                continue
-            a = start + timedelta(hours=i)
-            b = min(a + timedelta(hours=1), cutoff)
-            if ranges and ranges[-1][1] == a:
-                ranges[-1][1] = b
-            else:
-                ranges.append([a, b])
+    for sid, facts in device_facts.items():
+        ranges, cursor = [], 0
+        for offset in facts['known']:
+            if cursor < offset:
+                ranges.append([start + timedelta(hours=cursor), start + timedelta(hours=offset)])
+            cursor = offset + 1
+        if cursor < expected:
+            ranges.append([start + timedelta(hours=cursor), cutoff])
         if ranges:
             missing_devices.append({'id': sid, 'name': sources.get(sid, {}).get('name') or sid,
                 'ranges': [{'start': a.astimezone(zone).isoformat(), 'end': b.astimezone(zone).isoformat()} for a, b in ranges]})
-    coverage = {'expected_hours': expected, 'measured_hours': measured_hours,
-        'ratio': coverage_ratio, 'complete': measured_hours == expected,
-        'status': 'complete' if measured_hours == expected else 'partial' if has_data else 'no_data',
+    expected_ids = projection.get('expected_source_ids')
+    seen_ids = projection.get('seen_source_ids')
+    counts_known = isinstance(expected_ids, list) and isinstance(seen_ids, list)
+    coverage = {'expected_sources': len(set(expected_ids)) if counts_known else None,
+        'measured_sources': len(set(seen_ids) & set(expected_ids)) if counts_known else None,
+        'expected_hours': expected, 'measured_hours': measured_hours,
+        'ratio': coverage_ratio, 'complete': bool(expected) and measured_hours == expected,
+        'status': 'complete' if expected and measured_hours == expected else 'partial' if has_data else 'no_data',
         'full_hours': full_hours, 'expected_full_hours': expected_full_hours,
         'measured_source_hours': source_measured, 'expected_source_hours': source_expected,
         'missing_sources': missing_sources, 'missing_devices': missing_devices}
@@ -432,11 +456,11 @@ def _build_report(inputs):
     totals = {key: _sum(row[key] for row in observed) for key in COSTS}
     usage = totals['usage_cost']
     fixed = _decimal(projection.get('fixed_share')) if identity_ok else None
-    totals.update(import_kwh=imported,
+    totals.update(cost_scope='known_source_readings', import_kwh=imported,
         recorded_import_kwh=_known_sum(row['recorded_kwh'] for row in hourly if not row['future']),
         recorded_usage_cost=_sum(row['recorded_cost'] for row in source_rows if row['recorded_kwh'] is not None) if has_data else None,
         fixed_share=fixed,
-        total_with_fixed=usage + fixed if coverage['complete'] and usage is not None and fixed is not None else None,
+        total_with_fixed=usage + fixed if usage is not None and fixed is not None and len(observed) == len(source_rows) else None,
         effective_rate=_ratio(usage, imported))
     peak = max(observed, key=lambda row: row['kwh']) if observed else None
     totals.update(peak_hour=peak['hour'] if peak else None, peak_kwh=peak['kwh'] if peak else None)
@@ -446,14 +470,15 @@ def _build_report(inputs):
 
     all_devices = {}
     for sid in config:
-        rows = [row for row in device_hours[sid] if row['eligible']]
-        quantity = _known_sum(row['kwh'] for row in rows)
-        cost = _sum(row['cost'] for row in rows if row['kwh'] is not None)
+        facts = device_facts[sid]
+        quantity = facts['quantity'] if facts['known'] else None
+        cost = facts['cost'] if facts['known'] and not facts['cost_missing'] else None
+        complete = len(facts['known']) == expected
         meta = sources.get(sid, {})
         all_devices[sid] = {'id': sid, 'name': meta.get('name') or sid, 'kwh': quantity,
-            'cost': cost, 'effective_rate': _ratio(cost, quantity), 'share': share(quantity) if all(row['kwh'] is not None for row in rows) else None,
+            'cost': cost, 'effective_rate': _ratio(cost, quantity), 'share': share(quantity) if complete else None,
             'area_id': meta.get('area_id'), 'floor_id': meta.get('floor_id'),
-            'measurement_complete': all(row['kwh'] is not None for row in rows), 'children': []}
+            'measurement_complete': complete, 'children': []}
     # Iterative tree assembly, safe for the supported 512-node hierarchy.
     for sid, parent in config.items():
         if parent is not None:
@@ -492,7 +517,7 @@ def _build_report(inputs):
         ranking.append({'id': '_other_measured', 'name': 'Pozostałe zmierzone', 'kwh': quantity,
             'recorded_kwh': _known_sum(row['kwh'] for row in other),
             'measurement_complete': all(row['measurement_complete'] for row in other),
-            'share': share(quantity) if all(row['measurement_complete'] for row in other) else None, 'cost': _sum(row['cost'] for row in other),
+            'share': share(quantity) if all(row['measurement_complete'] for row in other) else None, 'cost': _known_sum(row['cost'] for row in other),
             'color': 'other', 'count': len(other), 'children': deepcopy(other)})
     ranking.append({'id': '_unmeasured', 'name': 'Niezmierzone', **unmeasured, 'color': 'unmeasured'})
 
@@ -513,7 +538,7 @@ def _build_report(inputs):
                 continue
             result.append({**group, 'kwh': quantity, 'recorded_kwh': _known_sum(row['kwh'] for row in members),
                 'measurement_complete': all(row['measurement_complete'] for row in members), 'share': share(quantity) if all(row['measurement_complete'] for row in members) else None,
-                'cost': _sum(row['cost'] for row in members), 'devices': len(members)})
+                'cost': _known_sum(row['cost'] for row in members), 'devices': len(members)})
         result.sort(key=lambda row: (-(row['kwh'] or ZERO), row['name']))
         result.append({level + '_id': '_unmeasured', 'name': 'Niezmierzone', **unmeasured})
         return result
@@ -542,8 +567,22 @@ def _build_report(inputs):
         issues.append({'code':'consumer_domain_mismatch','severity':'warning','data':{'consumer_domain':domain}})
     if not identity_ok:
         issues.append({'code': 'incomparable_currency_or_basis', 'severity': 'warning', 'data': {}})
-    comparisons = _comparisons(inputs.get('comparisons', []), imported, coverage_ratio, inputs.get('scope', 'full_period'),
-        {**period, 'calendar_end': end, 'end': cutoff}, list(provided.values()))
+    comparisons = (_comparisons(inputs.get('comparisons', []), imported, coverage_ratio, inputs.get('scope', 'full_period'),
+        {**period, 'calendar_end': end, 'end': cutoff}, list(provided.values())) if cutoff > start else [])
+    previous_comparison = next((row for row in comparisons if row['key'] in
+        ('previous_day', 'previous_week', 'previous_month', 'previous_year')), None)
+    if previous_comparison and isinstance(previous_comparison.get('chart'), dict):
+        markers = previous_comparison['chart'].get('markers', [])
+        mapped = {row['current_from']: _decimal(row.get('baseline_kwh'))
+                  for row in markers if row.get('status') == 'ready'}
+        if previous_comparison['chart'].get('grain', 'hour' if period['kind'] == 'day' else None) == 'hour':
+            for hour in hourly:
+                stamp = int(_instant(hour['start']).timestamp() * 1000)
+                hour['prev_kwh'] = mapped.get(stamp)
+    daily = _daily_rows(hourly, zone)
+    if previous_comparison and (previous_comparison.get('chart') or {}).get('grain') == 'day':
+        for row in daily:
+            row['prev_kwh'] = mapped.get(int(_instant(row['start']).timestamp() * 1000))
     tariff = deepcopy(inputs.get('tariff', {}))
     fixed_rows = tariff.get('fixed', [])
     monthly = _sum((_decimal(row.get('monthly')) for row in fixed_rows))
@@ -561,8 +600,8 @@ def _build_report(inputs):
     # from display metadata or claim a zero for unknown native HA fees.
     tariff['fixed'] = [{**row, 'share': _decimal(row.get('share'))} for row in fixed_rows]
     return {'schema': SCHEMA, 'period': period, 'coverage': coverage, 'currency': currency,
-        'price_basis': basis, 'totals': totals, 'zones': zones, 'hourly': hourly,
-        'daily': _daily_rows(hourly,zone),
+        'price_basis': basis, 'device_cost_basis': 'purchase_price_excluding_pv' if domain == 'site_consumption' else 'grid_purchase_price', 'totals': totals, 'zones': zones, 'hourly': hourly,
+        'daily': daily,
         'devices': devices, 'ranking': ranking, 'unmeasured': unmeasured,
         'rooms': grouped('area'), 'floors': grouped('floor'), 'comparisons': comparisons,
         'alternatives': deepcopy(inputs.get('alternatives', [])),

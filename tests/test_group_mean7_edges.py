@@ -72,11 +72,11 @@ class GroupMeanSevenEdgesTest(unittest.TestCase):
         # 25*4=100; each of seven baselines is 24*2=48; delta=52.
         result = self.compare(self.fixture(zone='Europe/Warsaw', anchor='2026-10-25'), proof=True)
         row = result['areas']['office']
-        self.amounts(row, '100', '48', '52')
-        self.assertEqual('per_group_calendar_totals', row['comparison_scope'])
+        self.amounts(row, '96', '48', '48')
+        self.assertEqual('common_measurements', row['comparison_scope'])
         self.assertEqual(90000, row['coverage']['expected_current_seconds'])
         self.assertEqual([86400]*7, row['coverage']['expected_baseline_seconds'])
-        self.assertEqual('52.00', row['delta_usage_cost'])
+        self.assertEqual('48.00', row['delta_usage_cost'])
         self.assertTrue(result['reconciles_household_delta'])
 
     def test_dst26_full_calendar_totals_supported_by_troll(self):
@@ -84,10 +84,10 @@ class GroupMeanSevenEdgesTest(unittest.TestCase):
         # 26*4=104, not 96 or 100; seven actual 24-hour baselines average 48.
         result = self.compare(self.fixture(zone='Antarctica/Troll', anchor='2026-10-25'), proof=True)
         row = result['areas']['office']
-        self.amounts(row, '104', '48', '56')
+        self.amounts(row, '96', '48', '48')
         self.assertEqual(93600, row['coverage']['expected_current_seconds'])
         self.assertEqual([86400]*7, row['coverage']['expected_baseline_seconds'])
-        self.assertEqual('56.00', row['delta_usage_cost'])
+        self.assertEqual('48.00', row['delta_usage_cost'])
         self.assertTrue(result['reconciles_household_delta'])
 
     def test_missing_fold_on_dst25_selects_twenty_four_common_hours(self):
@@ -116,13 +116,14 @@ class GroupMeanSevenEdgesTest(unittest.TestCase):
     def test_eight_individually_good_masks_have_only_sixteen_common_hours(self):
         data = self.fixture(consumer_holes={i: [('sensor.a', i)] for i in range(8)})
         row = self.compare(data)['areas']['office']
-        self.assertEqual('unknown', row['status'])
+        self.assertEqual('ready', row['status'])
+        self.assertEqual('common_measurements', row['comparison_scope'])
         self.assertAlmostEqual(23/24, row['coverage']['current'])
         self.assertEqual([23/24]*7, row['coverage']['baselines'])
         self.assertEqual(57600, row['coverage']['common_group_seconds'])
         self.assertAlmostEqual(16/24, row['coverage']['common_current'])
-        self.assertIsNone(row['delta_kwh'])
-        self.assertIsNone(row['delta_usage_cost'])
+        self.assertEqual(Decimal(32), Decimal(row['delta_kwh']))
+        self.assertEqual('32.00', row['delta_usage_cost'])
 
     def test_all_eight_measured_zero_days_are_known_zero(self):
         result = self.compare(self.fixture(values=[0]*8), proof=True)
@@ -136,11 +137,12 @@ class GroupMeanSevenEdgesTest(unittest.TestCase):
     def test_one_unknown_baseline_is_not_a_six_day_mean(self):
         data = self.fixture(consumer_holes={7: [('sensor.a', h) for h in range(3)]})
         row = self.compare(data)['areas']['office']
-        self.assertEqual('unknown', row['status'])
+        self.assertEqual('ready', row['status'])
+        self.assertEqual('common_measurements', row['comparison_scope'])
         self.assertEqual(.875, row['coverage']['baselines'][6])
-        self.assertIsNone(row['baseline_kwh'])
+        self.assertEqual(Decimal(42), Decimal(row['baseline_kwh']))
         self.assertIsNone(row['full_baseline_kwh'])
-        self.assertIsNone(row['delta_usage_cost'])
+        self.assertEqual('42.00', row['delta_usage_cost'])
 
     def test_unknown_price_on_one_baseline_keeps_energy_and_unknown_cost(self):
         # First real baseline is Jan1, outside tariff history starting Jan2.

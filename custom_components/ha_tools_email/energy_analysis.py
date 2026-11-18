@@ -17,7 +17,7 @@ from .energy_period_summary import build_period_summary
 from .energy_patterns_periods import resolve_patterns_window
 from .energy_patterns import build_patterns_projection
 from .energy_measurements import hour_grid, measurement_evidence
-from .tariff_history import _bounded, calculate_energy_amounts, price_book, validate_tariff_book
+from .tariff_history import _bounded, _money, calculate_energy_amounts, price_book, validate_tariff_book
 
 
 def _stamp(value):
@@ -179,8 +179,11 @@ class EnergyAnalysisAccumulator:
         self._cursor = self._start
         self._rows, self._issues = [], []
         self._report_missing = {}
+        self._source_first = {}
+        self._seen_sources, self._missing_sources, self._expected_sources = set(), set(), set()
         self._ids, self._provenance, self._signature = None, None, None
         self._measured_seconds = 0
+        self._expected_seconds = 0
         self._consumers = (ConsumerPeriod(consumers, membership, consumer_domain, self._book, self._hours,
                             include_statistics_hours=include_statistics_hours,
                             include_report_hours=include_report_hours)
@@ -215,12 +218,21 @@ class EnergyAnalysisAccumulator:
         # cannot advance the cursor, change coverage or poison an explicit retry.
         if self._ids is None:
             self._ids, self._provenance = ids, deepcopy(provenance)
+            self._source_first = deepcopy(snapshot.get('source_first') or {})
             self._signature = _digest({'source_ids': ids, 'provenance': provenance})
         if self._include_report_hours:
             for row in evidence['hourly_buckets']:
-                self._report_missing[row['from']] = [sid for sid in ids if row['from'] not in evidence['per_source'][sid]]
+                self._report_missing[row['from']] = [sid for sid in ids if row['from'] in evidence['expected_per_source'][sid] and row['from'] not in evidence['per_source'][sid]]
+        for sid, cells in evidence['per_source'].items():
+            if evidence['expected_per_source'][sid]:
+                self._expected_sources.add(sid)
+            if cells:
+                self._seen_sources.add(sid)
+            if len(set(cells) & evidence['expected_per_source'][sid]) < len(evidence['expected_per_source'][sid]):
+                self._missing_sources.add(sid)
         self._rows.extend(evidence['hourly_buckets'])
         self._measured_seconds += evidence['coverage']['measured_source_seconds']
+        self._expected_seconds += evidence['coverage']['expected_source_seconds']
         for issue in evidence['issues']:
             # Keep diagnostics bounded by unique kind, not hours times sources.
             reason = issue['reason']
@@ -236,17 +248,19 @@ class EnergyAnalysisAccumulator:
             return deepcopy(self._result)
         if self._cursor != self._end or self._ids is None:
             raise ValueError('analysis_chunks_incomplete')
-        expected_seconds = self._hours * len(self._ids) * 3600
-        complete = (self._measured_seconds == expected_seconds
+        expected_seconds = self._expected_seconds
+        complete = (bool(expected_seconds) and self._measured_seconds == expected_seconds
                     and all(row['kwh'] is not None for row in self._rows))
         with localcontext() as decimal_context:
             decimal_context.prec = 40
             recorded = sum((Decimal(str(row['kwh'])) for row in self._rows if row['kwh'] is not None), Decimal(0))
         has_recorded = any(row['kwh'] is not None for row in self._rows)
         total_kwh = str(recorded) if complete else None
-        coverage = {'complete': complete, 'ratio': self._measured_seconds / expected_seconds,
+        coverage = {'complete': complete, 'ratio': self._measured_seconds / expected_seconds if expected_seconds else 0,
                     'expected_source_seconds': expected_seconds,
-                    'measured_source_seconds': self._measured_seconds}
+                    'measured_source_seconds': self._measured_seconds,
+                    'measured_sources': len(self._seen_sources & self._expected_sources), 'expected_sources': len(self._expected_sources),
+                    'missing_sources': sorted(self._missing_sources)}
         price_coverage = {'from': self._period['start'], 'to': self._period['end'],
                           'complete': complete, 'unit': 'kWh', 'source_signature': self._signature,
                           'entry_id': self._context.get('entry_id'),
@@ -259,8 +273,19 @@ class EnergyAnalysisAccumulator:
             fingerprint = pricing['measurement_fingerprint']
             active = next((row for row in pricing['tariffs']
                            if row['tariff_id'] == pricing['active_tariff_id']), None)
+        # Price the actual subtotal separately; keep the strict household bill
+        # and its completeness flags intact for residual and compatibility.
+        known_rows = [{**row, 'kwh': row.get('recorded_kwh')} for row in self._rows]
+        known_active = None
+        if complete:
+            known_active = active
+        elif self._book is not None:
+            known_pricing = price_book(self._book, known_rows, price_coverage,
+                                       include_report_projection=self._include_report_hours)
+            known_active = next((row for row in known_pricing['tariffs']
+                if row['tariff_id'] == known_pricing['active_tariff_id']), None)
         if self._include_report_hours:
-            self._report_pricing = deepcopy(active)
+            self._report_pricing = deepcopy(known_active)
         cost_keys = ('energy_cost', 'variable_cost', 'legacy_combined_cost', 'usage_cost',
                      'fixed_cost', 'total_cost', 'effective_price', 'currency', 'price_basis')
         totals = {key: active.get(key) if active is not None else None for key in cost_keys}
@@ -311,6 +336,61 @@ class EnergyAnalysisAccumulator:
                   'rounding': deepcopy(pricing['rounding']) if pricing is not None else None,
                   'issues': list(self._issues)}
         result['chart'] = build_chart_bins(self._rows, self._period, active)
+        known_chart = build_chart_bins(known_rows, self._period, known_active)
+        known_chart['coverage_kind'] = 'known_source_readings'
+        for index, (known_bin, full_bin) in enumerate(zip(known_chart['bins'], result['chart']['bins'])):
+            known_bin['complete'] = full_bin['complete']
+            if known_chart['grain'] == 'hour':
+                known_bin['measured_sources'] = self._rows[index].get('measured_sources')
+                known_bin['expected_sources'] = self._rows[index].get('expected_sources')
+        measured_rows = [(row, known_active['rows'][i]) for i, row in enumerate(known_rows)
+                         if row['kwh'] is not None] if known_active else []
+        priced = bool(measured_rows) and all(price.get('available') for _, price in measured_rows)
+        compatible = bool(known_active and known_active['compatible'])
+        amounts = {}
+        for key in ('energy_cost', 'variable_cost', 'legacy_combined_cost'):
+            parts = [price.get('costs', {}).get(key) for _, price in measured_rows]
+            amounts[key] = (_money(sum((Decimal(value) for value in parts), Decimal(0)))
+                            if priced and compatible and all(value is not None for value in parts) else None)
+        usage_parts = []
+        for _, price in measured_rows:
+            costs = price.get('costs', {})
+            keys = ('energy_cost', 'variable_cost') if price.get('rate_semantics') == 'components' else ('legacy_combined_cost',)
+            if any(costs.get(key) is None for key in keys):
+                priced = False
+                break
+            usage_parts.extend(Decimal(costs[key]) for key in keys)
+        usage = _money(sum(usage_parts, Decimal(0))) if priced and compatible else None
+        quantity = sum((Decimal(str(row['kwh'])) for row in known_rows if row['kwh'] is not None), Decimal(0))
+        has_known = any(row['kwh'] is not None for row in known_rows)
+        fixed = known_active.get('fixed_cost') if compatible else None
+        total = _money(Decimal(usage) + Decimal(fixed)) if usage is not None and fixed is not None else None
+        result['known_totals'] = {**amounts, 'kwh': str(quantity) if has_known else None,
+            'usage_cost': usage, 'fixed_cost': fixed, 'total_cost': total,
+            'effective_price': _money(Decimal(usage) / quantity) if usage is not None and quantity else None,
+            'currency': known_active.get('currency') if compatible else None,
+            'price_basis': known_active.get('price_basis') if compatible else None}
+        zone_totals = {}
+        for row, price in measured_rows:
+            if not price.get('available') or price.get('zoneAttribution') != 'single':
+                continue
+            key = (price.get('version_id'), price.get('zone'))
+            zone = zone_totals.setdefault(key, {'kwh': Decimal(0), 'cost': Decimal(0), 'cost_known': True})
+            zone['kwh'] += Decimal(str(row['kwh']))
+            parts = price.get('costs', {})
+            keys = ('energy_cost', 'variable_cost') if price.get('rate_semantics') == 'components' else ('legacy_combined_cost',)
+            if not compatible or any(parts.get(component) is None for component in keys):
+                zone['cost_known'] = False
+            else:
+                zone['cost'] += sum((Decimal(parts[component]) for component in keys), Decimal(0))
+        labels = {(rate['version_id'], zone['id']): zone.get('label') or zone['id']
+                  for rate in (known_active.get('rates', []) if known_active else [])
+                  for zone in rate['profile']['zones']}
+        result['known_zones'] = [{'version_id': key[0], 'zone_id': key[1],
+            'label': labels.get(key) or key[1], 'kwh': str(value['kwh']),
+            'usage_cost': _money(value['cost']) if value['cost_known'] else None}
+            for key, value in sorted(zone_totals.items())]
+        result['known_chart'] = known_chart
         result['period_summary'] = build_period_summary(self._rows, self._period, active, totals)
         if self._consumers is not None:
             result['groups'] = self._consumers.finish(active)
@@ -372,7 +452,9 @@ class EnergyAnalysisAccumulator:
                 'price_basis': active.get('price_basis') if known else None})
         if len(result) != len(self._rows) or len(groups) != len(self._rows):
             raise ValueError('report_projection_incomplete')
-        return {'hours': result, 'fixed_share': active.get('report_fixed_share') if active else None,
+        return {'hours': result, 'source_ids': list(self._ids), 'source_first': deepcopy(self._source_first),
+                'expected_source_ids': sorted(self._expected_sources),
+                'seen_source_ids': sorted(self._seen_sources & self._expected_sources), 'fixed_share': active.get('report_fixed_share') if active else None,
                 'currency': active.get('currency') if active else None,
                 'price_basis': active.get('price_basis') if active else None,
                 'fees': deepcopy(active['fees']) if active else None,

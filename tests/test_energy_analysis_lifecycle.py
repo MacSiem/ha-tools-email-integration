@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1] / 'custom_components/ha_tools_email'
 
 class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
     def fixture(self, *, fail=None, unload=True):
-        created = {'coordinator': [], 'registry': [], 'service': [], 'association': [], 'native': [], 'statistics_runtime': [],
+        created = {'coordinator': [], 'registry': [], 'service': [], 'association': [], 'native': [], 'statistics_runtime': [], 'log_history': [],
                    'platforms': {name: False for name in ('sensor', 'binary_sensor', 'button', 'event', 'calendar')}, 'unload_calls': []}
         events = []
         class Coordinator:
@@ -78,6 +78,14 @@ class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
             def async_stop(self):
                 self.running = False
                 self._unsubscribers.clear()
+        class LogHistory:
+            def __init__(self, hass):
+                self.running = False
+                created['log_history'].append(self)
+            async def async_start(self):
+                self.running = True
+            async def async_stop(self):
+                self.running = False
         class StatisticsRuntime:
             def __init__(self, hass, entry_id):
                 self.running, self.stopped = False, False
@@ -117,7 +125,8 @@ class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
                      and node.name in ('async_setup_entry', 'async_unload_entry')]
         exec(compile(ast.Module(body=functions, type_ignores=[]), str(ROOT / '__init__.py'), 'exec'), namespace)
         mods = {}
-        for filename, name, cls in [('energy', 'EnergySnapshotCoordinator', Coordinator),
+        for filename, name, cls in [('log_history', 'LogHistory', LogHistory),
+                                    ('energy', 'EnergySnapshotCoordinator', Coordinator),
                                     ('registry_adapter', 'RegistryMembership', Registry),
                                     ('analysis_service', 'EnergyAnalysisService', Service),
                                     ('energy_source_device', 'EnergySourceDeviceAssociation', Association),

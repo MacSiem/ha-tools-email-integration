@@ -83,8 +83,9 @@ def compare_daily_group_mean7(projections, periods, *, timezone_name, tariff=Non
             common = set.intersection(*known)
             own_ratio = [count/total for count,total in zip(counts,expected)]
             common_ratio = [len(common)/total for total in expected]
-            complete = counts == expected
-            ready = complete or all(ratio >= .9 for ratio in (*own_ratio,*common_ratio))
+            complete = (counts == expected and all(set(grid.values()) == set(grids[0].values())
+                        for grid in grids[1:]))
+            ready = complete or bool(common)
             selected = known if complete else [common]*8
             amounts = [sum((window[frame][1][position] for frame in frames), Decimal(0))
                        for window,frames in zip(rows,selected)]

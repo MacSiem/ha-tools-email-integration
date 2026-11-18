@@ -27,7 +27,8 @@ def measurement_window(now, measurement_timezone):
     """HA-local midnight through the last completed absolute Recorder hour."""
     local = now.astimezone(ZoneInfo(measurement_timezone))
     start = local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
-    end = now.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    from .energy_native_short import cutoff_at
+    end = cutoff_at(now, measurement_timezone).replace(minute=0, second=0, microsecond=0)
     aligned = start.timestamp() % 3600 == 0 and end >= start
     return start, end, aligned
 
@@ -43,6 +44,16 @@ def next_cheap(model, now, horizon=timedelta(days=8)):
     result = {'start': None, 'status': 'unknown', 'reason': None,
               'searched_until': datetime.fromtimestamp(end / 1000, timezone.utc).isoformat()}
     previous = model.rate_at(start)
+    # A single static zone cannot contain a distinct cheaper zone. Check all
+    # configured future tariff versions before asserting that configuration.
+    models = [item[3] for item in model._compiled] if hasattr(model, '_compiled') else [model]
+    no_cheap = bool(models) and all(getattr(item, 'valid', False)
+        and len(item.zones) == 1 and item.dynamic is None
+        and next(iter(item.zones.values())).get('classification') != 'cheap'
+        for item in models)
+    if previous['available'] and no_cheap:
+        result.update(status='none_in_tariff', reason='single_zone_tariff')
+        return result
     if not previous['available'] or previous.get('classification') is None:
         result['reason'] = previous.get('reason', 'classification_unknown')
         return result
@@ -259,14 +270,21 @@ class EnergySnapshotCoordinator:
         # Native entity values end at an actual completed five-minute cutoff.
         if 'entity_facts' in result:
             from .energy_native_short import cutoff_at
-            if result['entity_facts'].get('measurement_through') != cutoff_at(datetime.now(timezone.utc)).isoformat():
+            if result['entity_facts'].get('measurement_through') != cutoff_at(datetime.now(timezone.utc), self.hass.config.time_zone).isoformat():
                 return False
         # Historical price queries have no household measurement calendar.
         if 'today' in result:
             tz = self.hass.config.time_zone
             if tz != result.get('measurement_timezone'):
                 return False
-            start, end, _ = measurement_window(datetime.now(timezone.utc), tz)
+            now = datetime.now(timezone.utc)
+            try:
+                generated = datetime.fromisoformat(result['generated_at']).astimezone(timezone.utc)
+            except (KeyError, TypeError, ValueError):
+                return False
+            if generated.replace(minute=0, second=0, microsecond=0) != now.replace(minute=0, second=0, microsecond=0):
+                return False
+            start, end, _ = measurement_window(now, tz)
             if (result['today'].get('from') != start.isoformat()
                     or result['today'].get('to') != end.isoformat()):
                 return False
@@ -333,6 +351,14 @@ class EnergySnapshotCoordinator:
             # Outside the refresh catch: Repair errors must remain observable.
             from .energy_repairs import publish_missing_import
             publish_missing_import(self)
+        # Repairs use their own guarded Recorder/configuration read and also run
+        # without a tariff or a successful snapshot refresh.
+        now_utc = datetime.now(timezone.utc)
+        bucket = int(now_utc.timestamp()) // 300
+        if getattr(self, '_stale_repairs_bucket', None) != bucket:
+            self._stale_repairs_bucket = bucket
+            from .energy_repairs import async_publish_stale_sources
+            await async_publish_stale_sources(self)
 
     def _publish_energy_update(self, result):
         """Server-tick-only, control-only notification after final fresh guards.
@@ -487,7 +513,7 @@ class EnergySnapshotCoordinator:
         rows = await self._async_run_cpu(partial(normalized_cells, merged, metadata, ids, end, cutoff))
         self._check_running()
         await self._async_check_source_access(guard, sensors)
-        accepted = len(rows) == (cutoff - end).total_seconds() // 300 and all(row['kwh'] is not None for row in rows)
+        accepted = len(rows) == (cutoff - end).total_seconds() // 300 and all(row['kwh'] is not None and not row.get('missing_sources') for row in rows)
         self._short_state = {'key': key, 'through': cutoff if accepted else cache['through'],
             'raw': merged if accepted else cache['raw'], 'attempted': cutoff,
             'retry_at': None if accepted else now + timedelta(seconds=NATIVE_SHORT_RETRY_SECONDS), 'rows': rows}
@@ -534,7 +560,7 @@ class EnergySnapshotCoordinator:
                     raise RuntimeError('energy_sources_changed')
                 self._measurement, self._measurement_key, self._measurement_at = measured, key, now
             from .energy_native_short import cutoff_at
-            tail_cutoff = cutoff_at(now)
+            tail_cutoff = cutoff_at(now, tz)
             await self._async_native_short(sensors, metadata, start, end, tail_cutoff, tz, key[3], guard, now=now)
             self._check_running()
             state = await self._async_snapshot_tariff()
@@ -564,7 +590,7 @@ class EnergySnapshotCoordinator:
                     or latest_state['revision'] != state['revision']
                     or getattr(self.storage, 'current_tariff_revision', latest_state['revision']) != state['revision']
                     or (real_time and (measurement_window(datetime.now(timezone.utc), tz)[:2] != (start, end)
-                        or cutoff_at(datetime.now(timezone.utc)) != tail_cutoff))):
+                        or cutoff_at(datetime.now(timezone.utc), tz) != tail_cutoff))):
                 self._invalidate()
                 raise RuntimeError('energy_snapshot_changed')
             self.data = result

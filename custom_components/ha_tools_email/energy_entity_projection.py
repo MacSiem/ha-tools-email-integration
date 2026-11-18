@@ -5,6 +5,7 @@ Full hourly evidence and actual non-overlapping five-minute tail cells end at
 the current server cutoff. Historical report selections never enter.
 """
 from decimal import Decimal
+from datetime import datetime, timezone
 
 from .energy_live import build_current
 from .tariff import EnergyTariff, TariffValidationError, _stamp
@@ -55,8 +56,26 @@ def _today(result, measurement, engine, short_rows, cutoff):
         facts['reason'] = 'calendar_boundary_not_recorder_hour'
         return facts
     hourly = measurement.get('hourly_buckets', [])
+    source_ids = measurement.get('source_ids')
+    missing_sources = set()
+    measured_sources = set()
+    source_evidence = False
+    if end > start and isinstance(measurement.get('source_buckets'), dict):
+        from .energy_measurements import measurement_evidence
+        try:
+            evidence = measurement_evidence(measurement, datetime.fromtimestamp(start / 1000, timezone.utc),
+                datetime.fromtimestamp(end / 1000, timezone.utc))
+            source_evidence = True
+            hourly = [{**row, 'kwh': row['recorded_kwh']} for row in evidence['hourly_buckets']]
+            for sid, cells in evidence['per_source'].items():
+                if cells:
+                    measured_sources.add(sid)
+                if len(set(cells) & evidence['expected_per_source'][sid]) < len(evidence['expected_per_source'][sid]):
+                    missing_sources.add(sid)
+        except (ValueError, TypeError, KeyError):
+            return facts
     if (not isinstance(hourly, list) or len(hourly) > 25
-            or (end > start and measurement.get('status') != 'ready')
+            or (end > start and measurement.get('status') != 'ready' and not source_evidence)
             or len(hourly) != (end - start) // 3600000):
         return facts
     short_rows = short_rows or []
@@ -67,9 +86,12 @@ def _today(result, measurement, engine, short_rows, cutoff):
     cells = {}
     for row in [*hourly, *short_rows]:
         a, b, value = _stamp(row.get('from')), _stamp(row.get('to')), row.get('kwh')
-        if (a not in expected or a in cells or b != expected[a] or value is None
+        if (a not in expected or a in cells or b != expected[a]
                 or isinstance(value, bool) or row.get('unit', 'kWh') != 'kWh'):
             return facts
+        if value is None:
+            cells[a] = (b, None)
+            continue
         try:
             quantity = Decimal(str(value))
         except (ValueError, TypeError, ArithmeticError):
@@ -80,8 +102,16 @@ def _today(result, measurement, engine, short_rows, cutoff):
     if set(cells) != set(expected):
         return facts
     total, cheap, usage = Decimal(0), Decimal(0), Decimal(0)
+    has_data = False
+    for row in short_rows:
+        missing_sources.update(row.get('missing_sources', []))
+        if isinstance(source_ids, list):
+            measured_sources.update(set(source_ids) - set(row.get('missing_sources', [])))
     classification_known, pricing_known, identities = True, True, set()
     for a, (b, quantity) in sorted(cells.items()):
+        if quantity is None:
+            continue
+        has_data = True
         total += quantity
         classification, amount, identity = _interval_facts(engine, a, b, quantity)
         if classification not in ('cheap', 'expensive'):
@@ -95,7 +125,13 @@ def _today(result, measurement, engine, short_rows, cutoff):
         if identity is not None:
             identities.add(identity)
     compatible = identities == {(result.get('currency'), result.get('price_basis'))}
-    facts.update(import_kwh=float(total), coverage_complete=True,
+    if not has_data:
+        return facts
+    complete = not missing_sources and all(value is not None for _, value in cells.values())
+    facts.update(import_kwh=float(total), coverage_complete=complete,
+        measured_sources=len(measured_sources) if isinstance(source_ids, list) else None,
+        expected_sources=len(source_ids) if isinstance(source_ids, list) else None,
+        missing_sources_count=len(missing_sources),
         usage_cost=float(usage) if pricing_known and compatible else None,
         cheap_kwh=float(cheap) if classification_known else None,
         cheap_share_pct=float(100 * cheap / total) if classification_known and total else None,
@@ -147,7 +183,7 @@ def build_entity_snapshot(state, measurement, *, _legacy_builder=None, _short_ro
             except TariffValidationError:
                 pass
     from .energy_native_short import cutoff_at
-    facts = _today(result, measurement, engine, _short_rows, cutoff_at(kwargs['now']))
+    facts = _today(result, measurement, engine, _short_rows, cutoff_at(kwargs['now'], kwargs.get('measurement_timezone')))
     facts.update(zone_options=list(dict.fromkeys(options)), label=None, next_change=None, next_zone=None)
     if book is not None:
         current = build_current(book, now=kwargs['now'])

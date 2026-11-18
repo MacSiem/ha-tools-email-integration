@@ -122,6 +122,12 @@ class SnapshotTests(unittest.TestCase):
         p['zones'][0]['classification'] = 'lowest'
         self.assertEqual('invalid_profile', self.snapshot(p)['current']['reason'])
 
+    def test_single_zone_is_explicitly_without_cheap_period(self):
+        p = classified()
+        p['zones'] = [p['zones'][0]]
+        p['rules'] = []
+        self.assertEqual('none_in_tariff', self.snapshot(p)['next_cheap']['status'])
+
     def test_no_private_fields_in_snapshot(self):
         measured = usage()
         measured.update(source_ids=['sensor.PRIVATE'], devices=[{'name': 'PRIVATE'}],
@@ -399,7 +405,7 @@ class EntityContractTests(unittest.IsolatedAsyncioTestCase):
         sensor, binary = entity_modules()
         c = energy.EnergySnapshotCoordinator(types.SimpleNamespace(config=types.SimpleNamespace(time_zone='UTC')), None)
         from tests.test_build1_energy_entities import build
-        c.data = build({'profile': classified(), 'revision': 42}, usage(), now='2026-10-18T12:04Z')
+        c.data = build({'profile': classified(), 'revision': 42}, usage(), now='2026-10-18T12:09Z')
         c.tariff_context_is_current = lambda result: True
         hass = types.SimpleNamespace(data={'ha_tools_email': {'energy_snapshot': c}})
         entry = types.SimpleNamespace(entry_id='stable-entry')

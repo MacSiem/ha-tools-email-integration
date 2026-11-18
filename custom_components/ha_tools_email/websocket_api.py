@@ -1156,11 +1156,21 @@ async def _ws_preview_log_digest(hass, connection, msg) -> None:
     retained = _group_retained_logs(await async_get_system_log_entries(hass), until=now)
     undated = sum(_entry_time(row) is None for row in retained)
     entries = [row for row in retained if _entry_time(row) is not None and _entry_time(row) < end]
+    history = getattr(hass, 'data', {}).get(DOMAIN, {}).get('log_history')
+    coverage = None
+    if history is not None:
+        entries, coverage = await history.async_query(start, end)
+        pl = str(getattr(getattr(hass, 'config', None), 'language', '') or '').lower().startswith('pl')
+        description = ('Wpis z agregatu; szczegóły dostępne w bieżącym dzienniku HA.' if pl else
+                       'Aggregated log entry; details are available in the current HA log.')
+        entries = [{**row, 'message': [description]} for row in entries]
     payload = build_log_digest_payload(entries, cadence=cadence, now=now, since=start - timedelta(microseconds=1))
     summary = payload["summary"]
     result = {key: summary[key] for key in
               ("total", "level_counts", "logger_counts", "recent_errors", "recent_warnings", "unique_problems", "counts_complete")}
-    if not summary['unique_problems']:
+    if coverage is not None:
+        result['counts_complete'] = coverage['complete']
+    if not summary['unique_problems'] and not (coverage and coverage['covered_seconds'] > 0):
         result.update(total=None, counts_complete=False, history_unavailable=True)
     # Internal datetime objects are not a WebSocket JSON contract.
     for key in ("recent_errors", "recent_warnings"):
@@ -1174,6 +1184,9 @@ async def _ws_preview_log_digest(hass, connection, msg) -> None:
                   source={"name": "system_log", "count_semantics": "retained_aggregates",
                           "complete": False, "retained_entries": len(entries), "undated_entries": undated,
                           "reason": "retained_last_observed_aggregates_not_full_event_history"})
+    if coverage is not None:
+        result['source'].update(coverage=coverage, complete=coverage['complete'],
+            reason=None if coverage['complete'] else 'observation_gap_or_partial_hour')
     connection.send_result(msg["id"], result)
 
 

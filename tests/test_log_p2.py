@@ -9,6 +9,8 @@ class LogP2(unittest.TestCase):
  def make(self,language):
   hass=types.SimpleNamespace(data={'system_log':types.SimpleNamespace(records=ROWS)},config=types.SimpleNamespace(time_zone='UTC'))
   return asyncio.run(c.async_build_log_digest_payload(hass,object(),cadence='daily',now=NOW,window_start=START,window_end=END,manual_window=True,presentation=c._presentation(language,'UTC')))
+ def test_current_diagnostics_heading_appears_once(self):
+  self.assertEqual(1, self.make('pl')['body'].count('Bieżąca diagnostyka · poza okresem raportu'))
  def test_mixed_bounds_known_lifetime_and_diagnostic_survive_both_formats(self):
   for lang in ('pl','en'):
    with self.subTest(lang=lang):

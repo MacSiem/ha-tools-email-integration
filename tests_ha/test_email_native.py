@@ -265,3 +265,30 @@ async def test_native_energy_button_passes_actual_user_not_schedule_actor_before
     assert actors and all(type(actor) is str and actor == hass_admin_user.id for actor in actors)
     assert private == []
     assert sent == []
+
+async def test_energy_counter_migration_preserves_other_registry_identity(hass, hass_storage):
+    energy = schedule(id='energy-schedule', kind='energy_report')
+    log = schedule(id='log-schedule')
+    entry, _ = await _setup(hass, stored={'schedules': [energy, log]}, hass_storage=hass_storage)
+    registry = er.async_get(hass)
+    native = hass.data[DOMAIN]['email_native']
+    energy_key = hashlib.sha256(b'energy-schedule').hexdigest()
+    log_key = hashlib.sha256(b'log-schedule').hexdigest()
+    log_uid = f'{entry.entry_id}_email_{log_key}_errors_24h'
+    log_id = registry.async_get_entity_id('sensor', DOMAIN, log_uid)
+    registry.async_update_entity(log_id, name='My retained name', new_entity_id='sensor.my_log_errors')
+    obsolete = registry.async_get_or_create('sensor', DOMAIN,
+        f'{entry.entry_id}_email_{energy_key}_errors_24h', config_entry=entry)
+    obsolete_id = obsolete.entity_id
+    await native.async_refresh()
+    assert registry.async_get(obsolete_id) is None
+    retained = registry.async_get('sensor.my_log_errors')
+    assert retained is not None and retained.name == 'My retained name'
+    assert registry.async_get_entity_id('sensor', DOMAIN, log_uid) == 'sensor.my_log_errors'
+    for field in ('errors_24h', 'warnings_24h'):
+        assert registry.async_get_entity_id('sensor', DOMAIN,
+            f'{entry.entry_id}_email_{energy_key}_{field}') is None
+    devices = dr.async_get(hass)
+    rows = dr.async_entries_for_config_entry(devices, entry.entry_id)
+    names = {device.name for device in rows if any('_email_' in identity[1] for identity in device.identifiers)}
+    assert names == {'Log report · daily', 'Energy report · daily'}

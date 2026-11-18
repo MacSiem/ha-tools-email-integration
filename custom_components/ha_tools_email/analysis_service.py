@@ -79,13 +79,14 @@ def _finish(accumulator, context, provenance, comparisons=None, baseline_accumul
                 # structural zero partitions whose old energy totals are full.
                 # Complete calendar groups retain ConsumerPeriod allocation.
                 adjusted_costs = streamed['reconciles_household_cost_delta']
+                use_common = comparison.get('comparison_scope') == 'common_measurements'
                 groups['reconciles_household_cost_delta'] = adjusted_costs
                 for level in ('devices', 'areas', 'floors'):
                     for key, row in groups[level].items():
-                        if adjusted_costs or row['reason'] == 'group_common_measurements_required':
+                        if adjusted_costs or use_common or row['reason'] == 'group_common_measurements_required':
                             groups[level][key] = streamed[level][key]
                 for key in ('unassigned', 'unmeasured'):
-                    if adjusted_costs or groups[key]['reason'] == 'group_common_measurements_required':
+                    if adjusted_costs or use_common or groups[key]['reason'] == 'group_common_measurements_required':
                         groups[key] = streamed[key]
                 if not groups['reconciles_household_delta']:
                     groups['reconciles_household_delta'] = streamed['reconciles_household_delta']
@@ -195,7 +196,7 @@ class EnergyAnalysisService:
             raise ValueError('invalid_analysis_purpose')
         self._check_running()
         configuration = self._configuration()
-        if not configuration['grid_sensors']:
+        if not configuration['grid_sensors'] and not configuration['consumers']:
             raise ValueError('energy_analysis_unavailable')
         zone = self.hass.config.time_zone
         if report_model:
@@ -306,7 +307,7 @@ class EnergyAnalysisService:
         period = request.period(now)
         previous = self._report_previous_plan(request, period, now)
         configuration = self._configuration()
-        if not configuration['grid_sensors']:
+        if not configuration['grid_sensors'] and not configuration['consumers']:
             raise ValueError('energy_analysis_unavailable')
         context = {'request_kind':'report_window','access_purpose':purpose,
             'report_request':request.request(),'actor_signature':actor_signature,
@@ -670,6 +671,8 @@ class EnergyAnalysisService:
                         comparison_calendar_kind = {'day': 'daily', 'week': 'weekly', 'month': 'monthly', 'year': 'yearly'}[kind]
                         comparison_period_kind = kind
                     self._assert_current(context)
+                    if not configuration['grid_sensors']:
+                        plan = {**plan, 'status': 'unknown', 'reason': 'no_grid_sources'}
                     comparisons = {}
                     if plan['status'] == 'ready' and comparison != 'mean7':
                         pair = await self._cpu(partial(PairedComparisonAccumulator, period,
@@ -966,14 +969,21 @@ class EnergyAnalysisService:
         # The legacy exporter walks arbitrary new fields. Do not add the model
         # as a new CSV section; retain identity and every legacy fact unchanged.
         export_view = {key: value for key, value in snapshot.items() if key != 'report_model'}
-        report = await self.coordinator._async_run_cpu(partial(render_energy_analysis, export_view, **options))
+        from .energy_stale_mail import stale_mail_line
+        statuses = getattr(self.coordinator, 'stale_sources', None)
+        if statuses is None and isinstance(getattr(self.coordinator, 'data', None), dict):
+            statuses = self.coordinator.data.get('stale_sources')
+        line = stale_mail_line(snapshot, statuses, language=options.get('language'),
+                               timezone_name=options.get('timezone_name'), now=datetime.now(timezone.utc))
+        render_options = {**options, **({'stale_line': line} if line else {})}
+        report = await self.coordinator._async_run_cpu(partial(render_energy_analysis, export_view, **render_options))
         if 'report_model' in snapshot:
             if not await self.async_validate_result(snapshot, actor):
                 raise RuntimeError('energy_analysis_context_changed')
             from .mail_energy import render
             # Read the current external URL for each executable calendar mail.
             # Never fall back to an internal/LAN URL; the renderer validates it.
-            mail_options = dict(options)
+            mail_options = dict(render_options)
             if snapshot.get('context', {}).get('access_purpose') == 'report_execute':
                 mail_options['external_url'] = getattr(self.hass.config, 'external_url', None)
             presentation = await self.coordinator._async_run_cpu(partial(render, snapshot['report_model'], **mail_options))
@@ -1036,13 +1046,16 @@ class EnergyAnalysisService:
                 legacy_comparison.update(timezone=snapshot['context']['comparison_timezone'],
                     calendar_kind=snapshot['context']['comparison_calendar_kind'],
                     partial=period.get('partial'), calendar_clamped=prior[0].get('calendar_clamped'))
+        known = snapshot.get('known_totals') or {}
         summary = {'snapshot_id':snapshot['snapshot_id'],'schema':2,
-            'cadence':request.cadence,'total_kwh':snapshot['totals']['kwh'],
-            'total_cost':snapshot['totals']['total_cost'],
+            'cadence':request.cadence,'total_kwh':known.get('kwh', snapshot['totals']['kwh']),
+            'total_cost':known.get('total_cost', snapshot['totals']['total_cost']),
             'currency':snapshot['totals']['currency'],'status':snapshot['status'],
             'period':{**period,'from':period['start'],'to':period['end']},
             'totals':deepcopy(snapshot['totals']),'coverage':deepcopy(snapshot['coverage']),
             'groups':deepcopy(snapshot.get('groups',{})),'chart':deepcopy(snapshot['chart']),
+            'known_totals':deepcopy(known), 'known_chart':deepcopy(snapshot.get('known_chart')),
+            'known_zones':deepcopy(snapshot.get('known_zones', [])),
             'comparisons':comparisons,'comparison':legacy_comparison,
             'source':{'name':'recorder','kind':'grid_import','status':snapshot['status'],
                       'complete':snapshot['coverage']['complete']}}
