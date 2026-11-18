@@ -487,7 +487,7 @@ class EnergySnapshotCoordinator:
         rows = await self._async_run_cpu(partial(normalized_cells, merged, metadata, ids, end, cutoff))
         self._check_running()
         await self._async_check_source_access(guard, sensors)
-        accepted = len(rows) == (cutoff - end).total_seconds() // 300 and all(row['kwh'] is not None for row in rows)
+        accepted = len(rows) == (cutoff - end).total_seconds() // 300 and all(row['kwh'] is not None and not row.get('missing_sources') for row in rows)
         self._short_state = {'key': key, 'through': cutoff if accepted else cache['through'],
             'raw': merged if accepted else cache['raw'], 'attempted': cutoff,
             'retry_at': None if accepted else now + timedelta(seconds=NATIVE_SHORT_RETRY_SECONDS), 'rows': rows}

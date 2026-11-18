@@ -73,9 +73,12 @@ def normalized_cells(raw, metadata, ids, start, end):
         values = normalize_short_hour(raw, metadata, ids, start, cursor)
         totals = {sid: Decimal(value) if value is not None else None for sid, value in values.items()}
         pieces = [totals[sid] - previous[sid] if totals[sid] is not None and previous[sid] is not None else None for sid in ids]
-        quantity = sum(pieces, Decimal(0)) if all(value is not None for value in pieces) else None
+        known = [value for value in pieces if value is not None]
+        quantity = sum(known, Decimal(0)) if known else None
         rows.append({'from': (cursor - timedelta(minutes=5)).isoformat(), 'to': cursor.isoformat(),
-                     'kwh': str(quantity) if quantity is not None else None, 'unit': 'kWh'})
+                     'kwh': str(quantity) if quantity is not None else None, 'unit': 'kWh',
+                     'measured_sources': len(known), 'expected_sources': len(ids),
+                     'missing_sources': [sid for sid, value in zip(ids, pieces) if value is None]})
         previous = totals
         cursor += timedelta(minutes=5)
     return rows

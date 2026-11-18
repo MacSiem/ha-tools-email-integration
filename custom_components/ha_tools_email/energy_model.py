@@ -230,6 +230,14 @@ def _comparisons(requests, total, coverage, scope, current_period, current_hours
                 else:
                     eligible = False
         delta = compared_current - compared_baseline if eligible and compared_current is not None else None
+        paired = request.get('paired')
+        if isinstance(paired, dict):
+            eligible = paired.get('status') == 'ready'
+            compared_current = _decimal(paired.get('current_kwh')) if eligible else None
+            compared_baseline = _decimal(paired.get('baseline_kwh')) if eligible else None
+            comparison_scope = paired.get('comparison_scope') if eligible else None
+            delta = compared_current - compared_baseline if eligible else None
+            value = compared_baseline
         result.append({'key': key, 'label': request.get('label', key), 'kwh': value,
             'compared_current_kwh': compared_current, 'compared_baseline_kwh': compared_baseline,
             'comparison_scope': comparison_scope, 'delta_kwh': delta,
@@ -240,7 +248,9 @@ def _comparisons(requests, total, coverage, scope, current_period, current_hours
                  'unsupported_comparison_grid' if not current_frames else
                  'insufficient_common_coverage' if value is not None else 'baseline_unqualified'),
             'qualified_days': len(qualified), 'requested_days': 7 if key == 'avg_7d' else 1,
-            'denominator': len(qualified), 'qualifications': qualifications})
+            'denominator': len(qualified), 'qualifications': qualifications,
+            **({'chart': deepcopy(paired.get('chart')), 'matched_coverage': deepcopy(paired.get('coverage'))}
+               if isinstance(paired, dict) else {})})
     return result
 
 
@@ -545,6 +555,15 @@ def _build_report(inputs):
         issues.append({'code': 'incomparable_currency_or_basis', 'severity': 'warning', 'data': {}})
     comparisons = _comparisons(inputs.get('comparisons', []), imported, coverage_ratio, inputs.get('scope', 'full_period'),
         {**period, 'calendar_end': end, 'end': cutoff}, list(provided.values()))
+    previous_comparison = next((row for row in comparisons if row['key'] in
+        ('previous_day', 'previous_week', 'previous_month', 'previous_year')), None)
+    if previous_comparison and isinstance(previous_comparison.get('chart'), dict):
+        markers = previous_comparison['chart'].get('markers', [])
+        mapped = {row['current_from']: _decimal(row.get('baseline_kwh'))
+                  for row in markers if row.get('status') == 'ready'}
+        for hour in hourly:
+            stamp = int(_instant(hour['start']).timestamp() * 1000)
+            hour['prev_kwh'] = mapped.get(stamp)
     tariff = deepcopy(inputs.get('tariff', {}))
     fixed_rows = tariff.get('fixed', [])
     monthly = _sum((_decimal(row.get('monthly')) for row in fixed_rows))
@@ -562,7 +581,7 @@ def _build_report(inputs):
     # from display metadata or claim a zero for unknown native HA fees.
     tariff['fixed'] = [{**row, 'share': _decimal(row.get('share'))} for row in fixed_rows]
     return {'schema': SCHEMA, 'period': period, 'coverage': coverage, 'currency': currency,
-        'price_basis': basis, 'totals': totals, 'zones': zones, 'hourly': hourly,
+        'price_basis': basis, 'device_cost_basis': 'purchase_price_excluding_pv' if domain == 'site_consumption' else 'grid_purchase_price', 'totals': totals, 'zones': zones, 'hourly': hourly,
         'daily': _daily_rows(hourly,zone),
         'devices': devices, 'ranking': ranking, 'unmeasured': unmeasured,
         'rooms': grouped('area'), 'floors': grouped('floor'), 'comparisons': comparisons,

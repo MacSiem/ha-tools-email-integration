@@ -24,8 +24,11 @@ UTC = timezone.utc
 
 def report_clock(now, zone):
     now = now.astimezone(UTC)
-    return {'as_of': now.astimezone(ZoneInfo(zone)).date().isoformat(),
-            'cutoff': now.replace(minute=now.minute // 5 * 5, second=0, microsecond=0).isoformat()}
+    local = now.astimezone(ZoneInfo(zone))
+    midnight = local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(UTC)
+    cutoff = now.replace(minute=now.minute // 5 * 5, second=0, microsecond=0) - timedelta(minutes=5)
+    return {'as_of': local.date().isoformat(), 'cutoff': max(midnight, cutoff).isoformat()}
+
 
 
 def resolve_model_periods(kind, now, zone, *, anchor=None):
@@ -34,14 +37,15 @@ def resolve_model_periods(kind, now, zone, *, anchor=None):
     The one-hour lookahead resolves calendar boundaries only; every data read is
     clipped back to the actual server cutoff, never to that lookahead clock.
     """
-    resolved = resolve_analysis_periods(kind,now,zone,anchor=anchor)
+    cutoff = datetime.fromisoformat(report_clock(now,zone)['cutoff'])
+    resolved = resolve_analysis_periods(kind,cutoff,zone,anchor=anchor)
     current = resolved.get('current')
     if resolved.get('reason') != 'no_completed_interval' or not current:
         return resolved
     cutoff = datetime.fromisoformat(report_clock(now,zone)['cutoff'])
     if cutoff <= datetime.fromisoformat(current['start']):
         return resolved
-    frames = resolve_analysis_periods(kind,now+timedelta(hours=1),zone,anchor=anchor)
+    frames = resolve_analysis_periods(kind,cutoff+timedelta(hours=1),zone,anchor=anchor)
     if frames.get('status') != 'ready':
         return resolved
     for frame in [frames['current'], *[p for plan in frames['comparisons'].values()
@@ -189,6 +193,39 @@ def short_projection(values, configuration, tariff, start, end):
             for row in configuration['consumers']}}
 
 
+async def _report_pair(service, configuration, current, baseline, kind, zone, guard):
+    """Stream the same validated source-hour intersection used by analysis."""
+    from .energy_comparison_stream import PairedComparisonAccumulator
+    pair = PairedComparisonAccumulator(current, baseline, timezone_name=zone,
+        calendar_kind={'day':'daily', 'week':'weekly', 'month':'monthly', 'year':'yearly'}[kind])
+    periods = [current, baseline]
+    cursors = [datetime.fromisoformat(row['start']) for row in periods]
+    ends = [datetime.fromisoformat(row['end']) for row in periods]
+    while (side := pair.needs_side()) is not None:
+        index = 0 if side == 'current' else 1
+        cursor = cursors[index]
+        stop = min(cursor + timedelta(hours=168), ends[index])
+        chunk = await async_read_energy_chunk(service.hass, configuration, cursor, stop,
+                                               guard=guard, include_consumers=False)
+        await guard()
+        await service._cpu(partial(pair.push, side, chunk['grid'], cursor, stop), guard)
+        cursors[index] = stop
+    return await service._cpu(pair.finish, guard)
+
+
+async def _report_mean7(service, configuration, current, baselines, zone, guard):
+    from .energy_comparisons import compare_daily_mean7
+    snapshots = []
+    for period in [current, *baselines]:
+        a, b = (datetime.fromisoformat(period[key]) for key in ('start', 'end'))
+        chunk = await async_read_energy_chunk(service.hass, configuration, a, b,
+                                               guard=guard, include_consumers=False)
+        await guard()
+        snapshots.append(chunk['grid'])
+    return await service._cpu(partial(compare_daily_mean7, snapshots[0], snapshots[1:],
+        current, baselines, timezone_name=zone), guard)
+
+
 async def async_collect_inputs(service, configuration, period, context, accumulator,
                                membership, book, guard, native=None):
     """Caller holds service lock and admission slot throughout all guarded IO."""
@@ -330,6 +367,25 @@ async def async_collect_inputs(service, configuration, period, context, accumula
             requests.append({'key': 'avg_7d', 'baselines': rows})
         else:
             requests.append({'key': labels[key], **(rows[0] if rows else {})})
+    # These detached comparison facts are computed from Recorder cells, not
+    # from already aggregated hourly totals. The tail is deliberately excluded
+    # until both sides can prove a matching completed five-minute mask.
+    if completed > start:
+        current_frame = {'start': start.isoformat(), 'end': completed.isoformat()}
+        for request in requests:
+            if request['key'] == 'avg_7d':
+                baselines = request.get('baselines', [])
+                periods = [row.get('period') for row in baselines]
+                if len(periods) == 7 and all(period and datetime.fromisoformat(period['end']) > datetime.fromisoformat(period['start']) for period in periods):
+                    # Drop any short tail: mean7's grid consists of whole hours.
+                    frames = [{**period, 'end': datetime.fromisoformat(period['end']).replace(minute=0, second=0, microsecond=0).isoformat()} for period in periods]
+                    request['paired'] = await _report_mean7(service, configuration, current_frame, frames, period['timezone'], guard)
+            elif request.get('period'):
+                baseline = request['period']
+                baseline_end = datetime.fromisoformat(baseline['end']).replace(minute=0, second=0, microsecond=0)
+                if baseline_end > datetime.fromisoformat(baseline['start']):
+                    frame = {**baseline, 'end': baseline_end.isoformat()}
+                    request['paired'] = await _report_pair(service, configuration, current_frame, frame, period['kind'], period['timezone'], guard)
     tariff = {'availability_reason': 'no_tariff_config'} if not active and native is None else {}
     if active:
         # Choose the version at the measured window end, rather than silently

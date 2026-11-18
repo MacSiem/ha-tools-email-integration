@@ -61,6 +61,8 @@ class EnergySensor(EnergySnapshotEntity, SensorEntity):
         if self.key in ('today', 'cheap_share_today', 'today_cost'):
             attributes.update(measurement_through=facts.get('measurement_through'),
                 resolution=facts.get('resolution'), coverage_complete=facts.get('coverage_complete'),
+                measured_sources=facts.get('measured_sources'), expected_sources=facts.get('expected_sources'),
+                missing_sources=facts.get('missing_sources', []),
                 reason=facts.get('reason'))
         return attributes
 

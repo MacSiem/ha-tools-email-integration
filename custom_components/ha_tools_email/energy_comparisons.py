@@ -66,7 +66,8 @@ def compare_daily_mean7(current, baselines, current_period, baseline_periods, *,
                                 'expected_baseline_seconds': [total * 3600 for total in expected[1:]],
                                 'measured_current_seconds': measured[0] * 3600,
                                 'measured_baseline_seconds': [count * 3600 for count in measured[1:]]})
-        complete = all(value is not None for value in full)
+        complete = (all(value is not None for value in full)
+                    and all(set(grid.values()) == set(grids[0].values()) for grid in grids[1:]))
         def priced(value):
             value['chart'] = projection.finish(value, len(ids), common_count)
             if tariff is not None:

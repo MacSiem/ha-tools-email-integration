@@ -693,6 +693,11 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
         (paragraph(recorded_note, margin='8px 0 0') if recorded_note else '') +
         (paragraph(missing_note, margin='8px 0 0') if missing_note else '') +
         (paragraph(device_note, margin='8px 0 0') if device_note else ''), padding='16px 24px 0')]
+    if model.get('device_cost_basis') == 'purchase_price_excluding_pv':
+        note = ('Koszty urządzeń według ceny zakupu, bez uwzględnienia PV i baterii.' if v.lang == 'pl'
+                else 'Device costs use the purchase price, excluding solar and battery effects.')
+        v.lines.append(note)
+        blocks.append(section(paragraph(note)))
     sections = [(4, 'comparison', 'comparison_note', v.comparison_block),
                 (5, 'hour_chart' if v.kind == 'day' else 'daily_chart', 'chart_note', v.chart),
                 (6, 'zones', None, v.zone_block),

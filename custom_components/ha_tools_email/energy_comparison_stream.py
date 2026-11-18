@@ -166,7 +166,8 @@ class PairedComparisonAccumulator:
         expected = [len(grid)*len(self._ids) for grid in self._grids]
         own = [n/d for n, d in zip(self._measured, expected)]
         common = [self._common/d for d in expected]
-        complete = self._measured == expected
+        complete = (self._measured == expected and self._aligned
+                    and set(self._grids[0].values()) == set(self._grids[1].values()))
         totals = [fsum(values) for values in self._totals]
         result = {'status': 'unknown', 'reason': 'incomplete_statistics',
                   'current_kwh': None, 'baseline_kwh': None, 'delta_kwh': None, 'percent': None,
