@@ -290,3 +290,29 @@ class EnergyP1HourLabelTests(unittest.TestCase):
         self.assertEqual('4–3', model._hours_label(list(range(4,24)) + [0,1,2]))
         self.assertEqual('0–24', model._hours_label(list(range(24)) + [2]))
         self.assertEqual('1–3, 5–6', model._hours_label([1,2,2,5]))
+
+class AnnualSparseReportTests(unittest.TestCase):
+    def test_44_devices_sparse_year_keeps_known_values_and_hierarchy(self):
+        data = inputs_for('2026-01-01T00:00:00+00:00', '2026-01-02T00:00:00+00:00', 'UTC')
+        data['period'].update(kind='year', end='2027-01-01T00:00:00+00:00')
+        data['consumers'] = [{'stat_consumption': f'd{i}', **({'included_in_stat': 'd0'} if i == 1 else {})} for i in range(44)]
+        data['projection']['hours'] = data['projection']['hours'][:2]
+        for row in data['projection']['hours']:
+            row['devices'] = {f'd{i}': {'kwh': '0', 'costs': {'usage_cost': '0'}} for i in range(43)}
+        data['projection']['hours'][0]['devices']['d0']['kwh'] = '.25'
+        data['projection']['hours'][0]['devices']['d0']['costs']['usage_cost'] = None
+        result = model.build_report(data)
+        self.assertEqual(8760, result['coverage']['expected_hours'])
+        self.assertEqual(2, result['totals']['import_kwh'])
+        self.assertEqual(1, result['totals']['usage_cost'])
+        by_id = {row['id']: row for row in result['devices']}
+        self.assertEqual(.25, by_id['d0']['kwh'])
+        self.assertIsNone(by_id['d0']['cost'])
+        self.assertEqual('d1', by_id['d0']['children'][0]['id'])
+        self.assertEqual(0, by_id['d2']['kwh'])
+        self.assertEqual(0, by_id['d2']['cost'])
+        self.assertIsNone(by_id['d43']['kwh'])
+        self.assertFalse(by_id['d2']['measurement_complete'])
+        missing = {r['id']: r['ranges'] for r in result['coverage']['missing_devices']}
+        self.assertEqual('2026-01-01T02:00:00+00:00', missing['d2'][0]['start'])
+        self.assertEqual('2027-01-01T00:00:00+00:00', missing['d43'][0]['end'])
