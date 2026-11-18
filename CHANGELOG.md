@@ -1,9 +1,11 @@
 # Changelog
 
-## Unreleased
+## 2.4.7 (2026-11-18)
 
 - Show available source readings, tariff zones and purchase-price costs consistently across Energy reports and entities, and compare matching source-hours. Keep full residual balances gated on complete measurements.
-- Apply Recorder grace and identify missing sources; device purchase-price costs exclude PV and battery effects.
+- Allow Recorder to complete the latest interval before reporting gaps. Identify missing sources and label device costs estimated at the grid purchase price when PV or a battery is configured.
+- Keep 33 days of local Log Digest aggregates and report any observation gaps after a restart. Localize schedule names and show 24-hour log counters alongside their coverage.
+- Show persistent Energy source outages in Home Assistant Repairs and highlight the relevant outage in reports.
 
 ## 2.4.6 (2026-11-04)
 
