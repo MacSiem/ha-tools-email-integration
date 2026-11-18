@@ -684,7 +684,7 @@ async def async_build_log_digest_payload(
             append_mail_html(payload, '<h2 style="font-size:20px;margin:28px 0 10px">' + label + '</h2>'
                 + '<p>' + context_note + '</p>'
                 + render_charts_html(current_model, embedded=True, include_context=False) + '<ul>' + details + '</ul>')
-            payload['body'] += ('\n\n' + label + '\n' + _render_log_plain(label, current_summary, presentation)
+            payload['body'] += ('\n\n' + _render_log_plain(label, current_summary, presentation)
                                 + '\n' + render_charts_plain(current_model, include_context=False))
     if unplaced:
         pl = presentation['language'] == 'pl'

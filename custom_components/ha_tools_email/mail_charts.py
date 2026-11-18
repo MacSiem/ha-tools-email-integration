@@ -222,7 +222,8 @@ def _scale_text(chart: dict[str, Any], pl: bool = False) -> str:
     if pl:
         if chart['scale_min'] is None or chart['scale_max'] is None:
             return f'Skala niedostępna. Oś zera: 0 {chart["unit"]}.'
-        return f'Skala: {_number(chart["scale_min"])} → {_number(chart["scale_max"])} {chart["unit"]}. Oś zera: 0 {chart["unit"]}.'
+        unit = _log_unit(chart["scale_max"]) if chart["unit"] == "wystąpień" else chart["unit"]
+        return f'Skala: {_number(chart["scale_min"])} → {_number(chart["scale_max"])} {unit}. Oś zera: 0 {chart["unit"]}.'
     if chart['scale_min'] is None or chart['scale_max'] is None:
         return f'Scale unavailable (no measured values). Zero axis: 0 {chart["unit"]}.'
     return (f'Scale: {_number(chart["scale_min"])} → {_number(chart["scale_max"])} {chart["unit"]}. '
@@ -265,6 +266,20 @@ def _side(width: float, fill: float, *, negative: bool) -> str:
             f'<tr>{inside}</tr></table></td>')
 
 
+def _log_unit(value: Any) -> str:
+    """Polish noun form for a displayed integral occurrence count."""
+    if type(value) not in (int, float) or int(value) != value:
+        return 'wystąpień'
+    n = abs(int(value))
+    if n == 1:
+        return 'wystąpienie'
+    return 'wystąpienia' if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14) else 'wystąpień'
+
+
+def _row_unit(chart: dict[str, Any], row: dict[str, Any], pl: bool) -> str:
+    return _log_unit(row['value']) if pl and chart['unit'] == 'wystąpień' else chart['unit']
+
+
 def _chart_note(chart: dict[str, Any], model: dict[str, Any]) -> str:
     # Only the exact shared log prefix moves; all distinct factual notes stay verbatim.
     note = chart['note']
@@ -289,7 +304,7 @@ def render_charts_html(model: dict[str, Any], *, embedded: bool = False,
                         'cellspacing="0" cellpadding="0" style="width:100%;table-layout:fixed"><tr>'
                         f'<td style="width:65%;padding-right:8px">{_bar(chart, row, pl)}</td>'
                         '<td class="mail-bar-value" style="width:35%;text-align:right;word-break:break-word">'
-                        f'{escape("Brak danych" if pl and row["display"] == "Unknown" else row["display"])} {escape(chart["unit"])}</td></tr></table></td></tr>')
+                        f'{escape("Brak danych" if pl and row["display"] == "Unknown" else row["display"])} {escape(_row_unit(chart, row, pl))}</td></tr></table></td></tr>')
         if not rows:
             rows.append('<tr><td style="padding:10px 0">' + ('Brak zachowanych danych wykresu.' if pl else 'No retained chart data.') + '</td></tr>')
         sections.append('<table class="mail-card" width="100%" cellspacing="0" cellpadding="0" '
@@ -321,7 +336,7 @@ def render_charts_plain(model: dict[str, Any], *, include_context: bool = True,
     pl = model.get('language') == 'pl' and model.get('context') == LOG_CAVEAT
     for chart in ([] if context_only else model['charts']):
         lines.extend([chart['title'] + (' ¹' if model.get('context') == LOG_CAVEAT else ''), _scale_text(chart, pl)])
-        lines.extend(f'{row_label(chart, row) if row_label else row["label"]}: {("Brak danych" if pl and row["display"] == "Unknown" else row["display"])} {chart["unit"]}'
+        lines.extend(f'{row_label(chart, row) if row_label else row["label"]}: {("Brak danych" if pl and row["display"] == "Unknown" else row["display"])} {_row_unit(chart, row, pl)}'
                      for row in chart['rows'])
         lines.append(_chart_note(chart, model))
     if not context_only and model.get('unique_problems') is not None:

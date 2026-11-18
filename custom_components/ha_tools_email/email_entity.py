@@ -4,6 +4,15 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from .const import DOMAIN
 
 
+def schedule_name(row, language):
+    pl = str(language or '').lower().startswith('pl')
+    kind = ('Raport dziennika' if row['kind'] == 'log_digest' else 'Raport energii') if pl else (
+        'Log report' if row['kind'] == 'log_digest' else 'Energy report')
+    cadence = ({'daily': 'dzienny', 'weekly': 'tygodniowy', 'monthly': 'miesięczny'} if pl else
+               {'daily': 'daily', 'weekly': 'weekly', 'monthly': 'monthly'})[row['cadence']]
+    return f'{kind} · {cadence}'
+
+
 class EmailScheduleEntity(Entity):
     _attr_has_entity_name = True
     _attr_should_poll = False
@@ -12,9 +21,9 @@ class EmailScheduleEntity(Entity):
         self.coordinator, self.key, self.field = coordinator, key, field
         self._attr_unique_id = f'{coordinator.entry.entry_id}_email_{key}_{field}'
         self._attr_translation_key = f'email_{field}'
-        cadence = coordinator.data[key]['cadence']
+        name = schedule_name(coordinator.data[key], coordinator.hass.config.language)
         self._attr_device_info = DeviceInfo(identifiers={(DOMAIN,
-            f'{coordinator.entry.entry_id}_email_{key}')}, name=f'HA Tools Email {cadence}',
+            f'{coordinator.entry.entry_id}_email_{key}')}, name=name,
             manufacturer='HA Tools', model='Scheduled report')
 
     @property

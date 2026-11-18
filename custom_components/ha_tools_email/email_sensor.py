@@ -6,8 +6,10 @@ from .native_report_projection import RESULT_OPTIONS
 
 
 def entities(coordinator, key):
-    return [EmailStatusSensor(coordinator, key, field) for field in
-            ('last_attempt', 'next_report', 'result', 'errors_24h', 'warnings_24h')]
+    fields = ('last_attempt', 'next_report', 'result')
+    if coordinator.data[key]['kind'] == 'log_digest':
+        fields += ('errors_24h', 'warnings_24h')
+    return [EmailStatusSensor(coordinator, key, field) for field in fields]
 
 
 class EmailStatusSensor(EmailScheduleEntity, SensorEntity):

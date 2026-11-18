@@ -5,13 +5,14 @@ from datetime import datetime, timedelta, timezone
 from homeassistant.auth.permissions.const import POLICY_CONTROL
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import issue_registry as ir, device_registry as dr
+from homeassistant.helpers import issue_registry as ir, device_registry as dr, entity_registry as er
 from homeassistant.helpers.event import async_track_time_interval
 
 from .const import DOMAIN, EVENT_REPORT_STATUS_UPDATED
 from .feature_access import feature_access_allowed
 from .report_status import PURPOSE_FEATURES
 from .scheduler import async_send_now
+from .email_entity import schedule_name
 
 
 class EmailNativeCoordinator:
@@ -118,9 +119,19 @@ class EmailNativeCoordinator:
         for key, row in self.data.items():
             identifier = (DOMAIN, f'{self.entry.entry_id}_email_{key}')
             for device in own:
-                name = f"HA Tools Email {row['cadence']}"
+                name = schedule_name(row, self.hass.config.language)
                 if identifier in device.identifiers and device.name != name:
                     devices.async_update_device(device.id, name=name)
+        # Retire only Energy counters; preserve all other identities and names.
+        registry = er.async_get(self.hass)
+        for key, row in self.data.items():
+            if row['kind'] != 'energy_report':
+                continue
+            for field in ('errors_24h', 'warnings_24h'):
+                unique_id = f'{self.entry.entry_id}_email_{key}_{field}'
+                entity_id = registry.async_get_entity_id('sensor', DOMAIN, unique_id)
+                if entity_id:
+                    registry.async_remove(entity_id)
         for issue, active in result['repairs'].items():
             if active is True:
                 ir.async_create_issue(self.hass, DOMAIN, issue, is_fixable=False,
