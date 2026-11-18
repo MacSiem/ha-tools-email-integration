@@ -148,14 +148,20 @@ class ActualComposerKnownProjectionTest(unittest.TestCase):
         prefs = {'energy_sources': [], 'device_consumption': [
             {'stat_consumption': 'sensor.device', 'name': 'Device'}]}
         async def run():
-            fx = ComposerFixture(datetime(2026, 1, 4, 12, tzinfo=timezone.utc),
-                preferences=prefs, rows={'sensor.device': {'unit': 'kWh'}},
-                book=book([version(rate=1, monthly=31)]))
-            with fx.patches():
-                start = datetime(2026, 1, 2, tzinfo=timezone.utc)
-                report = await fx.compose(start=start, end=start + timedelta(days=1), rolling=False)
-            self.assertIsNone(report['summary']['total_kwh'])
-            self.assertFalse(report['summary']['coverage']['complete'])
-            self.assertIn('Device', report['text'])
-            self.assertIn('24', report['text'])
+            for lang in ('pl', 'en'):
+                for calendar in (False, True):
+                    fx = ComposerFixture(datetime(2026, 1, 4, 12, tzinfo=timezone.utc),
+                        preferences=prefs, rows={'sensor.device': {'unit': 'kWh'}},
+                        book=book([version(rate=1, monthly=31)]), language=lang)
+                    with fx.patches():
+                        start = datetime(2026, 1, 2, tzinfo=timezone.utc)
+                        report = await fx.compose(start=start if calendar else None,
+                            end=start + timedelta(days=1) if calendar else None, rolling=not calendar)
+                    self.assertIsNone(report['summary']['total_kwh'])
+                    self.assertFalse(report['summary']['coverage']['complete'])
+                    device = report['summary']['groups']['devices']['sensor.device']
+                    self.assertEqual(Decimal(24), Decimal(device['kwh']))
+                    self.assertEqual(Decimal(24), Decimal(device['usage_cost']))
+                    self.assertIn('Device', report['text'])
+                    self.assertIn('Device', report['html'])
         asyncio.run(run())
