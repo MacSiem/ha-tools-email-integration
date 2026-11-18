@@ -81,6 +81,14 @@
     "reports_delivery_problem": {
       "title": "A report delivery attempt needs attention",
       "description": "A report attempt failed, was partially accepted, or its outcome is unknown. Check report status and integration settings before sending again. An unknown outcome can mean that a message was already accepted: do not replay it automatically. This notice clears after a later report is accepted by SMTP or a notification service. Acceptance does not confirm delivery to the recipient."
+    },
+    "energy_stale_source": {
+      "title": "Energy source {name} has not reported since {since}",
+      "description": "Source [{name}]({link}) has no new energy statistics since {since}. Check the device and its connection. This notice clears after readings return."
+    },
+    "energy_grid_is_devices": {
+      "title": "Grid import is the sum of devices",
+      "description": "Grid import sources are the same entities as devices. Unmeasured consumption cannot be calculated, and device estimates count as grid import. Review [Energy settings](/config/energy)."
     }
   },
   "entity": {
@@ -99,8 +107,12 @@
       "energy_next_cheap": {
         "name": "Next cheap period"
       },
-      "energy_today": {"name": "Grid energy imported today"},
-      "energy_cheap_share_today": {"name": "Cheap energy share today"},
+      "energy_today": {
+        "name": "Grid energy imported today"
+      },
+      "energy_cheap_share_today": {
+        "name": "Cheap energy share today"
+      },
       "energy_today_cost": {
         "name": "Usage cost today"
       },

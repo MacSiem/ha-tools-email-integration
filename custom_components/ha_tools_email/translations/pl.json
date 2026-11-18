@@ -81,6 +81,14 @@
     "reports_delivery_problem": {
       "title": "Próba wysyłki raportu wymaga uwagi",
       "description": "Próba wysyłki raportu zakończyła się błędem, częściową akceptacją albo jej wynik jest nieustalony. Przed ponowną wysyłką sprawdź stan raportów i ustawienia integracji. Nieustalony wynik może oznaczać, że wiadomość została już przyjęta: nie ponawiaj jej automatycznie. To powiadomienie znika po późniejszej akceptacji raportu przez SMTP lub usługę powiadomień. Akceptacja nie potwierdza dostarczenia do odbiorcy."
+    },
+    "energy_stale_source": {
+      "title": "Źródło energii {name} nie raportuje od {since}",
+      "description": "Źródło [{name}]({link}) nie ma nowych statystyk energii od {since}. Sprawdź urządzenie i jego połączenie. Naprawa zniknie po powrocie danych."
+    },
+    "energy_grid_is_devices": {
+      "title": "Import energii jest sumą urządzeń",
+      "description": "Źródła importu sieciowego są tymi samymi encjami co urządzenia. Nie można wyznaczyć pozycji „Niezmierzone”, a szacunki urządzeń są liczone jako import. Sprawdź [ustawienia Energii](/config/energy)."
     }
   },
   "entity": {
@@ -99,8 +107,12 @@
       "energy_next_cheap": {
         "name": "Następna tania strefa"
       },
-      "energy_today": {"name": "Import energii dziś"},
-      "energy_cheap_share_today": {"name": "Udział taniej energii dziś"},
+      "energy_today": {
+        "name": "Import energii dziś"
+      },
+      "energy_cheap_share_today": {
+        "name": "Udział taniej energii dziś"
+      },
       "energy_today_cost": {
         "name": "Koszt zużycia dziś"
       },
