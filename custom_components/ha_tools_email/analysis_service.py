@@ -13,6 +13,7 @@ import hashlib
 import json
 from time import monotonic
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from .analysis_periods import resolve_analysis_periods
 from .report_window import ReportWindow
@@ -306,9 +307,11 @@ class EnergyAnalysisService:
         if report_model and request.semantics != 'previous_completed_calendar_period':
             raise ValueError('invalid_report_model_request')
         now = report_clock_at or self._clock()
-        if report_model:
-            now = now.astimezone(timezone.utc)
-            now = now.replace(minute=now.minute // 5 * 5, second=0, microsecond=0)
+        if report_model and report_clock_at is None:
+            # A completed calendar window is stable for its local date. Keep
+            # that cache identity while freezing its color selection and plan.
+            local = now.astimezone(ZoneInfo(request.timezone))
+            now = local.replace(hour=0, minute=0, second=0, microsecond=0, fold=0).astimezone(timezone.utc)
         period = request.period(now)
         previous = self._report_previous_plan(request, period, now)
         configuration = self._configuration()
