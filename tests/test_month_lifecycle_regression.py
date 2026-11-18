@@ -45,6 +45,10 @@ class MonthLifecycleTest(unittest.IsolatedAsyncioTestCase):
         grid['source_first'] = {'sensor.grid': 0, 'sensor.new': int(datetime.fromisoformat(f.middle).timestamp()*1000)}
         grid['source_buckets']['sensor.new'][0]['kwh'] = None
         projection = f.builder().add_chunk(grid, f.start, f.end, consumer_snapshot=f.consumer(), include_group_hours=True)
+        forged = deepcopy(projection)
+        forged['hours'][1]['grid_source_expected'].remove('sensor.new')
+        with self.assertRaisesRegex(ValueError, 'invalid_grid_source_expected'):
+            stream.group_projection_evidence(forged, datetime.fromisoformat(f.start), datetime.fromisoformat(f.end))
         projection['hours'][1]['grid_source_presence'].remove('sensor.new')
         with self.assertRaisesRegex(ValueError, 'partial_grid_cannot_supply_household'):
             stream.group_projection_evidence(projection, datetime.fromisoformat(f.start), datetime.fromisoformat(f.end))
