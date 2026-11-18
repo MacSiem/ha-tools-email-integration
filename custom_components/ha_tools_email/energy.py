@@ -267,7 +267,14 @@ class EnergySnapshotCoordinator:
             tz = self.hass.config.time_zone
             if tz != result.get('measurement_timezone'):
                 return False
-            start, end, _ = measurement_window(datetime.now(timezone.utc), tz)
+            now = datetime.now(timezone.utc)
+            try:
+                generated = datetime.fromisoformat(result['generated_at']).astimezone(timezone.utc)
+            except (KeyError, TypeError, ValueError):
+                return False
+            if generated.replace(minute=0, second=0, microsecond=0) != now.replace(minute=0, second=0, microsecond=0):
+                return False
+            start, end, _ = measurement_window(now, tz)
             if (result['today'].get('from') != start.isoformat()
                     or result['today'].get('to') != end.isoformat()):
                 return False
