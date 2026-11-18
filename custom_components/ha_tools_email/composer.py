@@ -644,6 +644,10 @@ async def async_build_log_digest_payload(
                        window_start <= _entry_time(row) < window_end and _entry_time(row) <= now]
         else:
             entries = [row for row in entries if _entry_time(row) is None or _entry_time(row) < window_end]
+    history = getattr(hass, 'data', {}).get('ha_tools_email', {}).get('log_history')
+    coverage = None
+    if history is not None:
+        entries, coverage = await history.async_query(window_start or since, window_end or now)
     payload = build_log_digest_payload(
         entries,
         cadence=cadence,
@@ -655,8 +659,12 @@ async def async_build_log_digest_payload(
     source = {**payload["summary"].get("source", {}), "name": "system_log", "count_semantics": "retained_aggregates",
               "complete": False, "retained_entries": len(entries),
               "reason": "retained_last_observed_aggregates_not_full_event_history"}
+    if coverage is not None:
+        source.update(coverage=coverage, complete=coverage['complete'],
+                      reason=None if coverage['complete'] else 'observation_gap_or_partial_hour')
+        payload['summary']['counts_complete'] = coverage['complete']
     payload["summary"]["source"] = source
-    if not payload["summary"]["unique_problems"]:
+    if not payload["summary"]["unique_problems"] and not (coverage and coverage['complete']):
         # A volatile, bounded buffer cannot prove an empty completed calendar period.
         payload["summary"].update(total=None, counts_complete=False, history_unavailable=True)
         title = _title(KIND_LOG_DIGEST, cadence, presentation)
@@ -668,6 +676,12 @@ async def async_build_log_digest_payload(
         if presentation['language'] == 'pl':
             explanation = 'Historia okresu niedostępna: brak zachowanych wpisów w żądanym zakresie. Restart HA lub usunięcie starszych wpisów nie potwierdza braku błędów.'
         payload["body"] += '\n\n' + explanation
+    if coverage is not None and not coverage['complete']:
+        gap = ('Niepełne pokrycie dziennika: przerwa w obserwacji lub niepełna godzina; pokazano dostępne dane.'
+               if presentation['language'] == 'pl' else
+               'Incomplete log coverage: an observation gap or partial hour; available data is shown.')
+        payload['body'] += '\n\n' + gap
+        append_mail_html(payload, '<p>' + escape(gap) + '</p>')
     if window_end is not None:
         current = [row for row in retained_entries if _entry_time(row) is not None and
                    window_end <= _entry_time(row) <= now]
@@ -699,7 +713,8 @@ async def async_build_log_digest_payload(
                           for row in unknown_summary['recent_errors'] + unknown_summary['recent_warnings'])
         append_mail_html(payload, '<h2>' + label + '</h2><p>' + note + '</p><ul>' + details + '</ul>')
         payload['body'] += '\n\n' + label + '\n' + note + '\n' + _render_log_plain(label, unknown_summary, presentation)
-    context = ("Liczby dotyczą zachowanych agregatów, nie dokładnych zdarzeń ani pełnej historii." if presentation["language"] == "pl" else "Counts describe retained aggregates, not exact events or complete history.")
+    context = (("Liczby dotyczą zebranych godzinowych agregatów dziennika." if presentation["language"] == "pl" else "Counts describe collected hourly log aggregates.") if coverage is not None else
+               ("Liczby dotyczą zachowanych agregatów, nie dokładnych zdarzeń ani pełnej historii." if presentation["language"] == "pl" else "Counts describe retained aggregates, not exact events or complete history."))
     if window_start is not None and window_end is not None:
         payload["summary"]["period"] = {"from": window_start.isoformat(), "to": window_end.isoformat(),
                                         "semantics": "previous_completed_calendar_period"}

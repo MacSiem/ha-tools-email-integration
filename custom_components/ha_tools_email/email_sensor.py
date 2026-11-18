@@ -28,6 +28,12 @@ class EmailStatusSensor(EmailScheduleEntity, SensorEntity):
         return SensorStateClass.MEASUREMENT if self.field in ('errors_24h', 'warnings_24h') else None
 
     @property
+    def extra_state_attributes(self):
+        if self.field not in ('errors_24h', 'warnings_24h') or not self.row:
+            return {}
+        return {'coverage': self.row.get('log_coverage')}
+
+    @property
     def native_value(self):
         row = self.row
         if row is None:

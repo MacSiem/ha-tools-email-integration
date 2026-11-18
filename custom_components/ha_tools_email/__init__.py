@@ -192,6 +192,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up HA Tools Email from a config entry."""
     await _async_ensure_setup(hass)
     from .energy import EnergySnapshotCoordinator
+    from .log_history import LogHistory
     from .email_native import EmailNativeCoordinator
     from .energy_statistics_runtime import EnergyStatisticsRuntime
     from .energy_source_device import EnergySourceDeviceAssociation
@@ -207,6 +208,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if previous_service is not None:
         previous_service.async_stop()
     bucket['energy_snapshot'] = coordinator
+    log_history = LogHistory(hass)
+    bucket['log_history'] = log_history
     registry, service = None, None
     association = EnergySourceDeviceAssociation(hass, entry)
     native = EmailNativeCoordinator(hass, entry, coordinator.storage)
@@ -221,6 +224,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         service = EnergyAnalysisService(hass, entry.entry_id, coordinator, registry)
         bucket['energy_membership'], bucket['energy_analysis'] = registry, service
         registry.start()
+        await log_history.async_start()
         await coordinator.async_start()
         await native.async_start()
         await hass.config_entries.async_forward_entry_setups(entry, platforms)
@@ -233,6 +237,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Cancellation is also a setup failure: remove listeners and prevent an
         # in-flight analysis from publishing through a half-initialized entry.
         statistics_runtime.async_stop()
+        await log_history.async_stop()
         native.async_stop()
         association.async_stop()
         if service is not None:
@@ -241,7 +246,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             registry.stop()
         coordinator.async_stop()
         current = hass.data.get(DOMAIN, {})
-        for key, owned in (('energy_statistics_runtime', statistics_runtime), ('email_native', native), ('energy_source_device', association),
+        for key, owned in (('log_history', log_history), ('energy_statistics_runtime', statistics_runtime), ('email_native', native), ('energy_source_device', association),
                            ('energy_analysis', service), ('energy_membership', registry),
                            ('energy_snapshot', coordinator)):
             if current.get(key) is owned:
@@ -260,6 +265,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         ['sensor', 'binary_sensor', 'button', 'event', 'calendar'])
     if unloaded:
         bucket = hass.data[DOMAIN]
+        log_history = bucket.pop('log_history', None)
+        if log_history:
+            await log_history.async_stop()
         statistics_runtime = bucket.pop("energy_statistics_runtime", None)
         if statistics_runtime:
             statistics_runtime.async_stop()

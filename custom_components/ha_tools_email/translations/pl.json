@@ -97,7 +97,8 @@
         "name": "Cena zużycia teraz"
       },
       "energy_next_cheap": {
-        "name": "Następna tania strefa"
+        "name": "Następna tania strefa",
+        "state": {"none_in_tariff": "Brak w taryfie"}
       },
       "energy_today": {"name": "Import energii dziś"},
       "energy_cheap_share_today": {"name": "Udział taniej energii dziś"},

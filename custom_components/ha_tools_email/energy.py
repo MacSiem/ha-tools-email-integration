@@ -43,6 +43,16 @@ def next_cheap(model, now, horizon=timedelta(days=8)):
     result = {'start': None, 'status': 'unknown', 'reason': None,
               'searched_until': datetime.fromtimestamp(end / 1000, timezone.utc).isoformat()}
     previous = model.rate_at(start)
+    # A single static zone cannot contain a distinct cheaper zone. Check all
+    # configured future tariff versions before asserting that configuration.
+    models = [item[3] for item in model._compiled] if hasattr(model, '_compiled') else [model]
+    no_cheap = bool(models) and all(getattr(item, 'valid', False)
+        and len(item.zones) == 1 and item.dynamic is None
+        and next(iter(item.zones.values())).get('classification') != 'cheap'
+        for item in models)
+    if previous['available'] and no_cheap:
+        result.update(status='none_in_tariff', reason='single_zone_tariff')
+        return result
     if not previous['available'] or previous.get('classification') is None:
         result['reason'] = previous.get('reason', 'classification_unknown')
         return result

@@ -111,6 +111,22 @@ class EmailNativeCoordinator:
         # schedules, so deletion/re-add never replays old attempts as new events.
         if seen is not None:
             self._seen = seen
+        history = bucket.get('log_history')
+        if history is not None and any(row['kind'] == 'log_digest' for row in result['schedules'].values()):
+            end = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+            log_rows, coverage = await history.async_query(end - timedelta(hours=24), end)
+            for row in result['schedules'].values():
+                if row['kind'] != 'log_digest':
+                    continue
+                row['log_coverage'] = coverage
+                if coverage['complete']:
+                    row['errors_24h'] = sum(item['count'] for item in log_rows if item['level'] in ('ERROR', 'CRITICAL'))
+                    row['warnings_24h'] = sum(item['count'] for item in log_rows if item['level'] == 'WARNING')
+        if (not self.running or self.hass.data.get(DOMAIN) is not bucket
+                or bucket.get('email_native') is not self or bucket.get('storage') is not self.storage
+                or generation != bucket.get('schedule_generation')
+                or not self.storage.report_status_context_is_current(token)):
+            return
         self.data, self.identities = result['schedules'], result['identities']
         # Update only this integration's exact schedule devices; HA preserves
         # name_by_user/area/disabled settings. No source Energy device matches.
