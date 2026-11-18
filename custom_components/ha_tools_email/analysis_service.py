@@ -190,7 +190,7 @@ class EnergyAnalysisService:
             currency=getattr(self.hass.config, 'currency', None),
             cost_sensors=self.hass.data.get('energy', {}).get('cost_sensors', {}))
 
-    def _capture(self, kind, anchor=None, comparison=None, *, purpose='analysis', report_model=False, report_mode='so_far', actor_signature=None):
+    def _capture(self, kind, anchor=None, comparison=None, *, purpose='analysis', report_model=False, report_mode='so_far', actor_signature=None, report_clock_at=None):
         # Server-owned purpose; never accept a client-selected feature gate.
         if not isinstance(purpose, str) or purpose not in _ACCESS_PURPOSES:
             raise ValueError('invalid_analysis_purpose')
@@ -201,7 +201,9 @@ class EnergyAnalysisService:
         zone = self.hass.config.time_zone
         if report_model:
             from .energy_inputs import resolve_model_periods
-            resolved = resolve_model_periods(kind,self._clock(),zone,anchor=anchor)
+            now = (report_clock_at or self._clock()).astimezone(timezone.utc)
+            now = now.replace(minute=now.minute // 5 * 5, second=0, microsecond=0)
+            resolved = resolve_model_periods(kind,now,zone,anchor=anchor)
         else:
             resolved = resolve_analysis_periods(kind, self._clock(), zone, anchor=anchor)
         if resolved['status'] != 'ready':
@@ -222,8 +224,8 @@ class EnergyAnalysisService:
                            comparison_signature=_digest(resolved['comparisons'][comparison]))
         if report_model:
             from .energy_inputs import report_clock
-            timing = report_clock(self._clock(), zone)
-            context.update(report_model=True, report_mode=report_mode,
+            timing = report_clock(now, zone)
+            context.update(report_model=True, report_mode=report_mode, report_clock=now.isoformat(),
                 report_color_as_of=timing['as_of'], report_cutoff=timing['cutoff'],
                 actor_signature=actor_signature)
         return configuration, period, context
@@ -297,13 +299,16 @@ class EnergyAnalysisService:
                 raise ValueError('report_comparison_plan_mismatch')
         return kind, deepcopy(plan)
 
-    def _capture_report(self, request, purpose, actor_signature, *, report_model=False):
+    def _capture_report(self, request, purpose, actor_signature, *, report_model=False, report_clock_at=None):
         if type(request) is not ReportWindow or purpose not in ('report_read','report_execute'):
             raise ValueError('invalid_report_request')
         self._check_running()
         if report_model and request.semantics != 'previous_completed_calendar_period':
             raise ValueError('invalid_report_model_request')
-        now = self._clock()
+        now = report_clock_at or self._clock()
+        if report_model:
+            now = now.astimezone(timezone.utc)
+            now = now.replace(minute=now.minute // 5 * 5, second=0, microsecond=0)
         period = request.period(now)
         previous = self._report_previous_plan(request, period, now)
         configuration = self._configuration()
@@ -326,7 +331,7 @@ class EnergyAnalysisService:
         if report_model:
             from .energy_inputs import report_clock
             timing = report_clock(now, request.timezone)
-            context.update(report_model=True, report_mode='full',
+            context.update(report_model=True, report_mode='full', report_clock=now.isoformat(),
                 period_kind=comparison_period_kind, period_anchor=period['local_start'][:10],
                 report_color_as_of=timing['as_of'], report_cutoff=period['end'])
         return configuration, period, context
@@ -365,7 +370,8 @@ class EnergyAnalysisService:
         if context.get('request_kind') == 'report_window':
             return self._capture_report(ReportWindow(**context['report_request']),
                 context['access_purpose'],context['actor_signature'],
-                report_model=context.get('report_model', False))
+                report_model=context.get('report_model', False),
+                report_clock_at=datetime.fromisoformat(context['report_clock']) if context.get('report_model') else None)
         if context.get('request_kind') == 'patterns':
             if context.get('access_purpose') != 'analysis':
                 raise ValueError('invalid_analysis_purpose')
@@ -376,7 +382,8 @@ class EnergyAnalysisService:
                              context.get('comparison_kind'), purpose=context['access_purpose'],
                              report_model=context.get('report_model', False),
                              report_mode=context.get('report_mode', 'so_far'),
-                             actor_signature=context.get('actor_signature'))
+                             actor_signature=context.get('actor_signature'),
+                             report_clock_at=datetime.fromisoformat(context['report_clock']) if context.get('report_model') else None)
 
     def _assert_current(self, context):
         expiry = context.get('report_live_expires_at')
