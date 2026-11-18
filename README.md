@@ -4,7 +4,7 @@
 
 Energy analysis, reports and optional email delivery for Home Assistant. Read energy reports inside HA without SMTP. Configure SMTP when you want to send mail or enable a mail schedule. Existing HA Tools service calls and server-side log digests remain supported.
 
-Log Digest shows retained aggregate counts by last-observed window, with current and undated entries separately. Long diagnostics are summarized in email; full retained details remain available locally in Home Assistant. Polish and English report text follows the recipient presentation settings.
+Log Digest keeps 33 days of local aggregate warning and error counts and marks gaps in observation. Details from the current Home Assistant log are shown separately. Polish and English report text follows the recipient presentation settings.
 
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.7+-blue.svg?logo=homeassistant)](https://www.home-assistant.io/) [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE) [![Version](https://img.shields.io/github/v/release/MacSiem/ha-tools-email-integration)](https://github.com/MacSiem/ha-tools-email-integration/releases)
 
@@ -214,29 +214,32 @@ Energy reports measure the unique grid-import `stat_energy_from` sources configu
 in Home Assistant's Energy Dashboard. Each grid source uses its nonempty flat
 `stat_energy_from` when present, otherwise imports from `flow_from` are used.
 Exports, solar sources and arbitrary discovered device meters are excluded.
-Daily, weekly and monthly reports cover the last 24, 168 and 720 completed UTC hours;
-the exact start and end are included in the report. Recorder metadata determines Wh/kWh/MWh
-conversion to kWh (Wh × 0.001, kWh × 1, MWh × 1000). Missing hours or unsupported metadata withhold the period total; measured
-zero stays zero. No tariff is assumed. With an explicitly saved shared tariff,
-measured hourly energy is priced against its matching zones and rules. The
-report states energy cost, variable per-kWh charges and monthly fixed fees
-separately; the fixed fee is not silently prorated or added to an energy total.
-Missing measurements, conflicting rules or missing rates remain unavailable.
+Manual rolling reports cover the last 24, 168 or 720 completed UTC hours. The
+report states the exact bounds. Recorder metadata converts Wh, kWh and MWh to
+kWh and measured zero remains a valid reading. A saved shared tariff prices
+available readings in their matching zones and rules. The report separates
+energy charges, per-kWh charges and fixed fees.
 
-From 2.3.1, a gap in one meter does not discard other measurements. The report
-shows **Recorded usage** (the sum of retained valid readings), coverage in
-source-hours, per-source measured hours and available charts. This subtotal is
-not a complete household-period total. A combined hourly chart value requires
-all configured sources for that hour; a missing interval stays a visible gap.
-Source rankings remain available alongside the time profile. Full-period cost
-and previous-period comparisons still require complete data.
+| Energy configuration | What the report shows |
+| --- | --- |
+| Main meter and devices | Grid import and device readings have independent coverage. A full balance and device shares require complete compatible readings. |
+| Multiple grid meters or phases, with gaps | Available readings and their costs are shown with source coverage. Comparisons use matching sources and times. |
+| The same meters supply grid and device readings | A configuration issue in Repairs explains how the figures overlap. The balance cannot estimate unmeasured consumption from these readings. |
+| Device meters only | Device usage and available costs remain visible. Full grid import is unavailable. |
+| Meter added or renamed | Recorder history identifies the first known reading. The current dashboard configuration determines the active sources. |
+| Today or a DST transition | Completed readings and appropriate local time bounds are used. The repeated local hour retains its offset. |
+| PV or battery storage | Device usage is shown alongside an indicative cost at the grid purchase price, excluding PV self-consumption and battery effects. |
+| Single-zone, multi-zone or dynamic tariff | The tariff in effect at the time prices available readings. A single-zone tariff without a cheap period reports that configuration explicitly. |
+| No saved tariff or missing rates | Energy remains visible. A compatible native Home Assistant cost can be shown with its own attribution. |
 
-Log reports use Home Assistant's bounded in-memory `system_log` buffer, which
-can lose older entries on restart or eviction. An empty completed-period buffer
-is labelled **history unavailable**, not zero errors. If newer retained entries
-are available, the email includes a separate **Current diagnostics** section,
-explicitly outside the requested report period. It does not invent a historical
-archive or attribute those lifetime aggregate counts to the previous day.
+Confirmed prolonged gaps appear in Home Assistant Repairs and can be highlighted
+in the report. Repairs clear after a new reading confirms recovery.
+
+Log Digest uses local hour aggregates with minute resolution at the cutoff.
+History survives a normal restart. If a crash loses the latest unwritten
+observations, the report marks a gap and still shows the available counts.
+The store contains aggregate counts, logger names and fingerprints. Current
+diagnostics are available from Home Assistant's separate live log buffer.
 
 Server schedules use the previous completed local day, ISO week or calendar
 month in the schedule's timezone. On-demand `send_now` and the default preview
@@ -344,13 +347,12 @@ managed through the websocket API below. Each schedule looks like:
   after reload or restart.
 - If `recipients` is empty, the scheduler falls back to `default_recipient` from the saved SMTP config.
 
-Log digests read Home Assistant `system_log` records, aggregate counts by
-level and logger, deduplicate against the previous digest, and include the
-top 10 recent errors and warnings. Energy reports use only configured Energy Dashboard grid imports and read
-Recorder `statistics_during_period` changes with Wh/kWh/MWh metadata. Complete
-hourly coverage across every source is required for a full-period total. The
-grid-source breakdown retains available measured readings with their coverage;
-unrelated appliance counters are not added.
+Schedule devices include the report type and cadence in the Home Assistant
+language. Entity IDs and custom names are kept on upgrade. Log schedules expose
+24-hour warning and error counters with coverage. Energy schedules no longer
+create these two log counters. Log Digest and its counters share the same local
+aggregate history. Energy schedules use the Energy Dashboard and Recorder rules
+described above.
 
 ## Websocket API
 
