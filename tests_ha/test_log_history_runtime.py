@@ -24,9 +24,13 @@ async def test_restart_in_active_hour_report_and_24h_sensors(hass, hass_storage,
     bucket = hass.data[DOMAIN]
     history = bucket['log_history']
     freezer.move_to('2026-10-01T00:10:00Z')
-    logging.getLogger('fixture.synthetic').warning('before restart synthetic')
+    logging.getLogger('fixture.synthetic').warning('PRIVATE_MESSAGE_DO_NOT_PERSIST synthetic')
     freezer.move_to('2026-10-01T00:20:00Z')
     await history.async_stop()
+    persisted = await history.store.async_load()
+    assert 'PRIVATE_MESSAGE_DO_NOT_PERSIST' not in repr(persisted)
+    assert 'message' not in repr(persisted)
+    assert 'exception' not in repr(persisted)
     freezer.move_to('2026-10-01T00:25:00Z')
     history = LogHistory(hass)
     await history.async_start()
@@ -46,6 +50,7 @@ async def test_restart_in_active_hour_report_and_24h_sensors(hass, hass_storage,
             window_start=window_start, window_end=end, manual_window=True,
             presentation=_presentation('pl', 'UTC'))
         assert payload['summary']['source']['name'] == 'system_log'
+        assert payload['summary']['logger_counts']['fixture.synthetic'] == 2
         assert payload['summary']['level_counts']['WARNING'] >= 1
         assert payload['summary']['level_counts']['ERROR'] >= 1
         for part in ('body', 'html'):

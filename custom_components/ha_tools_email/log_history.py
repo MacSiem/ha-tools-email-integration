@@ -66,6 +66,14 @@ class LogHistory:
     async def async_start(self):
         raw = await self.store.async_load()
         if isinstance(raw, dict) and raw.get('schema') == 1 and isinstance(raw.get('hours'), dict) and isinstance(raw.get('coverage'), list):
+            # Scrub legacy pre-release snapshots, preserving only aggregate fields.
+            for groups in raw['hours'].values():
+                if isinstance(groups, dict):
+                    for row in groups.values():
+                        if isinstance(row, dict):
+                            for field in tuple(row):
+                                if field not in ('name', 'level', 'count', 'minutes'):
+                                    row.pop(field)
             self.data = raw
         source = self.hass.data.get('system_log')
         if source is None or not hasattr(source, 'paths_re'):
@@ -85,15 +93,13 @@ class LogHistory:
             if len(self._pending) >= MAX_PENDING:
                 self._lost = self._lost or float(entry['timestamp'])
                 return
-            # Bound the cross-thread queue; exception text contributes to identity
-            # but is not copied into the persisted report history.
-            exc = str(entry.get('exception') or '')
+            # Fingerprint source/exception without retaining either or message text.
+            identity = json.dumps([entry.get('name'), entry.get('level'), entry.get('source'),
+                                   entry.get('exception')], ensure_ascii=False, default=str)
             self._pending.append({'timestamp': entry['timestamp'],
                 'name': str(entry.get('name') or 'unknown')[:512],
                 'level': str(entry.get('level') or 'UNKNOWN')[:32],
-                'message': [str((entry.get('message') or [''])[0])[:1024]],
-                'source': str(entry.get('source') or '')[:512],
-                'exception': hashlib.sha256(exc.encode('utf-8', 'replace')).hexdigest()})
+                'fingerprint': hashlib.sha256(identity.encode('utf-8', 'replace')).hexdigest()})
 
     def lost(self, stamp):
         with self._lock:
@@ -113,9 +119,7 @@ class LogHistory:
             for row in pending:
                 stamp = float(row['timestamp'])
                 hour = str(_hour(stamp))
-                identity = json.dumps([row.get('name'), row.get('level'), row.get('source'),
-                                       row.get('exception')], ensure_ascii=False, default=str)
-                key = hashlib.sha256(identity.encode()).hexdigest()
+                key = row['fingerprint']
                 group = hours.setdefault(hour, {})
                 if key not in group:
                     if len(group) >= MAX_GROUPS_PER_HOUR:
@@ -123,7 +127,6 @@ class LogHistory:
                         continue
                     group[key] = {'name': str(row.get('name') or 'unknown')[:512],
                         'level': str(row.get('level') or 'UNKNOWN')[:32],
-                        'message': [str((row.get('message') or [''])[0])[:1024]],
                         'count': 0}
                 group[key]['count'] += 1
             if not incomplete and end >= self._since:

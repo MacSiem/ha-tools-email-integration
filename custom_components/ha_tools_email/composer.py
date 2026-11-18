@@ -648,6 +648,10 @@ async def async_build_log_digest_payload(
     coverage = None
     if history is not None:
         entries, coverage = await history.async_query(window_start or since, window_end or now)
+        description = ('Wpis z agregatu; szczegóły dostępne w bieżącym dzienniku HA.'
+                       if presentation['language'] == 'pl' else
+                       'Aggregated log entry; details are available in the current HA log.')
+        entries = [{**row, 'message': [description]} for row in entries]
     payload = build_log_digest_payload(
         entries,
         cadence=cadence,
@@ -676,6 +680,17 @@ async def async_build_log_digest_payload(
         if presentation['language'] == 'pl':
             explanation = 'Historia okresu niedostępna: brak zachowanych wpisów w żądanym zakresie. Restart HA lub usunięcie starszych wpisów nie potwierdza braku błędów.'
         payload["body"] += '\n\n' + explanation
+    if coverage is not None:
+        # Live details are a separate, count-free context, never added to the
+        # persisted hourly totals. They may disappear when HA evicts its buffer.
+        live = [row for row in retained_entries if _entry_time(row) is not None
+                and (window_start or since) <= _entry_time(row) < (window_end or now)][:max_entries]
+        if live:
+            label = ('Bieżące szczegóły z bufora HA · bez zliczania' if presentation['language'] == 'pl'
+                     else 'Current HA buffer details · excluded from counts')
+            lines = [str(row.get('name') or 'unknown') + ': ' + _log_excerpt(_entry_message(row)) for row in live]
+            payload['body'] += '\n\n' + label + '\n' + '\n'.join('- ' + line for line in lines)
+            append_mail_html(payload, '<h2>' + escape(label) + '</h2><ul>' + ''.join('<li>' + escape(line) + '</li>' for line in lines) + '</ul>')
     if coverage is not None and not coverage['complete']:
         gap = ('Niepełne pokrycie dziennika: przerwa w obserwacji lub niepełna godzina; pokazano dostępne dane.'
                if presentation['language'] == 'pl' else
