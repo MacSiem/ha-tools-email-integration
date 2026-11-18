@@ -966,14 +966,21 @@ class EnergyAnalysisService:
         # The legacy exporter walks arbitrary new fields. Do not add the model
         # as a new CSV section; retain identity and every legacy fact unchanged.
         export_view = {key: value for key, value in snapshot.items() if key != 'report_model'}
-        report = await self.coordinator._async_run_cpu(partial(render_energy_analysis, export_view, **options))
+        from .energy_stale_mail import stale_mail_line
+        statuses = getattr(self.coordinator, 'stale_sources', None)
+        if statuses is None and isinstance(getattr(self.coordinator, 'data', None), dict):
+            statuses = self.coordinator.data.get('stale_sources')
+        line = stale_mail_line(snapshot, statuses, language=options.get('language'),
+                               timezone_name=options.get('timezone_name'), now=datetime.now(timezone.utc))
+        render_options = {**options, **({'stale_line': line} if line else {})}
+        report = await self.coordinator._async_run_cpu(partial(render_energy_analysis, export_view, **render_options))
         if 'report_model' in snapshot:
             if not await self.async_validate_result(snapshot, actor):
                 raise RuntimeError('energy_analysis_context_changed')
             from .mail_energy import render
             # Read the current external URL for each executable calendar mail.
             # Never fall back to an internal/LAN URL; the renderer validates it.
-            mail_options = dict(options)
+            mail_options = dict(render_options)
             if snapshot.get('context', {}).get('access_purpose') == 'report_execute':
                 mail_options['external_url'] = getattr(self.hass.config, 'external_url', None)
             presentation = await self.coordinator._async_run_cpu(partial(render, snapshot['report_model'], **mail_options))

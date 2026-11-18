@@ -146,7 +146,7 @@ def _finite_decimal(value):
         return False
 
 
-def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, date_language=None):
+def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, date_language=None, stale_line=None):
     """Return snapshot_id/html/text/csv without IO, mutation, activation or pricing.
 
     language is exactly pl/en; hour_cycle is exactly the string '12'/'24'.
@@ -321,6 +321,9 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                   '<title>' + escape(heading) + '</title><style>' + _CSS + '</style></head><body>',
                   '<table class="report" role="presentation" width="100%"><tr><td>',
                   '<table role="presentation"><tr><th class="header">' + escape(heading) + '</th></tr></table>']
+    if isinstance(stale_line, str) and stale_line:
+        text_parts.append(stale_line)
+        html_parts.append('<p data-role="stale-source"><strong>' + escape(stale_line) + '</strong></p>')
 
     def tr(pl_text, en_text):
         return pl_text if pl else en_text

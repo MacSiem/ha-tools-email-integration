@@ -616,7 +616,7 @@ class _View:
         return section('<table role="presentation" width="100%">' + ''.join(rows) + '</table><table role="presentation" width="100%" style="margin-top:8px">' + ''.join(rate_rows) + '</table>' + extras)
 
 
-def render(model, *, language, timezone_name, hour_cycle, date_language=None, external_url=None):
+def render(model, *, language, timezone_name, hour_cycle, date_language=None, external_url=None, stale_line=None):
     """Return subject/preheader/html/text/notify; render only backend-provided facts."""
     if not isinstance(model, dict) or model.get('schema') != 'ha_tools.energy_report/1':
         raise ValueError('Expected ha_tools.energy_report/1')
@@ -675,6 +675,8 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
         recorded_note = (('Zarejestrowano ze źródeł: ' if v.lang == 'pl' else 'Recorded from sources: ') +
             v.energy(recorded) + ('. Częściowa suma, nie pełny bilans.' if v.lang == 'pl' else '. Partial subtotal, not a complete balance.'))
         v.lines.append(recorded_note)
+    if isinstance(stale_line, str) and stale_line:
+        v.lines.append(stale_line)
     missing_lines = []
     for source in _items(v.coverage.get('missing_sources')):
         ranges = ', '.join(v.missing_range(r) for r in _items(source.get('ranges')))
@@ -688,6 +690,7 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
         v.lines.append(device_note)
     blocks = ['<!-- block:3 -->' + section('<table role="presentation" width="100%"><tr>' + kpis + '</tr></table>' +
         (paragraph(recorded_note, margin='8px 0 0') if recorded_note else '') +
+        ('<p data-role="stale-source" style="margin:8px 0 0"><strong>' + E(stale_line) + '</strong></p>' if isinstance(stale_line, str) and stale_line else '') +
         (paragraph(missing_note, margin='8px 0 0') if missing_note else '') +
         (paragraph(device_note, margin='8px 0 0') if device_note else ''), padding='16px 24px 0')]
     sections = [(4, 'comparison', 'comparison_note', v.comparison_block),
