@@ -333,6 +333,14 @@ class EnergySnapshotCoordinator:
             # Outside the refresh catch: Repair errors must remain observable.
             from .energy_repairs import publish_missing_import
             publish_missing_import(self)
+        # Repairs use their own guarded Recorder/configuration read and also run
+        # without a tariff or a successful snapshot refresh.
+        now_utc = datetime.now(timezone.utc)
+        bucket = int(now_utc.timestamp()) // 300
+        if getattr(self, '_stale_repairs_bucket', None) != bucket:
+            self._stale_repairs_bucket = bucket
+            from .energy_repairs import async_publish_stale_sources
+            await async_publish_stale_sources(self)
 
     def _publish_energy_update(self, result):
         """Server-tick-only, control-only notification after final fresh guards.

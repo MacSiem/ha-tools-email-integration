@@ -81,6 +81,18 @@
     "reports_delivery_problem": {
       "title": "Próba wysyłki raportu wymaga uwagi",
       "description": "Próba wysyłki raportu zakończyła się błędem, częściową akceptacją albo jej wynik jest nieustalony. Przed ponowną wysyłką sprawdź stan raportów i ustawienia integracji. Nieustalony wynik może oznaczać, że wiadomość została już przyjęta: nie ponawiaj jej automatycznie. To powiadomienie znika po późniejszej akceptacji raportu przez SMTP lub usługę powiadomień. Akceptacja nie potwierdza dostarczenia do odbiorcy."
+    },
+    "energy_stale_source": {
+      "title": "Brak aktualizacji źródła energii {name} od {since}",
+      "description": "Home Assistant nie otrzymuje aktualnego stanu źródła [{name}]({link}) od {since}. Sprawdź jego stan i połączenie. Naprawa zniknie po powrocie aktualizacji."
+    },
+    "energy_grid_is_devices": {
+      "title": "Import energii jest sumą urządzeń",
+      "description": "Źródła importu sieciowego są tymi samymi encjami co urządzenia. Nie można wyznaczyć pozycji „Niezmierzone”, a szacunki urządzeń są liczone jako import. Sprawdź [ustawienia Energii](/config/energy)."
+    },
+    "energy_stale_external": {
+      "title": "Brak statystyk źródła energii {name} od {since}",
+      "description": "Recorder nie otrzymuje nowych statystyk źródła {name} od {since}. Nie oznacza to samo w sobie awarii urządzenia. Sprawdź [ustawienia Energii]({link}) i dostawcę statystyk."
     }
   },
   "entity": {
@@ -99,8 +111,12 @@
       "energy_next_cheap": {
         "name": "Następna tania strefa"
       },
-      "energy_today": {"name": "Import energii dziś"},
-      "energy_cheap_share_today": {"name": "Udział taniej energii dziś"},
+      "energy_today": {
+        "name": "Import energii dziś"
+      },
+      "energy_cheap_share_today": {
+        "name": "Udział taniej energii dziś"
+      },
       "energy_today_cost": {
         "name": "Koszt zużycia dziś"
       },
