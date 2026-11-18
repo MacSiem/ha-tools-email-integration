@@ -431,13 +431,11 @@ def _build_report(inputs):
         if ranges:
             missing_devices.append({'id': sid, 'name': sources.get(sid, {}).get('name') or sid,
                 'ranges': [{'start': a.astimezone(zone).isoformat(), 'end': b.astimezone(zone).isoformat()} for a, b in ranges]})
-    source_ids = projection.get('source_ids')
-    source_ids = source_ids if isinstance(source_ids, list) else []
-    observed_rows = [raw for instant, raw in provided.items() if instant < cutoff]
-    never_observed = (set.intersection(*(set(row.get('missing_sources', [])) for row in observed_rows))
-                      if observed_rows else set(source_ids))
-    coverage = {'expected_sources': len(source_ids) if source_ids else None,
-        'measured_sources': len(set(source_ids) - never_observed) if source_ids else None,
+    expected_ids = projection.get('expected_source_ids')
+    seen_ids = projection.get('seen_source_ids')
+    counts_known = isinstance(expected_ids, list) and isinstance(seen_ids, list)
+    coverage = {'expected_sources': len(set(expected_ids)) if counts_known else None,
+        'measured_sources': len(set(seen_ids) & set(expected_ids)) if counts_known else None,
         'expected_hours': expected, 'measured_hours': measured_hours,
         'ratio': coverage_ratio, 'complete': bool(expected) and measured_hours == expected,
         'status': 'complete' if expected and measured_hours == expected else 'partial' if has_data else 'no_data',

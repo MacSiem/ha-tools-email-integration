@@ -452,7 +452,9 @@ class EnergyAnalysisAccumulator:
                 'price_basis': active.get('price_basis') if known else None})
         if len(result) != len(self._rows) or len(groups) != len(self._rows):
             raise ValueError('report_projection_incomplete')
-        return {'hours': result, 'source_ids': list(self._ids), 'source_first': deepcopy(self._source_first), 'fixed_share': active.get('report_fixed_share') if active else None,
+        return {'hours': result, 'source_ids': list(self._ids), 'source_first': deepcopy(self._source_first),
+                'expected_source_ids': sorted(self._expected_sources),
+                'seen_source_ids': sorted(self._seen_sources & self._expected_sources), 'fixed_share': active.get('report_fixed_share') if active else None,
                 'currency': active.get('currency') if active else None,
                 'price_basis': active.get('price_basis') if active else None,
                 'fees': deepcopy(active['fees']) if active else None,

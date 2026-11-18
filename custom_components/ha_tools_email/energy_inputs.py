@@ -244,6 +244,18 @@ async def async_collect_inputs(service, configuration, period, context, accumula
         values = await async_short_hour(service, configuration, completed, measured_until, guard)
         cell = await service._cpu(partial(short_projection, values, configuration, active, completed, measured_until, projection.get('source_first')), guard)
         projection['hours'].append(cell)
+        expected_ids = set(projection['expected_source_ids'])
+        seen_ids = set(projection['seen_source_ids'])
+        first = projection.get('source_first', {})
+        for row in configuration['grid_sensors']:
+            sid = row['entity_id']
+            if values.get(sid) is not None or sid not in first or (
+                    first[sid] is not None and first[sid] <= completed.timestamp() * 1000):
+                expected_ids.add(sid)
+                if values.get(sid) is not None:
+                    seen_ids.add(sid)
+        projection['expected_source_ids'] = sorted(expected_ids)
+        projection['seen_source_ids'] = sorted(seen_ids & expected_ids)
         projection['measurement_fingerprint'] = hashlib.sha256(json.dumps(
             {'completed': projection.get('measurement_fingerprint'), 'partial': cell},
             sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
