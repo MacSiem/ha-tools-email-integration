@@ -67,6 +67,7 @@ class LogHistory:
         raw = await self.store.async_load()
         if isinstance(raw, dict) and raw.get('schema') == 1 and isinstance(raw.get('hours'), dict) and isinstance(raw.get('coverage'), list):
             # Scrub legacy pre-release snapshots, preserving only aggregate fields.
+            changed = False
             for groups in raw['hours'].values():
                 if isinstance(groups, dict):
                     for row in groups.values():
@@ -74,6 +75,9 @@ class LogHistory:
                             for field in tuple(row):
                                 if field not in ('name', 'level', 'count', 'minutes'):
                                     row.pop(field)
+                                    changed = True
+            if changed:
+                await self.store.async_save_confirmed(raw)
             self.data = raw
         source = self.hass.data.get('system_log')
         if source is None or not hasattr(source, 'paths_re'):
