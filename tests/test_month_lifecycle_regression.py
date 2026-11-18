@@ -20,7 +20,7 @@ class MonthLifecycleTest(unittest.IsolatedAsyncioTestCase):
             ids = tuple(row['entity_id'] for row in sensors)
             data = fixtures.fixtures.readings(start.isoformat(), end.isoformat(), value=1, sources=ids)
             if 'sensor.new' in ids:
-                data['source_first'] = {'sensor.grid': 0, 'sensor.new': first}
+                data['source_first'] = {'sensor.grid': 0, 'sensor.new': first, 'sensor.device': 0}
                 for row in data['source_buckets']['sensor.new']:
                     if row['from'] < first or row['from'] == gap:
                         row['kwh'] = None
@@ -36,6 +36,20 @@ class MonthLifecycleTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(report['html'])
             self.assertIn('previous', report['summary']['comparisons'])
             self.assertEqual('common_measurements', report['summary']['comparisons']['previous']['comparison_scope'])
+
+    def test_shared_first_metadata_preserves_missing_and_none_grid_entries(self):
+        from tests.test_analysis_group_projection import GroupProjectionTest
+        from tests.test_energy_weighted_comparison import readings
+        f = GroupProjectionTest()
+        grid = readings(f.start, f.end, sources=('sensor.grid', 'sensor.new'), value=12)
+        grid['source_first'] = {'sensor.new': None, 'sensor.parent': 0}
+        for row in grid['source_buckets']['sensor.new']:
+            row['kwh'] = None
+        projection = f.builder().add_chunk(grid, f.start, f.end, consumer_snapshot=f.consumer(), include_group_hours=True)
+        self.assertEqual({'sensor.new': None}, projection['grid_source_first'])
+        for hour in projection['hours']:
+            self.assertEqual(['sensor.grid'], hour['grid_source_expected'])
+        stream.group_projection_evidence(projection, datetime.fromisoformat(f.start), datetime.fromisoformat(f.end))
 
     def test_forged_lifecycle_proof_rejected(self):
         from tests.test_analysis_group_projection import GroupProjectionTest
