@@ -1,4 +1,5 @@
 """Durable synthetic log stream across restart and native 24-hour coverage."""
+import inspect
 import logging
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -62,7 +63,7 @@ async def test_restart_in_active_hour_report_and_24h_sensors(hass, hass_storage,
         conn = SimpleNamespace(send_result=lambda _id, value: results.append(value),
                                send_error=lambda *_args: pytest.fail('preview rejected'))
         with patch.object(ws, '_utcnow', return_value=end):
-            await ws._ws_preview_log_digest(hass, conn, {'id': 1, 'cadence': cadence, 'timezone': 'UTC'})
+            await inspect.unwrap(ws._ws_preview_log_digest)(hass, conn, {'id': 1, 'cadence': cadence, 'timezone': 'UTC'})
         if cadence == 'daily':
             result = results[0]
             assert result['period']['semantics'] == 'previous_completed_calendar_period'
