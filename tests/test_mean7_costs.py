@@ -61,11 +61,12 @@ class MeanSevenCostTest(unittest.TestCase):
     def test_different_missing_hours_reject_average_despite_each_day_ninety_percent(self):
         snapshots, periods, book = self.fixture(missing={1: {0}, 2: {1}})
         result = self.compare(snapshots, periods, book)
-        self.assertEqual('unknown', result['status'])
+        self.assertEqual('ready', result['status'])
+        self.assertEqual('common_measurements', result['comparison_scope'])
         self.assertEqual(.8, result['coverage']['common_current'])
-        self.assertEqual('unknown', result['costs']['status'])
-        self.assertIsNone(result['costs']['current']['usage_cost'])
-        self.assertIsNone(result['costs']['delta_cost'])
+        self.assertEqual('ready', result['costs']['status'])
+        self.assertEqual('44.80', result['costs']['current']['usage_cost'])
+        self.assertEqual('28.80', result['costs']['delta_cost'])
 
     def test_average_before_cent_rounding_includes_zero_days(self):
         snapshots, periods, _ = self.fixture(hours=1, quantities=[1, 1, 1, 1, 1, 0, 0, 0])

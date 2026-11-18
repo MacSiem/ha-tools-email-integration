@@ -166,9 +166,10 @@ class CalendarPlanTest(unittest.TestCase):
                     self.assertEqual(0, model.retained_cells)
         missing = ((0, stamp(BOUNDS[0]['start'])), (1, stamp(BOUNDS[1]['start'])+3600000))
         shared, _ = run_pair(plan=plan, book=tariff(), missing=missing)
-        self.assertEqual('unknown', shared['status'])
+        self.assertEqual('ready', shared['status'])
+        self.assertEqual('common_measurements', shared['comparison_scope'])
         self.assertEqual(.8, shared['coverage']['common_current'])
-        self.assertIsNone(shared['costs']['current']['usage_cost'])
+        self.assertEqual('5.60', shared['costs']['current']['usage_cost'])
 
     def test_matched_hook_observes_before_advance_and_preserves_totals(self):
         seen = []

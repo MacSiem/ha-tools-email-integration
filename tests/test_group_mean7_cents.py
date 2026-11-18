@@ -108,8 +108,8 @@ class MeanGroupCentsTest(unittest.TestCase):
         result=mean.compare_daily_group_mean7(projections,periods,timezone_name=zone,
             tariff=rates,household_comparison=compared)
         self.assert_cost_partitions(result,compared)
-        # One25h plus six24h baselines: 169h/7, no floor-to-whole-seconds.
-        self.assertEqual(169*3600/7,compared['costs']['baseline']['mask_source_seconds'])
+        # The extra fold has no matching source-hour in the other windows.
+        self.assertEqual(24*3600,compared['costs']['baseline']['mask_source_seconds'])
         self.assertEqual(compared['costs']['baseline']['mask_source_seconds'],
             result['unassigned']['costs']['baseline']['mask_source_seconds'])
 
