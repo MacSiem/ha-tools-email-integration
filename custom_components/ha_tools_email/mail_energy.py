@@ -64,6 +64,7 @@ _COMPARE = {
     'avg_7d': ('średnia 7 dni', '7-day average'),
     'previous_week': ('poprzedni tydzień', 'previous week'),
     'previous_month': ('poprzedni miesiąc', 'previous month'),
+    'previous_year': ('poprzedni rok', 'previous year'),
     'same_week_last_year': ('ten sam tydzień rok temu', 'same week last year'),
     'same_month_last_year': ('ten sam miesiąc rok temu', 'same month last year'),
 }
@@ -326,7 +327,14 @@ class _View:
 
     def comparison_block(self):
         rows = []
+        seen_year = []
         for c in self.comparisons:
+            # The year resolver's previous and year_ago plans both denote the
+            # preceding calendar year. Preserve distinct facts if they differ.
+            if self.kind == 'year' and c.get('key') == 'previous_year':
+                if c in seen_year:
+                    continue
+                seen_year.append(c)
             delta = c.get('delta_kwh')
             known = _numeric(delta)
             cls = 'warn' if known and delta > 0 else 'good' if known and delta < 0 else 'tx2'

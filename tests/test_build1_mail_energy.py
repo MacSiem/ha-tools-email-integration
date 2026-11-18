@@ -23,6 +23,27 @@ GOLDEN = json.loads((ROOT / 'tests/fixtures/build1/golden-energy-2026-10-17.json
 
 
 class Build1MailEnergyTests(unittest.TestCase):
+    def test_annual_comparison_is_translated_and_duplicate_facts_shown_once(self):
+        from html import unescape
+        self.model['period'].update(kind='year', start='2026-01-01T00:00:00+01:00',
+                                    end='2027-01-01T00:00:00+01:00')
+        row = {'key': 'previous_year', 'label': 'previous_year', 'kwh': None,
+               'delta_kwh': None, 'coverage_ok': False}
+        self.model['comparisons'] = [row, copy.deepcopy(row)]
+        self.model['daily'] = [{'start': '2026-01-01T00:00:00+01:00',
+                                'kwh': 1, 'prev_kwh': None}]
+        for language, label in (('pl', 'poprzedni rok'), ('en', 'previous year')):
+            rendered = self.render(language=language)
+            for field in ('text', 'html'):
+                visible = unescape(rendered[field])
+                self.assertNotIn('previous_year', visible)
+                self.assertEqual(1, visible.count('vs ' + label))
+            self.assertIn('kreska = ' + label if language == 'pl' else 'tick = ' + label, unescape(rendered['html']))
+            self.assertIn(label, unescape(rendered['html']).split('legend-group')[-1])
+        # Differing results must never be hidden just because their labels agree.
+        self.model['comparisons'][1]['kwh'] = 10
+        self.assertEqual(2, self.render()['text'].count('vs poprzedni rok'))
+
     def test_previous_period_ticks_use_clipped_foreground_without_image_dependencies(self):
         from html.parser import HTMLParser
         class Markers(HTMLParser):
