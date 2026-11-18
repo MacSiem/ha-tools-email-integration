@@ -182,6 +182,33 @@ class Build1ServiceTest(unittest.TestCase):
                 self.assertFalse(h.subject.context_is_current(result))
         asyncio.run(run())
 
+    def test_report_request_survives_clock_boundary_but_refreshes_and_reauthorizes(self):
+        async def run():
+            h = Harness(); h.now = datetime(2026, 1, 4, 12, 4, 59, tzinfo=UTC)
+            start = h.now
+            async def advance_once(ids, begin, end):
+                if h.now == start:
+                    h.now += timedelta(seconds=2)
+            h.on_read = advance_once
+            async def short(subject, configuration, begin, end, guard):
+                await guard()
+                return {'sensor.grid': '0.7', 'sensor.device': '0.2'}
+            with h.patches(), patch.object(inputs, 'async_short_hour', short):
+                first = await h.subject.async_get_build1_model('year', 'user', mode='full')
+                self.assertEqual('2026-01-04T11:55:00+00:00', first['context']['report_cutoff'])
+                self.assertTrue(await h.subject.async_validate_result(first, 'user'))
+                h.on_read = None
+                second = await h.subject.async_get_build1_model('year', 'user', mode='full')
+                self.assertEqual('2026-01-04T12:00:00+00:00', second['context']['report_cutoff'])
+                count = len(h.queries)
+                h.now += timedelta(seconds=30)
+                cached = await h.subject.async_get_build1_model('year', 'user', mode='full')
+                self.assertEqual(second['snapshot_id'], cached['snapshot_id'])
+                self.assertEqual(count, len(h.queries))
+                h.storage.current_feature_access_revision += 1
+                self.assertFalse(await h.subject.async_validate_result(second, 'user'))
+        asyncio.run(run())
+
     def test_permission_and_revision_during_extra_history_reads_fail_closed(self):
         async def run():
             for mutate in ('permission', 'revision'):
