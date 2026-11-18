@@ -399,7 +399,7 @@ class EntityContractTests(unittest.IsolatedAsyncioTestCase):
         sensor, binary = entity_modules()
         c = energy.EnergySnapshotCoordinator(types.SimpleNamespace(config=types.SimpleNamespace(time_zone='UTC')), None)
         from tests.test_build1_energy_entities import build
-        c.data = build({'profile': classified(), 'revision': 42}, usage(), now='2026-10-18T12:04Z')
+        c.data = build({'profile': classified(), 'revision': 42}, usage(), now='2026-10-18T12:09Z')
         c.tariff_context_is_current = lambda result: True
         hass = types.SimpleNamespace(data={'ha_tools_email': {'energy_snapshot': c}})
         entry = types.SimpleNamespace(entry_id='stable-entry')

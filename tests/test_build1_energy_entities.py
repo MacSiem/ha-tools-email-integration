@@ -17,7 +17,7 @@ projection = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(projection)
 
 
-def build(state=None, measured=None, now='2026-10-18T12:04Z', zone='UTC'):
+def build(state=None, measured=None, now='2026-10-18T12:09Z', zone='UTC'):
     return projection.build_entity_snapshot(state or {'profile': classified(), 'revision': 4},
         measured if measured is not None else usage(), now=at(now), measurement_timezone=zone,
         _legacy_builder=energy.build_snapshot)[0]
@@ -28,7 +28,7 @@ class PublicEntityProjectionTests(unittest.TestCase):
         state = {'profile': classified(), 'revision': 4}
         measured = usage()
         before = copy.deepcopy((state, measured))
-        base = energy.build_snapshot(state, measured, now=at('2026-10-18T12:04Z'), measurement_timezone='UTC')
+        base = energy.build_snapshot(state, measured, now=at('2026-10-18T12:09Z'), measurement_timezone='UTC')
         result = build(state, measured)
         self.assertEqual(before, (state, measured))
         self.assertEqual(base, {key: value for key, value in result.items() if key != 'entity_facts'})
@@ -51,7 +51,7 @@ class PublicEntityProjectionTests(unittest.TestCase):
         new['zones'][0]['classification'] = 'expensive'
         b = book([version(valid_to='2026-10-18', profile=old),
                   version('2026-10-18', version_id='new', profile=new)])
-        result = build({'book': b, 'revision': 7}, usage('2026-10-17T00:00Z', 23), now='2026-10-17T23:04Z')
+        result = build({'book': b, 'revision': 7}, usage('2026-10-17T00:00Z', 23), now='2026-10-17T23:09Z')
         facts = result['entity_facts']
         self.assertEqual('expensive', result['current']['zone_class'])
         self.assertEqual(23, facts['import_kwh'])
@@ -71,7 +71,7 @@ class PublicEntityProjectionTests(unittest.TestCase):
         self.assertIsNone(build({'profile': p, 'revision': 1})['entity_facts']['cheap_share_pct'])
         p = classified()
         p['rules'] = [{'zone': 'night', 'intervals': [{'from': '00:30', 'to': '01:00'}]}]
-        result = build({'profile': p, 'revision': 1}, usage(hours=1), now='2026-10-18T01:04Z')
+        result = build({'profile': p, 'revision': 1}, usage(hours=1), now='2026-10-18T01:09Z')
         self.assertEqual(1, result['entity_facts']['import_kwh'])
         self.assertIsNone(result['entity_facts']['cheap_share_pct'])
 
@@ -100,7 +100,7 @@ class PublicEntityProjectionTests(unittest.TestCase):
 
     def test_fall_day_measurement_uses_utc_intervals_and_local_midnight(self):
         measured = usage('2026-10-24T22:00Z', 24)
-        facts = build(measured=measured, now='2026-10-25T23:04+01:00', zone='Europe/Warsaw')['entity_facts']
+        facts = build(measured=measured, now='2026-10-25T23:09+01:00', zone='Europe/Warsaw')['entity_facts']
         self.assertEqual(24, facts['import_kwh'])
         self.assertEqual('2026-10-24T22:00:00+00:00', facts['measurement_from'])
         self.assertEqual('2026-10-25T22:00:00+00:00', facts['measurement_through'])
