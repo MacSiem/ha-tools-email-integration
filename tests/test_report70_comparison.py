@@ -73,8 +73,9 @@ class Report70ComparisonTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('2026-03-27T23:00:00+00:00', prior['start'])
         self.assertEqual('2026-03-28T23:00:00+00:00', prior['end'])
         self.assertEqual(24, prior['hours'])
-        self.assertEqual((23, 12, 11), tuple(comparison[key] for key in ('current_kwh','baseline_kwh','delta_kwh')))
-        self.assertEqual('calendar_totals', comparison['comparison_scope'])
+        self.assertEqual((23, 11.5, 11.5), tuple(comparison[key] for key in ('current_kwh','baseline_kwh','delta_kwh')))
+        self.assertEqual('common_measurements', comparison['comparison_scope'])
+        self.assertEqual((23, 12), (comparison['full_current_kwh'], comparison['full_baseline_kwh']))
         costs = comparison['costs']
         self.assertEqual(('23.00','24.00','-1.00'),
             (costs['current']['usage_cost'],costs['baseline']['usage_cost'],costs['delta_cost']))
@@ -118,10 +119,11 @@ class Report70ComparisonTest(unittest.IsolatedAsyncioTestCase):
             self.side_values(h, request, current=1, baseline=1)
             with h.patches(): report = await self.prepare(h, request)
             comparison = self.previous(report)
-            self.assertEqual(hours, comparison['current_kwh'])
-            self.assertEqual(prior_hours, comparison['baseline_kwh'])
+            self.assertEqual(min(hours, prior_hours), comparison['current_kwh'])
+            self.assertEqual(min(hours, prior_hours), comparison['baseline_kwh'])
+            self.assertEqual((hours, prior_hours), (comparison['full_current_kwh'], comparison['full_baseline_kwh']))
             self.assertTrue(comparison['baseline_periods'][0]['start'].startswith(prior_start))
-            self.assertEqual('calendar_totals', comparison['comparison_scope'])
+            self.assertEqual('calendar_totals' if hours == prior_hours else 'common_measurements', comparison['comparison_scope'])
             self.assertTrue(all(0 < (b-a).total_seconds() <= 168*3600 for _,a,b in h.queries))
 
     async def test_partial_common_mask_is_not_replaced_by_full_current_kpi(self):
