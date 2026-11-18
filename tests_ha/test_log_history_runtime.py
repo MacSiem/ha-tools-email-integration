@@ -1,5 +1,6 @@
 """Durable synthetic log stream across restart and native 24-hour coverage."""
 import logging
+from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -87,9 +88,13 @@ async def test_retention_prunes_older_than_33_days(hass, freezer):
     logging.getLogger('fixture.retention').warning('old synthetic')
     freezer.move_to('2026-10-01T01:00:00Z')
     await history.async_checkpoint()
+    freezer.move_to('2026-10-03T00:00:00Z')
+    logging.getLogger('fixture.retention').warning('retained synthetic')
+    await history.async_checkpoint()
     freezer.move_to('2026-11-04T02:00:00Z')
     await history.async_checkpoint()
-    assert not history.data['hours']
+    rows, _ = await history.async_query(datetime(2026, 10, 1, tzinfo=UTC), datetime(2026, 11, 4, 2, tzinfo=UTC))
+    assert sum(row['count'] for row in rows if row['name'] == 'fixture.retention') == 1
     await history.async_stop()
 
 
@@ -110,3 +115,23 @@ async def test_partial_empty_observation_is_not_reported_as_wholly_unavailable(h
     assert report['summary']['total'] == 0
     assert report['summary']['counts_complete'] is False
     assert 'Niepełne pokrycie dziennika' in report['body']
+
+
+async def test_failed_checkpoint_retries_without_duplicate_or_lost_counts(hass, freezer):
+    freezer.move_to('2026-10-01T00:00:00Z')
+    assert await async_setup_component(hass, 'system_log', {})
+    history = LogHistory(hass)
+    await history.async_start()
+    freezer.move_to('2026-10-01T00:10:00Z')
+    logging.getLogger('fixture.retry').warning('never persist this content')
+    freezer.move_to('2026-10-01T01:00:00Z')
+    with patch.object(history.store, 'async_save_confirmed', side_effect=OSError('synthetic')):
+        with pytest.raises(OSError):
+            await history.async_checkpoint()
+    await history.async_checkpoint()
+    rows, coverage = await history.async_query(datetime(2026, 10, 1, tzinfo=UTC),
+                                               datetime(2026, 10, 1, 1, tzinfo=UTC))
+    assert sum(row['count'] for row in rows if row['name'] == 'fixture.retry') == 1
+    assert coverage['complete'] is True
+    assert 'never persist this content' not in repr(await history.store.async_load())
+    await history.async_stop()
