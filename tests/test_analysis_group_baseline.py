@@ -170,8 +170,11 @@ class AnalysisGroupBaselineTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual('ready', compared['status'])
             self.assertEqual('ready', room['status'])
             self.assertEqual('common_measurements', room['comparison_scope'])
-            self.assertEqual(0, float(room['delta_kwh']))
-            self.assertIsNotNone(room['delta_usage_cost'])
+            # 21 shared hours: current 4 kWh/h, baseline 2 kWh/h.
+            self.assertEqual((84, 42, 42), tuple(float(room[key]) for key in
+                ('current_kwh', 'baseline_kwh', 'delta_kwh')))
+            self.assertEqual(21 * 3600, room['coverage']['common_group_seconds'])
+            self.assertEqual('42.00', room['delta_usage_cost'])
             self.assertFalse(compared['groups']['reconciles_household_delta'])
 
     async def test_service_proves_energy_partition_only_for_actual_shared_missing_hours(self):

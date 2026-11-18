@@ -84,12 +84,16 @@ class Report70ComparisonTest(unittest.IsolatedAsyncioTestCase):
             (costs['current']['total_cost'],costs['baseline']['total_cost'],costs['delta_total_cost']))
         self.assertIsNone(comparison['groups']['devices']['sensor.device']['delta_fixed_cost'])
         chart = comparison['chart']
-        self.assertFalse(chart['reconciles_comparison_energy'])
-        self.assertEqual('partial', chart['status'])
-        self.assertEqual('incomplete_marker_mapping', chart['reason'])
+        self.assertTrue(chart['reconciles_comparison_energy'])
+        self.assertEqual('ready', chart['status'])
+        self.assertIsNone(chart['reason'])
         self.assertEqual(23, len(chart['markers']))
         self.assertTrue(all(row['status'] == 'ready' for row in chart['markers']))
-        self.assertEqual(Decimal('11.5'), sum(Decimal(row['baseline_kwh']) for row in chart['markers']))
+        for key in ('current_kwh', 'baseline_kwh'):
+            self.assertEqual(Decimal(str(comparison[key])), sum(Decimal(row[key]) for row in chart['markers']))
+        # The unmatched 24th baseline hour remains in the full-period total.
+        self.assertEqual(Decimal('0.5'), Decimal(str(comparison['full_baseline_kwh'])) -
+                         sum(Decimal(row['baseline_kwh']) for row in chart['markers']))
         self.assertEqual('Europe/Warsaw', report['context']['comparison_timezone'])
         self.assertEqual('UTC', report['context']['measurement_timezone'])
         self.assertEqual('daily', report['context']['comparison_calendar_kind'])
