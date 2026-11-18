@@ -75,7 +75,9 @@ class KnownProjectionTest(unittest.TestCase):
         self.assertIsNone(result['unmeasured']['kwh'])
         for lang in ('pl', 'en'):
             out = mail.render(result, language=lang, timezone_name='UTC', hour_cycle='24')
-            self.assertIn('bez uwzględnienia PV' if lang == 'pl' else 'excluding solar', out['text'])
+            for part in ('html', 'text'):
+                self.assertIn('szacunkowe' if lang == 'pl' else 'estimates', out[part])
+                self.assertIn('bez uwzględnienia PV' if lang == 'pl' else 'excluding solar', out[part])
 
     def test_source_lifecycle_from_recorder_first_observation(self):
         from tests.test_energy_measurements import measurements

@@ -831,8 +831,8 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
 
     groups = snapshot.get('groups') or {}
     if groups.get('device_cost_basis') == 'purchase_price_excluding_pv':
-        device_note = tr('Koszty urządzeń według ceny zakupu, bez uwzględnienia PV i baterii.',
-                         'Device costs use the purchase price, excluding solar and battery effects.')
+        device_note = tr('Koszty urządzeń są szacunkowe: według ceny zakupu, bez uwzględnienia PV i baterii.',
+                         'Device costs are estimates based on the purchase price, excluding solar and battery effects.')
         text_parts.append(device_note)
         html_parts.append('<p class="note">' + escape(device_note) + '</p>')
     def friendly_name(kind, identity, index, item=None):

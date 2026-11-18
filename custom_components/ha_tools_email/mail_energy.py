@@ -678,7 +678,7 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
     if not v.complete and type(measured_sources) is int and type(expected_sources) is int and _numeric(available):
         missing_count = max(0, expected_sources - measured_sources)
         unit = fmt.plural(missing_count, 'źródła', 'źródeł', 'źródeł', language='pl')
-        missing_label = ((f'bez {missing_count} {unit}' if v.lang == 'pl' else f'{missing_count} missing sources')
+        missing_label = ((f'bez {missing_count} {unit}' if v.lang == 'pl' else f'{missing_count} missing {"source" if missing_count == 1 else "sources"}')
                          if missing_count else ('niepełne pokrycie' if v.lang == 'pl' else 'partial coverage'))
         subject = f'{v.tr("energy")}: {v.subject_label()} — {pre_summary} · {missing_label}'
     kpis = (kpi_cell(partial_label, v.n(available), 'kWh', comparison, 'warn' if _numeric(first.get('delta_kwh')) and first['delta_kwh'] > 0 and change else 'good' if change else 'tx2')
@@ -713,8 +713,8 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
         (paragraph(missing_note, margin='8px 0 0') if missing_note else '') +
         (paragraph(device_note, margin='8px 0 0') if device_note else ''), padding='16px 24px 0')]
     if model.get('device_cost_basis') == 'purchase_price_excluding_pv':
-        note = ('Koszty urządzeń według ceny zakupu, bez uwzględnienia PV i baterii.' if v.lang == 'pl'
-                else 'Device costs use the purchase price, excluding solar and battery effects.')
+        note = ('Koszty urządzeń są szacunkowe: według ceny zakupu, bez uwzględnienia PV i baterii.' if v.lang == 'pl'
+                else 'Device costs are estimates based on the purchase price, excluding solar and battery effects.')
         v.lines.append(note)
         blocks.append(section(paragraph(note)))
     sections = [(4, 'comparison', 'comparison_note', v.comparison_block),

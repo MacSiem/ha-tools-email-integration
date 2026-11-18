@@ -29,6 +29,15 @@ class Mail136Test(unittest.TestCase):
         for path in ('comparisons.previous.full_baseline_kwh', 'chart.bins.23.start'):
             self.assertIn(path, result['csv'])
 
+    def test_pv_purchase_price_costs_are_identified_as_estimates(self):
+        self.s['groups']['device_cost_basis'] = 'purchase_price_excluding_pv'
+        for language in ('pl', 'en'):
+            result = fixture.REPORT.render_energy_analysis(self.s, language=language,
+                timezone_name='Europe/Warsaw', hour_cycle='24')
+            for part in ('html', 'text'):
+                self.assertIn('szacunkowe' if language == 'pl' else 'estimates', result[part])
+                self.assertIn('bez uwzględnienia PV' if language == 'pl' else 'excluding solar', result[part])
+
     def test_rate_hours_do_not_ignore_calendar_exceptions(self):
         self.s['rates'][0]['profile']['exceptions'] = [{'zone': 'low', 'dates': ['2026-10-10'],
             'intervals': [{'from': '00:00', 'to': '24:00'}]}]
