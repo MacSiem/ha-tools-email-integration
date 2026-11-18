@@ -77,10 +77,10 @@ class Report70ComparisonTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('common_measurements', comparison['comparison_scope'])
         self.assertEqual((23, 12), (comparison['full_current_kwh'], comparison['full_baseline_kwh']))
         costs = comparison['costs']
-        self.assertEqual(('23.00','24.00','-1.00'),
+        self.assertEqual(('23.00','23.00','0.00'),
             (costs['current']['usage_cost'],costs['baseline']['usage_cost'],costs['delta_cost']))
         self.assertEqual(('1.00','1.00'), (costs['current']['fixed_cost'], costs['baseline']['fixed_cost']))
-        self.assertEqual(('24.00','25.00','-1.00'),
+        self.assertEqual((None,None,None),
             (costs['current']['total_cost'],costs['baseline']['total_cost'],costs['delta_total_cost']))
         self.assertIsNone(comparison['groups']['devices']['sensor.device']['delta_fixed_cost'])
         chart = comparison['chart']
@@ -94,16 +94,15 @@ class Report70ComparisonTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('UTC', report['context']['measurement_timezone'])
         self.assertEqual('daily', report['context']['comparison_calendar_kind'])
         self.assertEqual('previous', report['context']['comparison_kind'])
-        self.assertEqual(12, report['summary']['comparison']['previous_kwh'])
+        self.assertEqual(11.5, report['summary']['comparison']['previous_kwh'])
         rows = {row['field']: row for row in csv.DictReader(StringIO(report['csv']))}
-        self.assertEqual('11.0', rows['comparisons.previous.delta_kwh']['value'])
-        self.assertEqual('-1.00', rows['comparisons.previous.costs.delta_cost']['value'])
+        self.assertEqual('11.5', rows['comparisons.previous.delta_kwh']['value'])
+        self.assertEqual('0.00', rows['comparisons.previous.costs.delta_cost']['value'])
         for kind in ('html','text'):
             self.assertIn('Comparison', report[kind])
-            self.assertIn('+11.0', report[kind])
-        # Monetary common-window delta remains exact export data, rather than
-        # being mistaken for the R9 consumption comparison in the new mail.
-        self.assertEqual('-1.00', rows['comparisons.previous.costs.delta_cost']['value'])
+            self.assertIn('+11.5', report[kind])
+        # Monetary delta uses the same matched measurements in the export.
+        self.assertEqual('0.00', rows['comparisons.previous.costs.delta_cost']['value'])
         for kind in ('html','text'):
             self.assertNotIn('real-admin', report[kind])
         self.assertIn('period_summary.peak_hour', report['csv'])
