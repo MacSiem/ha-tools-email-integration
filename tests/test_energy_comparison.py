@@ -166,7 +166,7 @@ class RuntimeComparisonTest(unittest.IsolatedAsyncioTestCase):
                 at=a+timedelta(hours=i)
                 rows.append({'start':at.timestamp(),'change':12 if at==start else 10 if at==baseline_start else 0})
             return {'sensor.grid':rows}
-        fx=ComposerFixture(end,points=points)
+        fx=ComposerFixture(end+timedelta(minutes=5),points=points)
         with fx.patches():
             # Existing partial analysis path owns these internal fragments.
             payload=await fx.analysis('week',anchor='2026-10-12',comparison='previous')
@@ -266,15 +266,20 @@ class ActualRecorderComparisonTest(unittest.IsolatedAsyncioTestCase):
                 comparison=payload['summary']['comparisons']['previous']
                 self.assertEqual('ready',comparison['status'])
                 self.assertEqual(Decimal(str(current)),Decimal(payload['summary']['total_kwh']))
-                self.assertEqual(previous,comparison['baseline_kwh'])
-                self.assertEqual(current-previous,comparison['delta_kwh'])
-                if previous:self.assertAlmostEqual((current-previous)/previous*100,comparison['percent'])
+                common_hours=min(current,(previous_end-previous_start).total_seconds()/3600)
+                paired_previous=common_hours*previous_rate
+                self.assertEqual(current,comparison['full_current_kwh'])
+                self.assertEqual(previous,comparison['full_baseline_kwh'])
+                self.assertEqual(common_hours,comparison['current_kwh'])
+                self.assertEqual(paired_previous,comparison['baseline_kwh'])
+                self.assertEqual(common_hours-paired_previous,comparison['delta_kwh'])
+                if paired_previous:self.assertAlmostEqual((common_hours-paired_previous)/paired_previous*100,comparison['percent'])
                 else:self.assertIsNone(comparison['percent'])
                 self.assertIsNone(payload['summary']['total_cost'])
                 if cadence=='daily' and now.month==3:
-                    self.assertEqual((23,12,11),(current,previous,comparison['delta_kwh']))
-                if cadence=='weekly':self.assertEqual((167,84,83),(current,previous,comparison['delta_kwh']))
-                if cadence=='monthly':self.assertEqual((743,336,407),(current,previous,comparison['delta_kwh']))
+                    self.assertEqual((23,12,11.5),(current,previous,comparison['delta_kwh']))
+                if cadence=='weekly':self.assertEqual((167,84,83.5),(current,previous,comparison['delta_kwh']))
+                if cadence=='monthly':self.assertEqual((743,336,336),(current,previous,comparison['delta_kwh']))
                 for body in (payload['body'],payload['html']):
                     self.assertIn('Comparison',body);self.assertIn('Europe/Warsaw',body)
                     # The random snapshot hash can contain these digits; inspect

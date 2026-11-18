@@ -168,9 +168,10 @@ class AnalysisGroupBaselineTest(unittest.IsolatedAsyncioTestCase):
             result = await h.subject.async_get_analysis('day', 'user', anchor='2026-10-10', comparison='previous')
             compared = result['comparisons']['previous']; room = compared['groups']['areas']['office']
             self.assertEqual('ready', compared['status'])
-            self.assertEqual('unknown', room['status'])
-            self.assertIsNone(room['delta_kwh'])
-            self.assertIsNone(room['delta_usage_cost'])
+            self.assertEqual('ready', room['status'])
+            self.assertEqual('common_measurements', room['comparison_scope'])
+            self.assertEqual(0, float(room['delta_kwh']))
+            self.assertIsNotNone(room['delta_usage_cost'])
             self.assertFalse(compared['groups']['reconciles_household_delta'])
 
     async def test_service_proves_energy_partition_only_for_actual_shared_missing_hours(self):

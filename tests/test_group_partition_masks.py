@@ -90,7 +90,7 @@ class GroupPartitionMasksTest(unittest.TestCase):
                   ('2026-10-23T22:00Z', '2026-10-24T22:00Z'))
         data = [self.projected(period, grid_missing=(20,), missing=()) for period in bounds]
         result, _ = self.compare(data, bounds=bounds, zone='Europe/Warsaw')
-        self.assertEqual('per_group_calendar_totals', result['areas']['area0']['comparison_scope'])
+        self.assertEqual('common_measurements', result['areas']['area0']['comparison_scope'])
         self.assertFalse(result['reconciles_household_delta'])
 
     def test_old_projection_is_accepted_without_partial_false_positive_and_full_is_preserved(self):

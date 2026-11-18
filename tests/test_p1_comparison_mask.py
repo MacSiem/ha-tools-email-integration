@@ -35,7 +35,7 @@ class ComparisonMaskTests(unittest.TestCase):
         inputs['tariff']={'defaultZone':'flat','rules':[],'zones':[{'id':'flat','energyRate':'.5','rate':'.5'}]}
         for row in inputs['projection']['hours']:row['zone']='flat'
         rendered=Build1MailEnergyTests();rendered.setUp();rendered.model=model.build_report(inputs)
-        for lang,matched,short,note in [('pl','Wspólne godziny','Godziny pomiarów:','Godziny nie rozróżniają dat'),('en','Matched hours','Reading hours:','Hours do not distinguish dates')]:
+        for lang,matched,short,note in [('pl','Wspólne odczyty','Godziny pomiarów:','Godziny nie rozróżniają dat'),('en','Matched readings','Reading hours:','Hours do not distinguish dates')]:
             result=rendered.render(language=lang)
             for body in (result['html'],result['text']):
                 self.assertIn(matched,body);self.assertIn(short,body);self.assertIn(note,body)
