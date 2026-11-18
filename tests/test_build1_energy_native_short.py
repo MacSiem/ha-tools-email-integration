@@ -153,8 +153,8 @@ class NativeShortCoordinatorTests(unittest.IsolatedAsyncioTestCase):
             entered.set(); await release.wait()
             return raw_at(start.isoformat())
         c._short_provider = pending
-        task = asyncio.create_task(self.refresh(c, metadata, '2026-10-18T19:07Z'))
-        await entered.wait(); c.async_stop(); release.set()
+        task = asyncio.create_task(self.refresh(c, metadata, '2026-10-18T19:12Z'))
+        await asyncio.wait_for(entered.wait(), timeout=1); c.async_stop(); release.set()
         with self.assertRaisesRegex(RuntimeError, 'energy_snapshot_unloaded'): await task
         self.assertIsNone(c.data)
         self.assertIsNone(c._short_state)
@@ -352,12 +352,12 @@ class NativeShortCoordinatorTests(unittest.IsolatedAsyncioTestCase):
             await release.wait()
             return raw_at(start.isoformat(), (5,))
         c._short_provider = delayed
-        await self.refresh(c, metadata, '2026-10-18T00:05Z')
+        await self.refresh(c, metadata, '2026-10-18T00:10Z')
         with patch.object(energy, 'async_grid_sensors', return_value=[{'entity_id': SID, 'name': 'Grid'}]), \
              patch.object(energy, 'async_get_energy_metadata', return_value=metadata):
-            first = asyncio.create_task(c.async_refresh(now=at('2026-10-18T00:05:30Z')))
+            first = asyncio.create_task(c.async_refresh(now=at('2026-10-18T00:10:30Z')))
             await asyncio.wait_for(entered.wait(), timeout=1)
-            second = asyncio.create_task(c.async_refresh(now=at('2026-10-18T00:05:31Z')))
+            second = asyncio.create_task(c.async_refresh(now=at('2026-10-18T00:10:31Z')))
             release.set()
             a, b = await asyncio.gather(first, second)
         self.assertEqual(2, len(calls))
