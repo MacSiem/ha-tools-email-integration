@@ -208,8 +208,10 @@ class EnergyAnalysisAccumulator:
         if include_group_hours:
             staged, projection = self._consumers.prepare_chunk_with_projection(
                 consumer_snapshot, evidence['hourly_buckets'], start, end)
+            first = snapshot.get('source_first')
+            first = first if isinstance(first, dict) else {}
             projection.update(grid_source_ids=list(ids), grid_provenance=deepcopy(provenance),
-                              grid_source_first=deepcopy(snapshot.get('source_first') or {}))
+                              grid_source_first={sid: deepcopy(first[sid]) for sid in ids if sid in first})
             for hour in projection['hours']:
                 hour['grid_source_expected'] = [sid for sid in ids
                     if hour['from'] in evidence['expected_per_source'][sid]]
