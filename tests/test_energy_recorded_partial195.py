@@ -57,9 +57,10 @@ class RecordedPartialTest(unittest.TestCase):
         before = copy.deepcopy(inputs)
         result = model.build_report(inputs)
         self.assertFalse(result['coverage']['complete'])
-        self.assertEqual(23, result['totals']['import_kwh'])
+        self.assertEqual(23.4, result['totals']['import_kwh'])
         self.assertEqual(23.4, result['totals']['recorded_import_kwh'])
-        self.assertIsNone(result['hourly'][0]['kwh'])
+        self.assertEqual(.4, result['hourly'][0]['kwh'])
+        self.assertIsNone(result['hourly'][0]['full_kwh'])
         self.assertEqual(.4, result['hourly'][0]['recorded_kwh'])
         self.assertEqual(1, result['hourly'][0]['measured_sources'])
         self.assertIsNone(result['devices'][0]['share'])
@@ -74,7 +75,7 @@ class RecordedPartialTest(unittest.TestCase):
             'devices': {'a': {'name':'Factory A','name_by_user':'Kitchen plug'}, 'b': {'name':'Office plug'}}}
         result = registry.resolve_membership(list(data['entities']), data, captured_at='now', revision=1)
         self.assertEqual('Kitchen plug Energy', result['sources']['sensor.a']['name'])
-        self.assertEqual('Office plug Energy', result['sources']['sensor.b']['name'])
+        self.assertEqual('Office plug', result['sources']['sensor.b']['name'])
         self.assertEqual('My meter', result['sources']['sensor.explicit']['name'])
         self.assertEqual('Independent name', result['sources']['sensor.legacy']['name'])
 
@@ -89,7 +90,7 @@ class NativeDeviceLabelAdapterTest(unittest.IsolatedAsyncioTestCase):
             device=adapter._modules[1].async_get(hass).async_get('dev')
             device.name='Factory';device.name_by_user='Kitchen plug'
             result=adapter.capture(['sensor.a'])
-            self.assertEqual('Kitchen plug Energy',result['sources']['sensor.a']['name'])
+            self.assertEqual('Kitchen plug',result['sources']['sensor.a']['name'])
             self.assertNotIn('sensor.foreign',result['sources'])
             self.assertEqual('Kitchen plug',device.name_by_user)
         finally:

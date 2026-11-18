@@ -339,7 +339,7 @@ class _View:
             if c.get('comparison_scope') == 'calendar_totals':
                 description += ' · ' + ('Pełne okresy' if self.lang == 'pl' else 'Full periods')
             if c.get('comparison_scope') == 'common_measurements':
-                matched = ('Wspólne godziny' if self.lang == 'pl' else 'Matched hours')
+                matched = ('Wspólne odczyty' if self.lang == 'pl' else 'Matched readings')
                 description += f' · {matched}: {self.energy(c.get("compared_current_kwh"))} / {self.energy(c.get("compared_baseline_kwh"))}'
             baseline = self.energy(c.get("kwh"), "tile")
             if c.get('comparison_scope') == 'common_measurements':
@@ -562,7 +562,10 @@ class _View:
             value = self.money(self.totals.get(key))
             display_label = self.tr(label) + (f' — {fixed_period_label}' if fixed_period_label else '')
             if not self.complete and key in ('energy_cost', 'variable_cost', 'usage_cost'):
-                display_label += ' (godziny z kompletem źródeł)' if self.lang == 'pl' else ' (complete-source hours)'
+                if self.totals.get('cost_scope') == 'known_source_readings':
+                    display_label += ' (znane odczyty)' if self.lang == 'pl' else ' (known readings)'
+                else:
+                    display_label += ' (godziny z kompletem źródeł)' if self.lang == 'pl' else ' (complete-source hours)'
             display_sub = sub.partition(' · ')[2] if fixed_period_label else sub
             rows.append(self.row(display_label, value, bold=bold, sub=display_sub))
             plain_label = self.tr(label) if fixed_period_label else display_label
@@ -675,7 +678,8 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
     if not v.complete and type(measured_sources) is int and type(expected_sources) is int and _numeric(available):
         missing_count = max(0, expected_sources - measured_sources)
         unit = fmt.plural(missing_count, 'źródła', 'źródeł', 'źródeł', language='pl')
-        missing_label = (f'bez {missing_count} {unit}' if v.lang == 'pl' else f'{missing_count} missing sources')
+        missing_label = ((f'bez {missing_count} {unit}' if v.lang == 'pl' else f'{missing_count} missing sources')
+                         if missing_count else ('niepełne pokrycie' if v.lang == 'pl' else 'partial coverage'))
         subject = f'{v.tr("energy")}: {v.subject_label()} — {pre_summary} · {missing_label}'
     kpis = (kpi_cell(partial_label, v.n(available), 'kWh', comparison, 'warn' if _numeric(first.get('delta_kwh')) and first['delta_kwh'] > 0 and change else 'good' if change else 'tx2')
             + '<td class="kpigap" style="width:2%"></td>'

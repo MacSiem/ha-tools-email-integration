@@ -37,9 +37,10 @@ class EnergyRecorderTest(unittest.TestCase):
 
     def test_missing_recorder_hour_withholds_period_total(self):
         result = self.compose(gap=True)
-        self.assertIsNone(result["summary"]["total_kwh"])
+        self.assertEqual(23, float(result["summary"]["total_kwh"]))
+        self.assertIsNone(result["summary"]["totals"]["kwh"])
         self.assertFalse(result["summary"]["coverage"]["complete"])
-        self.assertIn("Measured energy: Unknown kWh", result["body"])
+        self.assertIn("23", result["body"])
 
     def test_recorder_metadata_controls_wh_conversion(self):
         self.assertEqual(Decimal('0.024'),Decimal(self.compose(unit='Wh')['summary']['total_kwh']))

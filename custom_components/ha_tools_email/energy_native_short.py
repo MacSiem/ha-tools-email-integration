@@ -63,10 +63,8 @@ def merge_raw(previous, current, ids, start, end):
 def normalized_cells(raw, metadata, ids, start, end):
     """Prefix proofs reuse exact unit/source/duplicate rules; deltas are real cells.
 
-    normalize_short_hour requires an absolute hour start. At most eleven prefix
-    proofs recover each completed five-minute source delta from the actual raw
-    prefix. There is no additional IO, scaling or allocation between intervals.
-    A missing earlier cell cannot produce an invented later delta or total.
+    Each completed source cell is validated independently using the report
+    normalizer. A gap does not hide later real readings, and no value is invented.
     """
     from .energy_inputs import normalize_short_hour
     if not ids or len(ids) > 512:
@@ -74,18 +72,17 @@ def normalized_cells(raw, metadata, ids, start, end):
     if (start.timestamp() % 3600 or end.timestamp() % 300
             or not 0 < (end - start).total_seconds() < 3600):
         raise ValueError('invalid_native_short_window')
-    rows, previous = [], {sid: Decimal(0) for sid in ids}
-    cursor = start + timedelta(minutes=5)
-    while cursor <= end:
-        values = normalize_short_hour(raw, metadata, ids, start, cursor)
-        totals = {sid: Decimal(value) if value is not None else None for sid, value in values.items()}
-        pieces = [totals[sid] - previous[sid] if totals[sid] is not None and previous[sid] is not None else None for sid in ids]
+    rows = []
+    cursor = start
+    while cursor < end:
+        stop = cursor + timedelta(minutes=5)
+        values = normalize_short_hour(raw, metadata, ids, cursor, stop, allow_cell=True)
+        pieces = [Decimal(values[sid]) if values[sid] is not None else None for sid in ids]
         known = [value for value in pieces if value is not None]
         quantity = sum(known, Decimal(0)) if known else None
-        rows.append({'from': (cursor - timedelta(minutes=5)).isoformat(), 'to': cursor.isoformat(),
+        rows.append({'from': cursor.isoformat(), 'to': stop.isoformat(),
                      'kwh': str(quantity) if quantity is not None else None, 'unit': 'kWh',
                      'measured_sources': len(known), 'expected_sources': len(ids),
                      'missing_sources': [sid for sid, value in zip(ids, pieces) if value is None]})
-        previous = totals
-        cursor += timedelta(minutes=5)
+        cursor = stop
     return rows

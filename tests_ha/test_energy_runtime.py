@@ -170,7 +170,7 @@ async def test_native_recorder_external_import_without_state_prices_daily_moneta
     from homeassistant.components.recorder import models
     from homeassistant.components.recorder.statistics import async_add_external_statistics
 
-    freezer.move_to('2026-10-18T12:00:00+00:00')
+    freezer.move_to('2026-10-18T12:05:00+00:00')
     await hass.config.async_set_time_zone('UTC')
     manager = await async_get_manager(hass)
     manager.data = {'energy_sources': [{'type': 'grid', 'flow_from': [
@@ -207,16 +207,16 @@ async def test_native_recorder_external_import_without_state_prices_daily_moneta
         sid = registry.async_get_entity_id('sensor', DOMAIN, f'{entry.entry_id}_energy_{key}')
         assert float(hass.states.get(sid).state) == pytest.approx(expected)
     # Hourly external history cannot supply the current half-hour's real 5-min tail.
-    # Legacy completed-hour totals remain available, but native selected-current
-    # sensors must become unavailable rather than publishing a fabricated zero.
+    # Missing current short cells do not discard completed-hour readings.
+    # Coverage remains explicitly incomplete and no short values are invented.
     freezer.move_to('2026-10-18T12:30:00+00:00')
     incomplete = await coordinator.async_refresh()
     assert incomplete['today']['measurement_complete'] is True
     assert incomplete['today']['usage_cost'] == pytest.approx(hours * 1.2)
     assert incomplete['entity_facts']['coverage_complete'] is False
-    for key in ('today', 'today_cost', 'cheap_share_today'):
+    for key, expected in (('today', hours), ('today_cost', hours * 1.2), ('cheap_share_today', 100)):
         sid = registry.async_get_entity_id('sensor', DOMAIN, f'{entry.entry_id}_energy_{key}')
-        assert hass.states.get(sid).state == 'unavailable'
+        assert float(hass.states.get(sid).state) == pytest.approx(expected)
 
 
 async def test_native_timestamp_and_cheap_transition_publish_aware_values(hass, hass_storage, freezer):

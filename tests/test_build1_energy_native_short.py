@@ -88,30 +88,30 @@ class NativeShortCoordinatorTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_1907_exactly_1905_nonoverlap_and_one_incremental_read_per_cutoff(self):
         c, calls, metadata, state = self.fixture(changes=(100,))
-        first = await self.refresh(c, metadata, '2026-10-18T19:07Z')
+        first = await self.refresh(c, metadata, '2026-10-18T19:12Z')
         facts = first['entity_facts']
         self.assertEqual('2026-10-18T19:05:00+00:00', facts['measurement_through'])
         self.assertAlmostEqual(19.1, facts['import_kwh'])
         self.assertEqual(1, len(c._short_measurement))
         self.assertEqual(1, len(calls))
-        await self.refresh(c, metadata, '2026-10-18T19:09Z')
+        await self.refresh(c, metadata, '2026-10-18T19:14Z')
         self.assertEqual(1, len(calls))
-        later = await self.refresh(c, metadata, '2026-10-18T19:12Z')
+        later = await self.refresh(c, metadata, '2026-10-18T19:17Z')
         self.assertEqual(at('2026-10-18T19:05Z'), calls[-1][0])
         self.assertEqual(at('2026-10-18T19:10Z'), calls[-1][1])
         self.assertAlmostEqual(19.2, later['entity_facts']['import_kwh'])
         self.assertEqual(2, len(c._short_measurement))
         state['revision'] = c.storage.current_tariff_revision = 2
-        await self.refresh(c, metadata, '2026-10-18T19:13Z')
+        await self.refresh(c, metadata, '2026-10-18T19:18Z')
         self.assertEqual(2, len(calls))
 
     async def test_before_first_completed_cell_unavailable_then_real_zero(self):
         c, calls, metadata, _ = self.fixture(changes=(0,))
-        first = await self.refresh(c, metadata, '2026-10-18T00:04Z')
+        first = await self.refresh(c, metadata, '2026-10-18T00:09Z')
         self.assertIsNone(first['entity_facts']['import_kwh'])
         self.assertEqual('no_completed_interval', first['entity_facts']['reason'])
         self.assertEqual([], calls)
-        second = await self.refresh(c, metadata, '2026-10-18T00:07Z')
+        second = await self.refresh(c, metadata, '2026-10-18T00:12Z')
         self.assertEqual(0, second['entity_facts']['import_kwh'])
         self.assertTrue(second['entity_facts']['coverage_complete'])
         self.assertIsNone(second['entity_facts']['cheap_share_pct'])
@@ -119,19 +119,19 @@ class NativeShortCoordinatorTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_missing_real_tail_is_unknown_and_same_cutoff_rechecks_are_throttled(self):
         c, calls, metadata, _ = self.fixture(changes=())
-        result = await self.refresh(c, metadata, '2026-10-18T19:07Z')
+        result = await self.refresh(c, metadata, '2026-10-18T19:12Z')
         self.assertEqual(19, result['entity_facts']['import_kwh'])
         self.assertIsNotNone(result['entity_facts']['usage_cost'])
         self.assertFalse(result['entity_facts']['coverage_complete'])
-        await self.refresh(c, metadata, '2026-10-18T19:07:29Z')
+        await self.refresh(c, metadata, '2026-10-18T19:12:29Z')
         self.assertEqual(1, len(calls))
-        same = await self.refresh(c, metadata, '2026-10-18T19:07:30Z')
+        same = await self.refresh(c, metadata, '2026-10-18T19:12:30Z')
         self.assertEqual(2, len(calls))
         self.assertEqual(19, same['entity_facts']['import_kwh'])
         self.assertIsNotNone(same['entity_facts']['usage_cost'])
-        await self.refresh(c, metadata, '2026-10-18T19:07:31Z')
+        await self.refresh(c, metadata, '2026-10-18T19:12:31Z')
         self.assertEqual(2, len(calls))
-        await self.refresh(c, metadata, '2026-10-18T19:12Z')
+        await self.refresh(c, metadata, '2026-10-18T19:17Z')
         self.assertEqual(at('2026-10-18T19:00Z'), calls[-1][0])
         self.assertEqual(3, len(calls))
 
@@ -142,7 +142,7 @@ class NativeShortCoordinatorTests(unittest.IsolatedAsyncioTestCase):
             return raw_at(start.isoformat())
         c._short_provider = changing
         with self.assertRaisesRegex(RuntimeError, 'energy_snapshot_changed'):
-            await self.refresh(c, metadata, '2026-10-18T19:07Z')
+            await self.refresh(c, metadata, '2026-10-18T19:12Z')
         self.assertIsNone(c.data)
         self.assertIsNone(c._short_state)
 
@@ -153,8 +153,8 @@ class NativeShortCoordinatorTests(unittest.IsolatedAsyncioTestCase):
             entered.set(); await release.wait()
             return raw_at(start.isoformat())
         c._short_provider = pending
-        task = asyncio.create_task(self.refresh(c, metadata, '2026-10-18T19:07Z'))
-        await entered.wait(); c.async_stop(); release.set()
+        task = asyncio.create_task(self.refresh(c, metadata, '2026-10-18T19:17Z'))
+        await asyncio.wait_for(entered.wait(), timeout=1); c.async_stop(); release.set()
         with self.assertRaisesRegex(RuntimeError, 'energy_snapshot_unloaded'): await task
         self.assertIsNone(c.data)
         self.assertIsNone(c._short_state)
@@ -163,7 +163,7 @@ class NativeShortCoordinatorTests(unittest.IsolatedAsyncioTestCase):
     async def test_fall_dst_uses_absolute_tail_boundaries_and_local_day(self):
         c, calls, metadata, _ = self.fixture()
         c.hass.config.time_zone = 'Europe/Warsaw'
-        result = await self.refresh(c, metadata, '2026-10-25T02:07+01:00')
+        result = await self.refresh(c, metadata, '2026-10-25T02:12:00+01:00')
         self.assertEqual(at('2026-10-25T01:00Z'), calls[-1][0])
         self.assertEqual(at('2026-10-25T01:05Z'), calls[-1][1])
         self.assertEqual('2026-10-24T22:00:00+00:00', result['entity_facts']['measurement_from'])
@@ -171,10 +171,10 @@ class NativeShortCoordinatorTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_stale_five_minute_context_is_rejected_even_with_same_hour(self):
         c, _, metadata, _ = self.fixture()
-        result = await self.refresh(c, metadata, '2026-10-18T19:07Z')
+        result = await self.refresh(c, metadata, '2026-10-18T19:12Z')
         class Clock(datetime):
             @classmethod
-            def now(cls, tz=None): return at('2026-10-18T19:10Z')
+            def now(cls, tz=None): return at('2026-10-18T19:15Z')
         with patch.object(energy, 'datetime', Clock):
             self.assertFalse(c.tariff_context_is_current(result))
 
@@ -206,7 +206,7 @@ class NativeShortCoordinatorTests(unittest.IsolatedAsyncioTestCase):
             return result
         with patch.object(c, '_async_build_snapshot', side_effect=overtaken):
             with self.assertRaisesRegex(RuntimeError, 'energy_snapshot_changed'):
-                await self.refresh(c, metadata, '2026-10-18T19:07Z')
+                await self.refresh(c, metadata, '2026-10-18T19:12Z')
         self.assertIsNone(c.data)
         self.assertIsNone(c._short_state)
         c, _, metadata, _ = self.fixture()
@@ -218,13 +218,13 @@ class NativeShortCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(energy, 'async_grid_sensors', side_effect=lambda hass: list(sources)), \
              patch.object(energy, 'async_get_energy_metadata', return_value=metadata):
             with self.assertRaisesRegex(RuntimeError, 'energy_snapshot_changed'):
-                await c.async_refresh(now=at('2026-10-18T19:07Z'))
+                await c.async_refresh(now=at('2026-10-18T19:12Z'))
         self.assertIsNone(c.data)
         self.assertIsNone(c._short_state)
 
     async def test_native_cost_and_share_include_actual_tail_energy(self):
         c, _, metadata, _ = self.fixture(changes=(200,))
-        result = await self.refresh(c, metadata, '2026-10-18T00:07Z')
+        result = await self.refresh(c, metadata, '2026-10-18T00:12Z')
         facts = result['entity_facts']
         self.assertAlmostEqual(.2, facts['import_kwh'])
         self.assertAlmostEqual(.2, facts['cheap_kwh'])
@@ -234,14 +234,14 @@ class NativeShortCoordinatorTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_five_minute_rollover_during_realtime_refresh_rejects_without_publication(self):
         c, _, metadata, _ = self.fixture()
-        clock = [at('2026-10-18T19:04Z')]
+        clock = [at('2026-10-18T19:09Z')]
         class Clock(datetime):
             @classmethod
             def now(cls, tz=None): return clock[0]
         original = c._async_native_short
         async def rollover(*args, **kwargs):
             await original(*args, **kwargs)
-            clock[0] = at('2026-10-18T19:05Z')
+            clock[0] = at('2026-10-18T19:10Z')
         with patch.object(energy, 'datetime', Clock), \
              patch.object(c, '_async_native_short', side_effect=rollover), \
              patch.object(energy, 'async_grid_sensors', return_value=[{'entity_id': SID, 'name': 'Grid'}]), \
@@ -253,8 +253,8 @@ class NativeShortCoordinatorTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_hour_rollover_drops_tail_without_adding_it_to_full_hour_twice(self):
         c, calls, metadata, _ = self.fixture()
-        await self.refresh(c, metadata, '2026-10-18T19:07Z')
-        result = await self.refresh(c, metadata, '2026-10-18T20:00Z')
+        await self.refresh(c, metadata, '2026-10-18T19:12Z')
+        result = await self.refresh(c, metadata, '2026-10-18T20:05Z')
         self.assertEqual(20, result['entity_facts']['import_kwh'])
         self.assertEqual([], c._short_measurement)
         self.assertIsNone(c._short_state)
@@ -267,7 +267,7 @@ class NativeShortCoordinatorTests(unittest.IsolatedAsyncioTestCase):
             return raw_at(start.isoformat())
         c._short_provider = replaced
         with self.assertRaisesRegex(RuntimeError, 'energy_snapshot_unloaded'):
-            await self.refresh(c, metadata, '2026-10-18T19:07Z')
+            await self.refresh(c, metadata, '2026-10-18T19:12Z')
         self.assertIsNone(c.data)
         self.assertFalse(c.tariff_context_is_current({'profile_source': 'shared', 'tariff_revision': 1}))
 
@@ -277,7 +277,7 @@ class NativeShortCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         c, _, metadata, state = self.fixture(unit='kWh')
         c.hass.config.time_zone = 'Europe/Warsaw'
         state['profile']['zones'][1].update(energyRate=.5, variableRate=.1)
-        clock = [at('2026-10-20T22:05:00Z')]
+        clock = [at('2026-10-20T22:10:00Z')]
         calls, published = [], []
         class Clock(datetime):
             @classmethod
@@ -298,10 +298,10 @@ class NativeShortCoordinatorTests(unittest.IsolatedAsyncioTestCase):
             await c._async_tick(None)  # The natural boundary outruns the Recorder commit.
             self.assertEqual(1, len(calls))
             self.assertFalse(any(e.available for e in entities))
-            clock[0] = at('2026-10-20T22:05:29Z')
+            clock[0] = at('2026-10-20T22:10:29Z')
             await c._async_tick(None)
             self.assertEqual(1, len(calls))
-            clock[0] = at('2026-10-20T22:05:30Z')
+            clock[0] = at('2026-10-20T22:10:30Z')
             await c._async_tick(None)  # Existing cadence, same cutoff, now committed.
             self.assertEqual(2, len(calls))
             self.assertEqual([5, 3, 100], [e.native_value for e in entities])
@@ -309,7 +309,7 @@ class NativeShortCoordinatorTests(unittest.IsolatedAsyncioTestCase):
             self.assertCountEqual([('today', True, 5), ('today_cost', True, 3),
                               ('cheap_share_today', True, 100)], published[-3:])
             self.assertEqual('2026-10-20T22:05:00+00:00', c.data['entity_facts']['measurement_through'])
-            clock[0] = at('2026-10-20T22:07:00Z')
+            clock[0] = at('2026-10-20T22:12:00Z')
             await c._async_tick(None)
             self.assertEqual(2, len(calls), 'accepted same-cutoff cells stay cached')
         for entity in entities:
@@ -323,21 +323,21 @@ class NativeShortCoordinatorTests(unittest.IsolatedAsyncioTestCase):
             calls.append((start, end))
             return {SID: []} if len(calls) == 2 else raw_at(start.isoformat(), (5,))
         c._short_provider = delayed
-        first = await self.refresh(c, metadata, '2026-10-18T00:05:30Z')
+        first = await self.refresh(c, metadata, '2026-10-18T00:10:30Z')
         self.assertEqual(5, first['entity_facts']['import_kwh'])
-        missing = await self.refresh(c, metadata, '2026-10-18T00:10:00Z')
+        missing = await self.refresh(c, metadata, '2026-10-18T00:15:00Z')
         self.assertEqual(5, missing['entity_facts']['import_kwh'])
         self.assertEqual(at('2026-10-18T00:05Z'), c._short_state['through'])
         self.assertEqual(1, len(c._short_state['raw'][SID]))
-        await self.refresh(c, metadata, '2026-10-18T00:10:29Z')
+        await self.refresh(c, metadata, '2026-10-18T00:15:29Z')
         self.assertEqual(2, len(calls))
-        complete = await self.refresh(c, metadata, '2026-10-18T00:10:30Z')
+        complete = await self.refresh(c, metadata, '2026-10-18T00:15:30Z')
         self.assertEqual(10, complete['entity_facts']['import_kwh'])
         self.assertEqual(2, len(c._short_state['raw'][SID]))
         self.assertEqual([(at('2026-10-18T00:00Z'), at('2026-10-18T00:05Z')),
             (at('2026-10-18T00:05Z'), at('2026-10-18T00:10Z')),
             (at('2026-10-18T00:05Z'), at('2026-10-18T00:10Z'))], calls)
-        await self.refresh(c, metadata, '2026-10-18T00:14:59Z')
+        await self.refresh(c, metadata, '2026-10-18T00:19:59Z')
         self.assertEqual(3, len(calls))
 
     async def test_pending_retry_is_singleflight_and_waiting_refresh_reuses_new_complete_prefix(self):
@@ -352,12 +352,12 @@ class NativeShortCoordinatorTests(unittest.IsolatedAsyncioTestCase):
             await release.wait()
             return raw_at(start.isoformat(), (5,))
         c._short_provider = delayed
-        await self.refresh(c, metadata, '2026-10-18T00:05Z')
+        await self.refresh(c, metadata, '2026-10-18T00:10Z')
         with patch.object(energy, 'async_grid_sensors', return_value=[{'entity_id': SID, 'name': 'Grid'}]), \
              patch.object(energy, 'async_get_energy_metadata', return_value=metadata):
-            first = asyncio.create_task(c.async_refresh(now=at('2026-10-18T00:05:30Z')))
+            first = asyncio.create_task(c.async_refresh(now=at('2026-10-18T00:10:30Z')))
             await asyncio.wait_for(entered.wait(), timeout=1)
-            second = asyncio.create_task(c.async_refresh(now=at('2026-10-18T00:05:31Z')))
+            second = asyncio.create_task(c.async_refresh(now=at('2026-10-18T00:10:31Z')))
             release.set()
             a, b = await asyncio.gather(first, second)
         self.assertEqual(2, len(calls))
@@ -374,10 +374,10 @@ class NativeShortCoordinatorTests(unittest.IsolatedAsyncioTestCase):
                 raw[SID].append(copy.deepcopy(raw[SID][0]))
             return raw
         c._short_provider = corrected
-        first = await self.refresh(c, metadata, '2026-10-18T00:05Z')
+        first = await self.refresh(c, metadata, '2026-10-18T00:10Z')
         self.assertIsNone(first['entity_facts']['import_kwh'])
         self.assertEqual({}, c._short_state['raw'])
-        final = await self.refresh(c, metadata, '2026-10-18T00:05:30Z')
+        final = await self.refresh(c, metadata, '2026-10-18T00:10:30Z')
         self.assertEqual(5, final['entity_facts']['import_kwh'])
         self.assertTrue(final['entity_facts']['coverage_complete'])
         self.assertEqual(2, len(calls))

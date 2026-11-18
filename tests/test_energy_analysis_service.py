@@ -117,6 +117,7 @@ class EnergyAnalysisServiceTest(unittest.TestCase):
                 h = Harness()
                 if mode == 'no_grid':
                     h.manager.data['energy_sources'] = []
+                    h.manager.data['device_consumption'] = []
                 if mode == 'invalid_book':
                     h.book = {'schema': 0}
                 with self.subTest(mode=mode), h.patches():

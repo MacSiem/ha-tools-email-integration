@@ -95,15 +95,16 @@ def identity_colors(totals, expected, as_of):
             'devices': {sid: 'd' + str(index + 1) for index, sid in enumerate(qualified[:4])}}
 
 
-def normalize_short_hour(raw, metadata, ids, start, end):
+def normalize_short_hour(raw, metadata, ids, start, end, *, allow_cell=False):
     """One real partial hour, complete contiguous five-minute change cells only.
 
     Never call hourly measurement_evidence/hour_grid with partial bounds. A
     missing/duplicate/unsupported cell makes that source's partial hour unknown.
     """
     expected = set(range(int(start.timestamp()), int(end.timestamp()), 300))
-    if (not expected or start.timestamp() % 3600 or end.timestamp() % 300
-            or not 0 < (end-start).total_seconds() < 3600):
+    if (not expected or start.timestamp() % (300 if allow_cell else 3600) or end.timestamp() % 300
+            or not 0 < (end-start).total_seconds() < 3600
+            or allow_cell and (end-start).total_seconds() != 300):
         raise ValueError('invalid_short_statistics_window')
     values = {}
     for sid in ids:
