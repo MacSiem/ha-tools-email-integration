@@ -14,6 +14,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 
 from homeassistant.components.system_log import LogEntry
+from homeassistant.const import EVENT_HOMEASSISTANT_FINAL_WRITE
 from homeassistant.core import callback
 from homeassistant.helpers.event import async_track_time_interval
 
@@ -57,11 +58,13 @@ class LogHistory:
         self.data = {'schema': 1, 'hours': {}, 'coverage': []}
         self._lock = threading.Lock()
         self._io_lock = asyncio.Lock()
+        self._stop_lock = asyncio.Lock()
         self._pending = []
         self._lost = None
         self._since = None
         self._handler = None
         self._unsub = None
+        self._unsub_shutdown = None
         self._task = None
 
     async def async_start(self):
@@ -86,7 +89,16 @@ class LogHistory:
         self._handler = _Capture(self, source)
         logging.root.addHandler(self._handler)
         self._since = datetime.now(timezone.utc).timestamp()
+        # Store defers or rejects writes in STOP, then writes are allowed in
+        # FINAL_WRITE. Core awaits async event listeners before closing storage.
+        self._unsub_shutdown = self.hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_FINAL_WRITE, self._async_shutdown)
         self._unsub = async_track_time_interval(self.hass, self._tick, timedelta(seconds=30))
+
+    async def _async_shutdown(self, _event):
+        # async_listen_once removed itself before invoking this listener.
+        self._unsub_shutdown = None
+        await self.async_stop()
 
     @callback
     def _tick(self, _now):
@@ -212,19 +224,23 @@ class LogHistory:
                       'from': _utc(start).isoformat(), 'to': _utc(end).isoformat()}
 
     async def async_stop(self):
-        if self._unsub:
-            self._unsub()
-            self._unsub = None
-        if self._handler:
-            logging.root.removeHandler(self._handler)
-            self._handler = None
-        if self._task:
+        # Unload and Core shutdown can overlap. Only one owns the final flush.
+        async with self._stop_lock:
+            if self._unsub_shutdown:
+                self._unsub_shutdown()
+                self._unsub_shutdown = None
+            if self._unsub:
+                self._unsub()
+                self._unsub = None
+            if self._handler:
+                logging.root.removeHandler(self._handler)
+                self._handler = None
+            if self._task:
+                # A task cancelled by Core must not cancel the final checkpoint.
+                await asyncio.gather(self._task, return_exceptions=True)
+                self._task = None
             try:
-                await self._task
+                await self.async_checkpoint()
             except Exception:
-                pass  # A final checkpoint below can still save the pending tail.
-        try:
-            await self.async_checkpoint()
-        except Exception:
-            _LOGGER.warning('Log history final checkpoint unavailable; coverage may be incomplete')
-        self._since = None
+                _LOGGER.warning('Log history final checkpoint unavailable; coverage may be incomplete')
+            self._since = None

@@ -154,3 +154,36 @@ async def test_failed_checkpoint_retries_without_duplicate_or_lost_counts(hass, 
     assert coverage['complete'] is True
     assert 'never persist this content' not in repr(await history.store.async_load())
     await history.async_stop()
+
+async def test_core_shutdown_flushes_tail_before_tick_and_replays_after_restart(hass, hass_storage, freezer):
+    """Exercise Core's real STOP -> FINAL_WRITE -> CLOSE, not entry unload."""
+    freezer.move_to('2026-10-01T00:00:00Z')
+    assert await async_setup_component(hass, 'system_log', {})
+    _, storage = await _setup(hass, stored={'schedules': [schedule()]}, hass_storage=hass_storage)
+    history = hass.data[DOMAIN]['log_history']
+    freezer.move_to('2026-10-01T00:00:20Z')  # prior to the 30-second checkpoint
+    await hass.services.async_call('system_log', 'write', {
+        'level': 'warning', 'logger': 'qa_sprint_before_restart',
+        'message': 'PRIVATE_SHUTDOWN_TAIL_CONTENT'}, blocking=True)
+    assert any(row['name'] == 'qa_sprint_before_restart' for row in history._pending)
+    await hass.async_stop(force=True)
+    persisted = hass_storage['ha_tools_email.log_history']['data']
+    assert 'qa_sprint_before_restart' in repr(persisted)
+    assert 'PRIVATE_SHUTDOWN_TAIL_CONTENT' not in repr(persisted)
+    assert 'message' not in repr(persisted) and 'exception' not in repr(persisted)
+    # A fresh reader sees precisely what Core committed, with no active source.
+    restored = LogHistory(hass)
+    await restored.async_start()
+    assert any(row['name'] == 'qa_sprint_before_restart'
+               for group in restored.data['hours'].values() for row in group.values())
+    fake_hass = SimpleNamespace(data={DOMAIN: {'log_history': restored},
+                                      'system_log': SimpleNamespace(records=[])},
+                                config=SimpleNamespace(time_zone='UTC', language='pl'))
+    now = datetime(2026, 10, 1, 0, 5, tzinfo=UTC)
+    for cadence, days in [('daily', 1), ('weekly', 7)]:
+        payload = await async_build_log_digest_payload(fake_hass, storage, cadence=cadence,
+            now=now, window_start=now - timedelta(days=days), window_end=now,
+            manual_window=True, presentation=_presentation('pl', 'UTC'))
+        assert payload['summary']['logger_counts']['qa_sprint_before_restart'] == 1
+        assert payload['summary']['source']['coverage']['complete'] is False
+        assert payload['body'].count('Niepełne pokrycie dziennika') == 1
