@@ -56,6 +56,14 @@ class KnownProjectionTest(unittest.TestCase):
         self.assertEqual(.5, result['hourly'][0]['prev_kwh'])
         self.assertIsNone(result['hourly'][1]['prev_kwh'])
 
+    def test_partial_period_subject_never_says_zero_sources_are_missing(self):
+        report = model.build_report(sample(mode='intermittent'))
+        report['coverage'].update(measured_sources=2, expected_sources=2)
+        for lang in ('pl', 'en'):
+            result = mail.render(report, language=lang, timezone_name='UTC', hour_cycle='24')
+            self.assertIn('niepełne pokrycie' if lang == 'pl' else 'partial coverage', result['subject'])
+            self.assertNotIn('bez 0' if lang == 'pl' else '0 missing', result['subject'])
+
     def test_device_purchase_price_is_not_a_grid_residual(self):
         data = sample(mode='full')
         data['consumer_domain'] = 'site_consumption'

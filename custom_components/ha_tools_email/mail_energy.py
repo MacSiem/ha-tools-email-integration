@@ -678,7 +678,8 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
     if not v.complete and type(measured_sources) is int and type(expected_sources) is int and _numeric(available):
         missing_count = max(0, expected_sources - measured_sources)
         unit = fmt.plural(missing_count, 'źródła', 'źródeł', 'źródeł', language='pl')
-        missing_label = (f'bez {missing_count} {unit}' if v.lang == 'pl' else f'{missing_count} missing sources')
+        missing_label = ((f'bez {missing_count} {unit}' if v.lang == 'pl' else f'{missing_count} missing sources')
+                         if missing_count else ('niepełne pokrycie' if v.lang == 'pl' else 'partial coverage'))
         subject = f'{v.tr("energy")}: {v.subject_label()} — {pre_summary} · {missing_label}'
     kpis = (kpi_cell(partial_label, v.n(available), 'kWh', comparison, 'warn' if _numeric(first.get('delta_kwh')) and first['delta_kwh'] > 0 and change else 'good' if change else 'tx2')
             + '<td class="kpigap" style="width:2%"></td>'
