@@ -183,7 +183,7 @@ class PairedComparisonAccumulator:
             result['reason'] = 'unsupported_common_calendar_order'
         elif len(self._provenance) != len(self._ids):
             result['reason'] = 'measurement_provenance_unavailable'
-        if complete or self._aligned and all(value >= .9 for value in (*own, *common)):
+        if complete or self._aligned and self._common > 0:
             actual, baseline = totals if complete else [fsum(parts) for parts in self._common_totals]
             delta = actual-baseline
             percent = delta/baseline*100 if baseline else None

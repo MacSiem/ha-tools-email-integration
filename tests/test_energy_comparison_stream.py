@@ -36,6 +36,22 @@ class ComparisonStreamTest(unittest.TestCase):
             cursors[index] = end; calls += 1
         return model.finish(), model, calls
 
+    def test_dead_source_and_empty_intersection(self):
+        bounds = [('2026-01-01T00:00Z', '2026-01-01T02:00Z'),
+                  ('2025-12-31T00:00Z', '2025-12-31T02:00Z')]
+        sources = tuple(f'sensor.s{i}' for i in range(44))
+        missing = [('sensor.s43', i) for i in range(2)]
+        result, _, _ = self.run_pair(*bounds, sources=sources,
+            missing={'current': missing, 'baseline': missing}, values=(2, 1))
+        self.assertEqual('common_measurements', result['comparison_scope'])
+        self.assertEqual((172, 86, 100), (result['current_kwh'], result['baseline_kwh'], result['percent']))
+        self.assertTrue(result['chart']['reconciles_comparison_energy'])
+        all_missing = [(sid, i) for sid in sources for i in range(2)]
+        result, _, _ = self.run_pair(*bounds, sources=sources,
+            missing={'current': all_missing})
+        self.assertEqual('unknown', result['status'])
+        self.assertIsNone(result['current_kwh'])
+
     def test_full_dst_actual_totals_and_zero_baseline(self):
         current = ('2026-10-24T22:00Z', '2026-10-25T23:00Z')
         baseline = ('2026-10-23T22:00Z', '2026-10-24T22:00Z')
@@ -52,7 +68,7 @@ class ComparisonStreamTest(unittest.TestCase):
     def test_partial_uses_identical_frames_and_all_four_coverage_ratios(self):
         bounds = [('2026-01-01T00:00Z', '2026-01-01T10:00Z'),
                   ('2025-12-31T00:00Z', '2025-12-31T10:00Z')]
-        for same, expected in ((True, 'ready'), (False, 'unknown')):
+        for same, expected in ((True, 'ready'), (False, 'ready')):
             absent = [('sensor.a', 0), ('sensor.b', 0)]
             missing = {'current': absent, 'baseline': absent if same else [('sensor.a', 1), ('sensor.b', 1)]}
             result, _, _ = self.run_pair(*bounds, sources=('sensor.a', 'sensor.b'), missing=missing, split=3)
@@ -63,7 +79,7 @@ class ComparisonStreamTest(unittest.TestCase):
                 self.assertEqual((18, 18), (result['current_kwh'], result['baseline_kwh']))
                 self.assertEqual('common_measurements', result['comparison_scope'])
             else:
-                self.assertIsNone(result['delta_kwh'])
+                self.assertEqual((16, 16, 0), (result['current_kwh'], result['baseline_kwh'], result['delta_kwh']))
 
     def test_unmatched_fold_counts_own_only_without_lowering_threshold(self):
         current = ('2026-10-24T22:00Z', '2026-10-25T23:00Z')
@@ -139,8 +155,9 @@ class ComparisonStreamTest(unittest.TestCase):
                 self.assertEqual('calendar_totals', result['comparison_scope'])
                 result, _, _ = self.run_pair(current, baseline, zone='Antarctica/Troll', split=split,
                                            missing={'current': [('sensor.a', 15)]})
-                # Common23/26 <90%, despite own25/26 and baseline24/24.
-                self.assertEqual('unknown', result['status'])
+                # Compare the actual matched frames, even below 90% coverage.
+                self.assertEqual('ready', result['status'])
+                self.assertEqual((23, 23), (result['current_kwh'], result['baseline_kwh']))
                 self.assertEqual(23/26, result['coverage']['common_current'])
 
     def test_month_chunks_keep_whole_period_origin_for_partial_intersection(self):

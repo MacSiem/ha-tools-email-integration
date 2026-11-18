@@ -75,7 +75,7 @@ def compare_daily_mean7(current, baselines, current_period, baseline_periods, *,
                     periods, tariff, value, complete=complete)
             return value
 
-        if not complete and any(ratio < .9 for ratio in (*own, *common)):
+        if not complete and not common_count:
             return priced(result)
         values = full if complete else [fsum(parts) for parts in shared]
         actual, mean = values[0], fsum(values[1:]) / 7
