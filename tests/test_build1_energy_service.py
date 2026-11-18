@@ -43,8 +43,8 @@ class Build1ServiceTest(unittest.TestCase):
                 self.assertEqual(report['coverage']['missing_sources'][0]['name'], '=Missing meter')
                 self.assertEqual(report['totals']['recorded_import_kwh'], 240)
                 self.assertEqual(report['totals']['recorded_usage_cost'], 240)
-                self.assertIsNone(report['totals']['import_kwh'])
-                self.assertIsNone(report['totals']['total_with_fixed'])
+                self.assertEqual(240, report['totals']['import_kwh'])
+                self.assertIsNotNone(report['totals']['total_with_fixed'])
                 self.assertTrue(await h.subject.async_validate_result(result,'user'))
                 artifact = await h.subject._async_render_energy_artifact(result, 'user',
                     {'language':'en', 'timezone_name':'UTC', 'hour_cycle':'24'})
@@ -123,22 +123,23 @@ class Build1ServiceTest(unittest.TestCase):
                 self.assertEqual(240,model['totals']['import_kwh'])
                 self.assertEqual(48,model['devices'][0]['kwh'])
                 self.assertIsNone(model['unmeasured']['kwh'])
-                self.assertIsNone(model['devices'][0]['cost'])
+                self.assertEqual(48,model['devices'][0]['cost'])
+                self.assertEqual('purchase_price_excluding_pv',model['device_cost_basis'])
                 self.assertTrue(await h.subject.async_validate_result(result,'user'))
         asyncio.run(run())
 
     def test_collector_supplies_actual_previous_ghosts_without_counting_them_as_import(self):
         async def run():
-            h = Harness(); h.now = datetime(2026,1,11,12,tzinfo=UTC)
+            h = Harness(); h.now = datetime(2026,1,11,12,5,tzinfo=UTC)
             with h.patches():
                 result = await h.subject.async_get_build1_model('day','user')
                 model = result['report_model']
                 self.assertEqual(120,model['totals']['import_kwh'])
-                self.assertEqual(10,model['hourly'][12]['prev_kwh'])
+                self.assertIsNone(model['hourly'][12]['prev_kwh'])
                 self.assertIsNone(model['hourly'][12]['kwh'])
                 self.assertTrue(model['hourly'][12]['future'])
                 self.assertEqual(120,model['daily'][0]['kwh'])
-                self.assertEqual(240,model['daily'][0]['prev_kwh'])
+                self.assertIsNone(model['daily'][0]['prev_kwh'])
                 self.assertTrue(await h.subject.async_validate_result(result,'user'))
         asyncio.run(run())
 
@@ -162,7 +163,7 @@ class Build1ServiceTest(unittest.TestCase):
 
     def test_current_cutoff_real_partial_cell_full_calendar_and_no_synthetic_history(self):
         async def run():
-            h = Harness(); h.now = datetime(2026, 1, 11, 12, 7, tzinfo=UTC)
+            h = Harness(); h.now = datetime(2026, 1, 11, 12, 12, tzinfo=UTC)
             async def short(subject, configuration, start, end, guard):
                 await guard()
                 self.assertEqual(300, (end-start).total_seconds())
@@ -220,7 +221,7 @@ class Build1ServiceTest(unittest.TestCase):
 
     def test_first_five_minutes_work_without_inventing_a_completed_hour(self):
         async def run():
-            h = Harness(); h.now = datetime(2026, 1, 11, 0, 7, tzinfo=UTC)
+            h = Harness(); h.now = datetime(2026, 1, 11, 0, 12, tzinfo=UTC)
             async def short(subject, configuration, start, end, guard):
                 await guard()
                 self.assertEqual(300, (end-start).total_seconds())

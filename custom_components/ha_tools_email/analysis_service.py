@@ -1036,13 +1036,16 @@ class EnergyAnalysisService:
                 legacy_comparison.update(timezone=snapshot['context']['comparison_timezone'],
                     calendar_kind=snapshot['context']['comparison_calendar_kind'],
                     partial=period.get('partial'), calendar_clamped=prior[0].get('calendar_clamped'))
+        known = snapshot.get('known_totals') or {}
         summary = {'snapshot_id':snapshot['snapshot_id'],'schema':2,
-            'cadence':request.cadence,'total_kwh':snapshot['totals']['kwh'],
-            'total_cost':snapshot['totals']['total_cost'],
+            'cadence':request.cadence,'total_kwh':known.get('kwh', snapshot['totals']['kwh']),
+            'total_cost':known.get('total_cost', snapshot['totals']['total_cost']),
             'currency':snapshot['totals']['currency'],'status':snapshot['status'],
             'period':{**period,'from':period['start'],'to':period['end']},
             'totals':deepcopy(snapshot['totals']),'coverage':deepcopy(snapshot['coverage']),
             'groups':deepcopy(snapshot.get('groups',{})),'chart':deepcopy(snapshot['chart']),
+            'known_totals':deepcopy(known), 'known_chart':deepcopy(snapshot.get('known_chart')),
+            'known_zones':deepcopy(snapshot.get('known_zones', [])),
             'comparisons':comparisons,'comparison':legacy_comparison,
             'source':{'name':'recorder','kind':'grid_import','status':snapshot['status'],
                       'complete':snapshot['coverage']['complete']}}

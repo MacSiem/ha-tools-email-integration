@@ -51,7 +51,8 @@ class Build1ModelTests(unittest.TestCase):
         self.assertIsNone(result['unmeasured']['kwh'])
         self.assertIsNone(result['unmeasured']['cost'])
         self.assertIsNone(result['devices'][0]['share'])
-        self.assertIsNone(result['devices'][0]['cost'])
+        self.assertAlmostEqual(7.2,result['devices'][0]['cost'])
+        self.assertEqual('purchase_price_excluding_pv',result['device_cost_basis'])
         self.assertNotIn('double_counting',[r['code'] for r in result['issues']])
         self.assertIn('consumer_domain_mismatch',[r['code'] for r in result['issues']])
 

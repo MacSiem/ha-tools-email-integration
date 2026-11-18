@@ -243,7 +243,7 @@ def _comparisons(requests, total, coverage, scope, current_period, current_hours
             'comparison_scope': comparison_scope, 'delta_kwh': delta,
             'delta_pct': 100 * delta / compared_baseline
                 if delta is not None and compared_baseline != 0 else None,
-            'coverage_ok': eligible, 'reason': None if eligible else
+            'coverage_ok': eligible, 'reason': None if eligible else paired.get('reason') if isinstance(paired, dict) else
                 ('current_coverage_below_90' if coverage < Decimal('.9') else
                  'unsupported_comparison_grid' if not current_frames else
                  'insufficient_common_coverage' if value is not None else 'baseline_unqualified'),
@@ -315,7 +315,7 @@ def _build_report(inputs):
     if not 0 < duration <= 366 * 86400 or duration % 3600:
         raise ValueError('invalid_report_period')
     cutoff = _instant(inputs.get('measured_until', period['end']))
-    if not start < cutoff <= end:
+    if not start <= cutoff <= end:
         raise ValueError('invalid_report_cutoff')
     period['hours'] = int(duration / 3600)
     period['complete'] = bool(period.get('complete', True)) and cutoff == end
@@ -392,7 +392,7 @@ def _build_report(inputs):
             'partial': bool(raw) and _instant(raw['to']) - instant < timedelta(hours=1),
             'future': not eligible})
     expected = ceil((cutoff - start).total_seconds() / 3600)
-    coverage_ratio = Decimal(measured_hours) / expected
+    coverage_ratio = Decimal(measured_hours) / expected if expected else ZERO
     source_rows = [row for row in hourly if not row['future']]
     source_counts_known = all(type(row['measured_sources']) is int and type(row['expected_sources']) is int for row in source_rows)
     def source_hours(field):
@@ -431,9 +431,16 @@ def _build_report(inputs):
         if ranges:
             missing_devices.append({'id': sid, 'name': sources.get(sid, {}).get('name') or sid,
                 'ranges': [{'start': a.astimezone(zone).isoformat(), 'end': b.astimezone(zone).isoformat()} for a, b in ranges]})
-    coverage = {'expected_hours': expected, 'measured_hours': measured_hours,
-        'ratio': coverage_ratio, 'complete': measured_hours == expected,
-        'status': 'complete' if measured_hours == expected else 'partial' if has_data else 'no_data',
+    source_ids = projection.get('source_ids')
+    source_ids = source_ids if isinstance(source_ids, list) else []
+    observed_rows = [raw for instant, raw in provided.items() if instant < cutoff]
+    never_observed = (set.intersection(*(set(row.get('missing_sources', [])) for row in observed_rows))
+                      if observed_rows else set(source_ids))
+    coverage = {'expected_sources': len(source_ids) if source_ids else None,
+        'measured_sources': len(set(source_ids) - never_observed) if source_ids else None,
+        'expected_hours': expected, 'measured_hours': measured_hours,
+        'ratio': coverage_ratio, 'complete': bool(expected) and measured_hours == expected,
+        'status': 'complete' if expected and measured_hours == expected else 'partial' if has_data else 'no_data',
         'full_hours': full_hours, 'expected_full_hours': expected_full_hours,
         'measured_source_hours': source_measured, 'expected_source_hours': source_expected,
         'missing_sources': missing_sources, 'missing_devices': missing_devices}
@@ -471,7 +478,7 @@ def _build_report(inputs):
             all_devices[parent]['children'].append(all_devices[sid])
     devices = sorted((all_devices[sid] for sid in roots), key=lambda row: (-(row['kwh'] or ZERO), row['id']))
     measured = _sum((row['kwh'] for row in devices), empty=ZERO) if partitioned and (devices or imported is not None) else None
-    remainder = _known_sum(residuals) if all(value is not None for value in residuals) else None
+    remainder = _known_sum(residuals)
     if double_counting:
         remainder = None
         issues.append({'code': 'double_counting', 'severity': 'warning', 'data': {}})
@@ -553,8 +560,8 @@ def _build_report(inputs):
         issues.append({'code':'consumer_domain_mismatch','severity':'warning','data':{'consumer_domain':domain}})
     if not identity_ok:
         issues.append({'code': 'incomparable_currency_or_basis', 'severity': 'warning', 'data': {}})
-    comparisons = _comparisons(inputs.get('comparisons', []), imported, coverage_ratio, inputs.get('scope', 'full_period'),
-        {**period, 'calendar_end': end, 'end': cutoff}, list(provided.values()))
+    comparisons = (_comparisons(inputs.get('comparisons', []), imported, coverage_ratio, inputs.get('scope', 'full_period'),
+        {**period, 'calendar_end': end, 'end': cutoff}, list(provided.values())) if cutoff > start else [])
     previous_comparison = next((row for row in comparisons if row['key'] in
         ('previous_day', 'previous_week', 'previous_month', 'previous_year')), None)
     if previous_comparison and isinstance(previous_comparison.get('chart'), dict):

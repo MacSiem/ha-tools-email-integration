@@ -43,8 +43,6 @@ def resolve_model_periods(kind, now, zone, *, anchor=None):
     if resolved.get('reason') != 'no_completed_interval' or not current:
         return resolved
     cutoff = datetime.fromisoformat(report_clock(now,zone)['cutoff'])
-    if cutoff <= datetime.fromisoformat(current['start']):
-        return resolved
     frames = resolve_analysis_periods(kind,cutoff+timedelta(hours=1),zone,anchor=anchor)
     if frames.get('status') != 'ready':
         return resolved
@@ -278,7 +276,7 @@ async def async_collect_inputs(service, configuration, period, context, accumula
         for row in projection['hours']:
             instant = row['from'] if isinstance(row['from'], (int, float)) else datetime.fromisoformat(row['from']).timestamp()*1000
             row.update(currency=facts['currency'], price_basis='ha_recorded_cost',
-                costs={'usage_cost': by_start.get(instant, {}).get('usage_cost')}, zone=None)
+                costs={'usage_cost': by_start.get(instant, {}).get('usage_cost') if row.get('kwh') is not None else None}, zone=None)
             for device in row['devices'].values():
                 device['costs'] = {}
     # Thirty full local days; aggregate root source cells only, independent of
@@ -367,6 +365,9 @@ async def async_collect_inputs(service, configuration, period, context, accumula
             requests.append({'key': 'avg_7d', 'baselines': rows})
         else:
             requests.append({'key': labels[key], **(rows[0] if rows else {})})
+    for request in requests:
+        request['paired'] = {'status': 'unknown', 'reason': 'no_common_measurements',
+                             'chart': {'markers': []}}
     # These detached comparison facts are computed from Recorder cells, not
     # from already aggregated hourly totals. The tail is deliberately excluded
     # until both sides can prove a matching completed five-minute mask.

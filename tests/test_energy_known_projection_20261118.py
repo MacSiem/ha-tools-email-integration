@@ -93,5 +93,36 @@ class KnownProjectionTest(unittest.TestCase):
     def test_incomplete_residual_never_claims_complete_balance(self):
         report = model.build_report(sample(mode='intermittent'))
         self.assertEqual(36, report['totals']['import_kwh'])
-        self.assertIsNone(report['unmeasured']['kwh'])
+        self.assertEqual('unknown', report['unmeasured']['status'])
         self.assertIsNone(report['unmeasured']['share'])
+
+class ActualComposerKnownProjectionTest(unittest.TestCase):
+    def test_43_of_44_real_composer_calendar_and_rolling_pl_en(self):
+        import asyncio
+        from datetime import timedelta
+        from tests.helper_composer_schema2 import ComposerFixture
+        from tests.test_tariff_history import book, version
+        ids = ['sensor.s%d' % i for i in range(44)]
+        prefs = {'energy_sources': [{'type': 'grid', 'stat_energy_from': sid} for sid in ids],
+                 'device_consumption': []}
+        rows = {sid: {'unit': 'kWh'} for sid in ids}
+        def points(start, end, selected):
+            return {sid: [{'start': (start + timedelta(hours=i)).timestamp(), 'change': 1}
+                          for i in range(int((end-start).total_seconds()/3600))]
+                    for sid in selected if sid != ids[-1]}
+        async def run():
+            for lang in ('pl', 'en'):
+                for calendar in (False, True):
+                    fx = ComposerFixture(datetime(2026, 1, 4, 12, tzinfo=timezone.utc),
+                        preferences=prefs, rows=rows, points=points,
+                        book=book([version(rate=1, monthly=31)]), language=lang)
+                    with fx.patches():
+                        start = datetime(2026, 1, 2, tzinfo=timezone.utc)
+                        report = await fx.compose(start=start if calendar else None,
+                            end=start + timedelta(days=1) if calendar else None, rolling=not calendar)
+                    self.assertEqual(1032, float(report['summary']['total_kwh']))
+                    self.assertIn('1 032' if lang == 'pl' else '1,032', report['text'])
+                    self.assertIn('1 032' if lang == 'pl' else '1,032', report['html'])
+                    self.assertIn(ids[-1], report['csv'])
+                    self.assertFalse(report['summary']['coverage']['complete'])
+        asyncio.run(run())
