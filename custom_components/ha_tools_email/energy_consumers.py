@@ -42,7 +42,7 @@ class ConsumerPeriod:
     def __init__(self, consumers, membership, domain, book, hours, *, include_statistics_hours=False, include_report_hours=False):
         require_statistics_projection(include_statistics_hours, hours)
         if type(include_report_hours) is not bool or (include_report_hours and
-                (not 0 < hours <= 8784 or len(consumers) * hours > 262144)):
+                (not 0 < hours <= 8784 or len(consumers) * hours > 524288)):
             raise ValueError('invalid_report_projection_size')
         self._report_hours = [] if include_report_hours else None
         self._statistics_hours = [] if include_statistics_hours else None
@@ -168,6 +168,8 @@ class ConsumerPeriod:
                     # parent costs from the existing disjoint subtree amounts.
                     cells = {}
                     for sid in self._ids:
+                        if breakdown['devices'][sid]['measured_kwh_decimal'] is None:
+                            continue
                         members = report_members[sid]
                         costs = {}
                         for key in COSTS:

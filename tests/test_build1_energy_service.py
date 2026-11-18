@@ -355,3 +355,32 @@ class EnergyP1ActualProducerTests(unittest.IsolatedAsyncioTestCase):
         for output in (result['html'], result['text']):
             self.assertIn('Some tariff history is missing', output)
             self.assertNotIn('No tariff configured', output)
+
+class Annual44ServiceTest(unittest.TestCase):
+    def test_year_44_sources_and_consumers_with_partial_evidence(self):
+        from tests.test_energy_weighted_comparison import readings
+        async def run():
+            h = Harness()
+            h.now = datetime(2026, 1, 4, tzinfo=UTC)
+            grids = [f'sensor.grid{i}' for i in range(44)]
+            devices = [f'sensor.device{i}' for i in range(44)]
+            h.manager.data['energy_sources'] = [{'type': 'grid', 'stat_energy_from': s} for s in grids]
+            h.manager.data['device_consumption'] = [{'stat_consumption': s} for s in devices]
+            h.permissions.check_entity = lambda sid, _: True
+            h.metadata = {sid: {'has_sum': True, 'unit_of_measurement': 'kWh', 'unit_class': 'energy'} for sid in grids + devices}
+            async def usage(hass, sensors, start, end, cadence, *, metadata):
+                ids = tuple(row['entity_id'] for row in sensors)
+                hours = int((end-start).total_seconds()/3600)
+                missing = [(ids[-1], i) for i in range(hours)]
+                return readings(start.isoformat(), end.isoformat(), sources=ids, value=1, missing=missing)
+            h.usage = usage
+            with h.patches():
+                result = await h.subject.async_get_build1_model('year', 'user')
+                report = result['report_model']
+                self.assertEqual(8760, report['period']['hours'])
+                self.assertEqual(72, report['coverage']['expected_hours'])
+                self.assertEqual(3096, report['totals']['import_kwh'])
+                self.assertEqual(3096, report['totals']['usage_cost'])
+                self.assertEqual('partial', report['coverage']['status'])
+                self.assertEqual(43, sum(d['kwh'] is not None for d in report['devices']))
+        asyncio.run(run())

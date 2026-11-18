@@ -326,8 +326,6 @@ def _build_report(inputs):
     if domain not in ('grid_import','site_consumption'):
         raise ValueError('invalid_consumer_domain')
     partitioned = domain == 'grid_import' or not config
-    if period['hours'] * max(1, len(config)) > 262144:
-        raise ValueError('report_projection_too_large')
     sources = inputs.get('membership', {}).get('sources', {})
     provided = {}
     for row in projection.get('hours', []):
@@ -340,11 +338,17 @@ def _build_report(inputs):
         provided[instant] = row
     if len(provided) > period['hours']:
         raise ValueError('report_projection_too_large')
+    # Bound actual supplied cells rather than the mostly empty calendar product.
+    # A dense year for 44 meters fits, while adversarial projections remain bounded.
+    if sum(len(row.get('devices', {})) for row in provided.values()) > 524288:
+        raise ValueError('report_projection_too_large')
     currency, basis = projection.get('currency'), projection.get('price_basis')
     identities = {(row.get('currency'), row.get('price_basis')) for row in provided.values()
                   if row.get('costs', {}).get('usage_cost') is not None}
     identity_ok = bool(currency and basis) and identities <= {(currency, basis)}
-    issues, hourly, residuals, adjusted, device_hours = [], [], [], ZERO, {sid: [] for sid in config}
+    issues, hourly, residuals, adjusted = [], [], [], ZERO
+    device_facts = {sid: {'known': [], 'quantity': ZERO, 'cost': ZERO, 'cost_missing': False}
+                    for sid in config}
     double_counting, measured_hours = False, 0
     previous = _previous_ticks(inputs.get('previous'),period,zone)
     first_date = start.astimezone(zone).date()
@@ -362,14 +366,21 @@ def _build_report(inputs):
         cells = raw.get('devices', {})
         root_values = [_decimal(cells.get(sid, {}).get('kwh')) for sid in roots]
         measured = _sum(root_values, empty=ZERO) if raw and partitioned else None
-        for sid in config:
-            cell = cells.get(sid, {})
+        for sid, cell in cells.items():
+            if sid not in config:
+                continue
             quantity = _decimal(cell.get('kwh'))
             if quantity is not None and quantity < 0:
                 raise ValueError('negative_consumer')
-            device_hours[sid].append({'kwh': quantity,
-                'cost': _decimal(cell.get('costs', {}).get('usage_cost')) if identity_ok and quantity is not None else None,
-                'eligible': eligible})
+            if eligible and quantity is not None:
+                facts = device_facts[sid]
+                facts['known'].append(offset)
+                facts['quantity'] += quantity
+                cost = _decimal(cell.get('costs', {}).get('usage_cost')) if identity_ok else None
+                if cost is None:
+                    facts['cost_missing'] = True
+                else:
+                    facts['cost'] += cost
         residual = full_kwh - measured if full_kwh is not None and measured is not None else None
         if residual is not None and residual < Decimal('-.05'):
             double_counting = True
@@ -403,7 +414,7 @@ def _build_report(inputs):
     full_hours = sum(row['full_kwh'] is not None and not row['partial'] for row in source_rows)
     expected_full_hours = int((cutoff - start).total_seconds() // 3600)
     has_data = (any(row['recorded_kwh'] is not None for row in source_rows) or
-        any(cell['eligible'] and cell['kwh'] is not None for rows in device_hours.values() for cell in rows))
+        any(facts['known'] for facts in device_facts.values()))
     missing = {}
     for instant, raw in sorted(provided.items()):
         for sid in raw.get('missing_sources', []):
@@ -417,17 +428,14 @@ def _build_report(inputs):
         'ranges': [{'start': a.astimezone(zone).isoformat(), 'end': b.astimezone(zone).isoformat()} for a, b in ranges]}
         for sid, ranges in sorted(missing.items())]
     missing_devices = []
-    for sid, cells in device_hours.items():
-        ranges = []
-        for i, cell in enumerate(cells):
-            if not cell['eligible'] or cell['kwh'] is not None:
-                continue
-            a = start + timedelta(hours=i)
-            b = min(a + timedelta(hours=1), cutoff)
-            if ranges and ranges[-1][1] == a:
-                ranges[-1][1] = b
-            else:
-                ranges.append([a, b])
+    for sid, facts in device_facts.items():
+        ranges, cursor = [], 0
+        for offset in facts['known']:
+            if cursor < offset:
+                ranges.append([start + timedelta(hours=cursor), start + timedelta(hours=offset)])
+            cursor = offset + 1
+        if cursor < expected:
+            ranges.append([start + timedelta(hours=cursor), cutoff])
         if ranges:
             missing_devices.append({'id': sid, 'name': sources.get(sid, {}).get('name') or sid,
                 'ranges': [{'start': a.astimezone(zone).isoformat(), 'end': b.astimezone(zone).isoformat()} for a, b in ranges]})
@@ -464,14 +472,15 @@ def _build_report(inputs):
 
     all_devices = {}
     for sid in config:
-        rows = [row for row in device_hours[sid] if row['eligible']]
-        quantity = _known_sum(row['kwh'] for row in rows)
-        cost = _sum(row['cost'] for row in rows if row['kwh'] is not None)
+        facts = device_facts[sid]
+        quantity = facts['quantity'] if facts['known'] else None
+        cost = facts['cost'] if facts['known'] and not facts['cost_missing'] else None
+        complete = len(facts['known']) == expected
         meta = sources.get(sid, {})
         all_devices[sid] = {'id': sid, 'name': meta.get('name') or sid, 'kwh': quantity,
-            'cost': cost, 'effective_rate': _ratio(cost, quantity), 'share': share(quantity) if all(row['kwh'] is not None for row in rows) else None,
+            'cost': cost, 'effective_rate': _ratio(cost, quantity), 'share': share(quantity) if complete else None,
             'area_id': meta.get('area_id'), 'floor_id': meta.get('floor_id'),
-            'measurement_complete': all(row['kwh'] is not None for row in rows), 'children': []}
+            'measurement_complete': complete, 'children': []}
     # Iterative tree assembly, safe for the supported 512-node hierarchy.
     for sid, parent in config.items():
         if parent is not None:
