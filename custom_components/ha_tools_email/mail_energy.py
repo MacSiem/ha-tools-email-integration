@@ -210,7 +210,8 @@ class _View:
     def coverage_label(self):
         sources, expected_sources = self.coverage.get('measured_sources'), self.coverage.get('expected_sources')
         if type(sources) is int and type(expected_sources) is int:
-            return (f'Zmierzone {sources} z {expected_sources} źródeł' if self.lang == 'pl'
+            unit = fmt.plural(expected_sources, 'źródła', 'źródeł', 'źródeł', language='pl')
+            return (f'Zmierzone {sources} z {expected_sources} {unit}' if self.lang == 'pl'
                     else f'Measured {sources} of {expected_sources} sources')
         measured = self.coverage.get('full_hours', self.coverage.get('measured_hours'))
         expected = self.coverage.get('expected_full_hours', self.coverage.get('expected_hours'))
@@ -673,7 +674,8 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
     expected_sources = v.coverage.get('expected_sources')
     if not v.complete and type(measured_sources) is int and type(expected_sources) is int and _numeric(available):
         missing_count = max(0, expected_sources - measured_sources)
-        missing_label = (f'bez {missing_count} źródeł' if v.lang == 'pl' else f'{missing_count} missing sources')
+        unit = fmt.plural(missing_count, 'źródła', 'źródeł', 'źródeł', language='pl')
+        missing_label = (f'bez {missing_count} {unit}' if v.lang == 'pl' else f'{missing_count} missing sources')
         subject = f'{v.tr("energy")}: {v.subject_label()} — {pre_summary} · {missing_label}'
     kpis = (kpi_cell(partial_label, v.n(available), 'kWh', comparison, 'warn' if _numeric(first.get('delta_kwh')) and first['delta_kwh'] > 0 and change else 'good' if change else 'tx2')
             + '<td class="kpigap" style="width:2%"></td>'
