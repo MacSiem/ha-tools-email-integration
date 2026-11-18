@@ -5,6 +5,7 @@ are backend results, never recomputed here. Explicit source paths retain the
 meaning of partial/common-measurement values and metadata in exported reports.
 """
 from collections.abc import Mapping
+from copy import deepcopy
 import csv
 import json
 from datetime import date, datetime, timedelta, timezone
@@ -146,7 +147,7 @@ def _finite_decimal(value):
         return False
 
 
-def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, date_language=None, stale_line=None):
+def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, date_language=None, stale_line=None, _raw=False):
     """Return snapshot_id/html/text/csv without IO, mutation, activation or pricing.
 
     language is exactly pl/en; hour_cycle is exactly the string '12'/'24'.
@@ -160,6 +161,21 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     if (not isinstance(snapshot, Mapping) or snapshot.get('schema') != 2
             or not isinstance(snapshot.get('snapshot_id'), str) or not snapshot['snapshot_id']):
         raise ValueError('schema2_snapshot_required')
+    # A presentation view may use the producer's explicitly scoped known
+    # quantities. Strict completeness flags and residuals stay unchanged.
+    original = snapshot
+    if not _raw and snapshot.get('known_totals') and not snapshot.get('coverage', {}).get('complete'):
+        snapshot = deepcopy(snapshot)
+        snapshot['totals'].update(snapshot['known_totals'])
+        snapshot['totals']['recorded_household_kwh'] = snapshot['known_totals'].get('kwh')
+        if snapshot.get('known_chart'):
+            snapshot['chart'] = snapshot['known_chart']
+        for level in ('devices', 'areas', 'floors'):
+            for row in (snapshot.get('groups', {}).get(level) or {}).values():
+                if row.get('kwh') is None:
+                    row['kwh'] = row.get('recorded_kwh')
+                if row.get('usage_cost') is None:
+                    row['usage_cost'] = (row.get('known_costs') or {}).get('usage_cost')
     pl = language == 'pl'
     dates_pl = (date_language or language) == 'pl'
     unknown = 'Brak danych' if pl else 'Unknown'
@@ -640,6 +656,16 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
             return None
 
     def energy_context(*, compact=False):
+        for kind, comparison in (snapshot.get('comparisons') or {}).items():
+            if (comparison.get('status') == 'ready' and comparison.get('comparison_scope') == 'common_measurements'
+                    and comparison.get('reason') is None
+                    and number((comparison.get('coverage') or {}).get('common_source_seconds')) not in (None, 0)
+                    and (comparison.get('chart') or {}).get('reconciles_comparison_energy') is True
+                    and number(comparison.get('delta_kwh'), signed=True) is not None):
+                value = amount(('comparisons', kind, 'delta_kwh'))
+                if number(comparison.get('percent'), signed=True) is not None:
+                    value += ' · ' + exact(('comparisons', kind, 'percent')) + '%'
+                return value + (' · wspólne odczyty' if pl else ' · matched readings')
         totals = snapshot.get('totals') or {}
         if totals.get('measurement_complete') is True and snapshot.get('coverage', {}).get('complete') is True:
             for kind in [(snapshot.get('context') or {}).get('comparison_kind') or 'previous']:
@@ -669,6 +695,16 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                     brief += ' · ' + exact(('comparisons', kind, 'percent')) + '%'
                 return (brief + '\n' + comparison_names[kind]) if compact else result
         return tr('Brak porównywalnego pełnego okresu bazowego', 'No comparable full-period baseline')
+
+    if not original.get('coverage', {}).get('complete') and original.get('known_totals'):
+        coverage = original.get('coverage') or {}
+        measured, expected = coverage.get('measured_sources'), coverage.get('expected_sources')
+        missing = coverage.get('missing_sources') or []
+        scope = (f'Zmierzone {measured} z {expected} źródeł' if pl else f'Measured {measured} of {expected} sources')
+        if missing:
+            scope += (' · brak: ' if pl else ' · missing: ') + ', '.join(str(sid) for sid in missing)
+        text_parts.append(scope)
+        html_parts.append('<p class="note">' + escape(scope) + '</p>')
 
     kpis = []
     for metric, caption in (('kwh', tr('Zmierzona energia', 'Measured energy')),
@@ -797,6 +833,11 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     html_parts.append('</table>')
 
     groups = snapshot.get('groups') or {}
+    if groups.get('device_cost_basis') == 'purchase_price_excluding_pv':
+        device_note = tr('Koszty urządzeń według ceny zakupu, bez uwzględnienia PV i baterii.',
+                         'Device costs use the purchase price, excluding solar and battery effects.')
+        text_parts.append(device_note)
+        html_parts.append('<p class="note">' + escape(device_note) + '</p>')
     def friendly_name(kind, identity, index, item=None):
         value = (item or {}).get('name') or names[kind].get(identity)
         if kind == 'floors' and identity == '__no_floor__' and (not value or value == identity):
@@ -999,7 +1040,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
         coverage = comparison.get('coverage') or {}
         covered = [coverage.get('current'), *(coverage.get('baselines') or [coverage.get('baseline')])]
         comparable = (comparison.get('status') == 'ready' and comparison.get('reason') is None
-            and all(number(value) is not None and Decimal('0.9') <= number(value) <= 1 for value in covered))
+            and comparison.get('comparison_scope') in ('calendar_totals', 'common_measurements'))
         if comparable and number(comparison.get('percent'), signed=True) is not None:
             change += ' · ' + exact((*cp, 'percent')) + '%'
         else:
@@ -1057,10 +1098,14 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
             ('energy_cost', 'variable_cost', 'legacy_combined_cost', 'usage_cost', 'fixed_cost',
              'total_cost', 'effective_price', 'price_basis')))
         zone_costs = []
+        for index, zone_row in enumerate(snapshot.get('known_zones') or []):
+            zp = ('known_zones', index)
+            zone_costs.append([str(zone_row.get('label') or tr('Strefa', 'Zone')), amount((*zp, 'kwh')), amount((*zp, 'usage_cost'))])
         for index, zone_row in enumerate(((snapshot.get('period_summary') or {}).get('zone_breakdown') or {}).get('zones') or []):
             zp = ('period_summary', 'zone_breakdown', 'zones', index)
             name = str(zone_row.get('label') or tr('Strefa', 'Zone'))
-            zone_costs.append([name, amount((*zp, 'kwh')), amount((*zp, 'usage_cost'))])
+            if not snapshot.get('known_zones'):
+                zone_costs.append([name, amount((*zp, 'kwh')), amount((*zp, 'usage_cost'))])
         if zone_costs:
             matrix(tr('Koszt w strefach', 'Cost by zone'), [tr('Strefa', 'Zone'), 'kWh', label('usage_cost')],
                 zone_costs, section='period-zone-costs')
@@ -1191,6 +1236,9 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     text_parts.extend([tr('Jak czytać te liczby: brak pomiaru nie oznacza zera. Opłaty domu nie są kosztami urządzeń ani godzin. Pełne dane i dokładność są w eksporcie CSV raportu w HA.',
         'How to read: missing measurements are not zero. Household fees are not device or hourly costs. Full data and precision are in the report CSV export in HA.'), note,
         tr('Wygenerowano: ', 'Generated: ') + amount(('generated_at',)), snapshot_id])
+    if snapshot is not original:
+        return {**render_energy_analysis(original, language=language, timezone_name=timezone_name, hour_cycle=hour_cycle, date_language=date_language, _raw=True),
+                'html': ''.join(html_parts) + '</td></tr></table></body></html>', 'text': '\n'.join(text_parts) + '\n'}
     output = StringIO(newline='')
     writer = csv.writer(output, lineterminator='\r\n')
     writer.writerow(('snapshot_id', 'section', 'field', 'label', 'value', 'unit', 'raw_json'))

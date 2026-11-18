@@ -208,6 +208,11 @@ class _View:
         return str(c.get('label') or self.tr('previous'))
 
     def coverage_label(self):
+        sources, expected_sources = self.coverage.get('measured_sources'), self.coverage.get('expected_sources')
+        if type(sources) is int and type(expected_sources) is int:
+            unit = fmt.plural(expected_sources, 'źródła', 'źródeł', 'źródeł', language='pl')
+            return (f'Zmierzone {sources} z {expected_sources} {unit}' if self.lang == 'pl'
+                    else f'Measured {sources} of {expected_sources} sources')
         measured = self.coverage.get('full_hours', self.coverage.get('measured_hours'))
         expected = self.coverage.get('expected_full_hours', self.coverage.get('expected_hours'))
         label = self.tr('full') if self.complete else self.tr('partial')
@@ -228,6 +233,8 @@ class _View:
             return self.tr('no_data')
         if self.start and self.end and start.timestamp() == self.start.timestamp() and end.timestamp() == self.end.timestamp():
             return 'cały okres' if self.lang == 'pl' else 'entire period'
+        if self.kind == 'day' and start.utcoffset() == end.utcoffset():
+            return f'{self.clock(start)}–{self.clock(end, end=True)}'
         return f'{self.date(start)} {self.clock(start, offset=True)} – {self.date(end)} {self.clock(end, end=True, offset=True)}'
 
     def zone_label(self, zone, tariff=None):
@@ -417,7 +424,7 @@ class _View:
             labels.append((idx, axis_label)) if visible else None
             zone = next((z for z in self.zones if z.get('id') == p.get('zone')), None)
             name = self.zone_label(zone) if zone else ''
-            self.lines.append(f'- {tip}{"*" if p.get("zone") == "cheap" else ""} · {name} · {self.tr("previous")}: {self.energy(previous)}')
+            self.lines.append(' · '.join(part for part in (f'- {tip}{"*" if p.get("zone") == "cheap" else ""}', name, f'{self.tr("previous")}: {self.energy(previous)}') if part))
         # Whitespace between inline groups remains a line-break opportunity;
         # each marker and its label/date travel together in mail clients.
         legend_groups = []
@@ -476,7 +483,7 @@ class _View:
                 text_color = 'tx2' if idx == 1 else 'tx'
                 cells += f'<td class="{text_color} bd zone-value" align="right" style="padding:8px 0;border-top:1px solid {L["bd"]};font:{700 if idx == 0 else 400} 14px/20px {FONT};color:{L[text_color]}">{E(value)}</td>'
             rows.append('<tr>' + cells + '</tr>')
-            self.lines.append(f'- {label} ({hours}): {" · ".join(values)}')
+            self.lines.append(f'- {label}' + (f' ({hours})' if hours else '') + f': {" · ".join(values)}')
         gap = '<td width="4" style="width:4px;line-height:0;font-size:0">&nbsp;</td>'
         bar = f'<table role="presentation" width="100%" style="border-radius:6px"><tr>{gap.join(segments)}</tr></table>' if segments else ''
         table_class = ' class="energy-zones-en"' if self.lang == 'en' else ''
@@ -644,7 +651,10 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
     if cheap is None:
         cheap = v.zones[0] if len(v.zones)==1 else {}
     zone_label = v.tr('cheap') if len(v.zones) > 1 else f'{v.tr("zone")}: {v.zone_label(cheap)}'
-    pre_parts = [summary, comparison]
+    pre_summary = v.energy(available, 'tile')
+    if _numeric(available_cost):
+        pre_summary += f' · {v.money(available_cost)}'
+    pre_parts = [pre_summary, comparison]
     if cheap and v.complete and _numeric(cheap.get('share')):
         pre_parts.append(f'{zone_label.lower()} {v.share(cheap.get("share"))}')
     rankings = _items(model.get('ranking'))
@@ -660,6 +670,13 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
     subject_prefix = (('niepełne dane urządzeń' if v.lang == 'pl' else 'incomplete device readings') if v.complete and device_gaps else '') or ((v.tr('no_data') if v.coverage.get('status') == 'no_data' or v.coverage.get('status') is None and not _numeric(available) else v.tr('partial')) if not v.complete else '')
     subject_summary = summary if v.complete or _numeric(available) else ''
     subject = f'{v.tr("energy")}: {v.subject_label()} — ' + (subject_prefix + (' — ' if subject_summary else '') if subject_prefix else '') + subject_summary + (f' ({change})' if change else '')
+    measured_sources = v.coverage.get('measured_sources')
+    expected_sources = v.coverage.get('expected_sources')
+    if not v.complete and type(measured_sources) is int and type(expected_sources) is int and _numeric(available):
+        missing_count = max(0, expected_sources - measured_sources)
+        unit = fmt.plural(missing_count, 'źródła', 'źródeł', 'źródeł', language='pl')
+        missing_label = (f'bez {missing_count} {unit}' if v.lang == 'pl' else f'{missing_count} missing sources')
+        subject = f'{v.tr("energy")}: {v.subject_label()} — {pre_summary} · {missing_label}'
     kpis = (kpi_cell(partial_label, v.n(available), 'kWh', comparison, 'warn' if _numeric(first.get('delta_kwh')) and first['delta_kwh'] > 0 and change else 'good' if change else 'tx2')
             + '<td class="kpigap" style="width:2%"></td>'
             + kpi_cell(('Koszt znanych odczytów' if v.lang == 'pl' else 'Known readings cost') if not v.complete else v.tr('usage'), v.n(available_cost, 2), 'zł' if v.lang == 'pl' and v.currency == 'PLN' else str(v.currency or ''), '' if not v.complete else v.rate(v.totals.get('effective_rate')))
@@ -684,7 +701,8 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
     missing_note = (('Brakujące źródła: ' if v.lang == 'pl' else 'Missing sources: ') + '; '.join(missing_lines)) if missing_lines else ''
     if missing_note:
         v.lines.append(missing_note)
-    device_lines = [str(source.get('name') or source.get('id') or '') + ': ' + ', '.join(v.missing_range(r) for r in _items(source.get('ranges'))) for source in device_gaps]
+    missing_ids = {source.get('id') for source in _items(v.coverage.get('missing_sources'))}
+    device_lines = [str(source.get('name') or source.get('id') or '') + ': ' + ', '.join(v.missing_range(r) for r in _items(source.get('ranges'))) for source in device_gaps if source.get('id') not in missing_ids]
     device_note = (('Brakujące odczyty urządzeń: ' if v.lang == 'pl' else 'Missing device readings: ') + '; '.join(device_lines)) if device_lines else ''
     if device_note:
         v.lines.append(device_note)
@@ -693,6 +711,11 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
         ('<p data-role="stale-source" style="margin:8px 0 0"><strong>' + E(stale_line) + '</strong></p>' if isinstance(stale_line, str) and stale_line else '') +
         (paragraph(missing_note, margin='8px 0 0') if missing_note else '') +
         (paragraph(device_note, margin='8px 0 0') if device_note else ''), padding='16px 24px 0')]
+    if model.get('device_cost_basis') == 'purchase_price_excluding_pv':
+        note = ('Koszty urządzeń według ceny zakupu, bez uwzględnienia PV i baterii.' if v.lang == 'pl'
+                else 'Device costs use the purchase price, excluding solar and battery effects.')
+        v.lines.append(note)
+        blocks.append(section(paragraph(note)))
     sections = [(4, 'comparison', 'comparison_note', v.comparison_block),
                 (5, 'hour_chart' if v.kind == 'day' else 'daily_chart', 'chart_note', v.chart),
                 (6, 'zones', None, v.zone_block),

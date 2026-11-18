@@ -1113,6 +1113,34 @@ async def async_get_energy_metadata(hass: Any, ids: list[str]) -> dict[str, Any]
         return {}
 
 
+async def _first_energy_statistics(hass, metadata):
+    """Read first retained long-term statistic per configured source locally.
+
+    An unavailable Recorder/schema is distinct from a source with no history:
+    return None on failure so callers retain the conservative legacy expectation.
+    """
+    try:
+        from sqlalchemy import select, func
+        from homeassistant.components.recorder.db_schema import Statistics
+        from homeassistant.components.recorder.util import get_instance, session_scope
+        ids = {sid: item[0] for sid, item in metadata.items()
+               if isinstance(item, tuple) and len(item) >= 2 and type(item[0]) is int}
+        if not ids:
+            return None
+        recorder = get_instance(hass)
+        def query():
+            with session_scope(hass=hass, read_only=True) as session:
+                rows = session.execute(select(Statistics.metadata_id, func.min(Statistics.start_ts))
+                    .where(Statistics.metadata_id.in_(set(ids.values())))
+                    .where(Statistics.sum.is_not(None)).group_by(Statistics.metadata_id)).all()
+                first = dict(rows)
+                return {sid: first.get(meta_id) * 1000 if first.get(meta_id) is not None else None
+                        for sid, meta_id in ids.items()}
+        return await recorder.async_add_executor_job(query)
+    except Exception:
+        return None
+
+
 async def async_get_energy_usage(
     hass: Any,
     sensors: list[dict[str, Any]],
@@ -1138,6 +1166,7 @@ async def async_get_energy_usage(
         )
     except Exception:
         return snapshot
+    source_first = await _first_energy_statistics(hass, metadata)
     names = {sensor["entity_id"]: sensor["name"] for sensor in sensors}
     expected = set(range(int(start.timestamp()), int(end.timestamp()), 3600))
     devices = []
@@ -1208,6 +1237,7 @@ async def async_get_energy_usage(
                         "kwh": source_buckets.get(sid, {}).get(key)} for key in sorted(expected)]
                   for sid in ids}
     return {**snapshot, "status": status, "devices": devices, "hourly_buckets": hourly,
+            **({"source_first": source_first} if source_first is not None else {}),
             "source_buckets": per_source,
             "measurement_provenance": provenance, "coverage": coverage}
 

@@ -64,9 +64,11 @@ def compare_daily_mean7(current, baselines, current_period, baseline_periods, *,
                       coverage={'current': own[0], 'baselines': own[1:], 'common_current': common[0],
                                 'common_baselines': common[1:], 'expected_current_seconds': expected[0] * 3600,
                                 'expected_baseline_seconds': [total * 3600 for total in expected[1:]],
+                                'common_source_seconds': common_count * 3600,
                                 'measured_current_seconds': measured[0] * 3600,
                                 'measured_baseline_seconds': [count * 3600 for count in measured[1:]]})
-        complete = all(value is not None for value in full)
+        complete = (all(value is not None for value in full)
+                    and all(set(grid.values()) == set(grids[0].values()) for grid in grids[1:]))
         def priced(value):
             value['chart'] = projection.finish(value, len(ids), common_count)
             if tariff is not None:
@@ -75,7 +77,7 @@ def compare_daily_mean7(current, baselines, current_period, baseline_periods, *,
                     periods, tariff, value, complete=complete)
             return value
 
-        if not complete and any(ratio < .9 for ratio in (*own, *common)):
+        if not complete and not common_count:
             return priced(result)
         values = full if complete else [fsum(parts) for parts in shared]
         actual, mean = values[0], fsum(values[1:]) / 7

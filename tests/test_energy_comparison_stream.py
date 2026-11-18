@@ -36,6 +36,22 @@ class ComparisonStreamTest(unittest.TestCase):
             cursors[index] = end; calls += 1
         return model.finish(), model, calls
 
+    def test_dead_source_and_empty_intersection(self):
+        bounds = [('2026-01-01T00:00Z', '2026-01-01T02:00Z'),
+                  ('2025-12-31T00:00Z', '2025-12-31T02:00Z')]
+        sources = tuple(f'sensor.s{i}' for i in range(44))
+        missing = [('sensor.s43', i) for i in range(2)]
+        result, _, _ = self.run_pair(*bounds, sources=sources,
+            missing={'current': missing, 'baseline': missing}, values=(2, 1))
+        self.assertEqual('common_measurements', result['comparison_scope'])
+        self.assertEqual((172, 86, 100), (result['current_kwh'], result['baseline_kwh'], result['percent']))
+        self.assertTrue(result['chart']['reconciles_comparison_energy'])
+        all_missing = [(sid, i) for sid in sources for i in range(2)]
+        result, _, _ = self.run_pair(*bounds, sources=sources,
+            missing={'current': all_missing})
+        self.assertEqual('unknown', result['status'])
+        self.assertIsNone(result['current_kwh'])
+
     def test_full_dst_actual_totals_and_zero_baseline(self):
         current = ('2026-10-24T22:00Z', '2026-10-25T23:00Z')
         baseline = ('2026-10-23T22:00Z', '2026-10-24T22:00Z')
@@ -43,16 +59,16 @@ class ComparisonStreamTest(unittest.TestCase):
             with self.subTest(split=split):
                 result, _, _ = self.run_pair(current, baseline, zone='Europe/Warsaw', split=split)
                 self.assertEqual('ready', result['status'])
-                self.assertEqual('calendar_totals', result['comparison_scope'])
-                self.assertEqual((25, 24, 1), tuple(result[k] for k in ('current_kwh', 'baseline_kwh', 'delta_kwh')))
-                self.assertAlmostEqual(100/24, result['percent'])
+                self.assertEqual('common_measurements', result['comparison_scope'])
+                self.assertEqual((24, 24, 0), tuple(result[k] for k in ('current_kwh', 'baseline_kwh', 'delta_kwh')))
+                self.assertEqual(0, result['percent'])
         result, _, _ = self.run_pair(current, baseline, zone='Europe/Warsaw', values=(1, 0))
-        self.assertEqual(25, result['delta_kwh']); self.assertIsNone(result['percent'])
+        self.assertEqual(24, result['delta_kwh']); self.assertIsNone(result['percent'])
 
     def test_partial_uses_identical_frames_and_all_four_coverage_ratios(self):
         bounds = [('2026-01-01T00:00Z', '2026-01-01T10:00Z'),
                   ('2025-12-31T00:00Z', '2025-12-31T10:00Z')]
-        for same, expected in ((True, 'ready'), (False, 'unknown')):
+        for same, expected in ((True, 'ready'), (False, 'ready')):
             absent = [('sensor.a', 0), ('sensor.b', 0)]
             missing = {'current': absent, 'baseline': absent if same else [('sensor.a', 1), ('sensor.b', 1)]}
             result, _, _ = self.run_pair(*bounds, sources=('sensor.a', 'sensor.b'), missing=missing, split=3)
@@ -63,7 +79,7 @@ class ComparisonStreamTest(unittest.TestCase):
                 self.assertEqual((18, 18), (result['current_kwh'], result['baseline_kwh']))
                 self.assertEqual('common_measurements', result['comparison_scope'])
             else:
-                self.assertIsNone(result['delta_kwh'])
+                self.assertEqual((16, 16, 0), (result['current_kwh'], result['baseline_kwh'], result['delta_kwh']))
 
     def test_unmatched_fold_counts_own_only_without_lowering_threshold(self):
         current = ('2026-10-24T22:00Z', '2026-10-25T23:00Z')
@@ -78,7 +94,7 @@ class ComparisonStreamTest(unittest.TestCase):
     def test_year_leap_and_different_month_lengths_never_zip_shift(self):
         result, _, calls = self.run_pair(('2024-01-01T00:00Z', '2025-01-01T00:00Z'),
             ('2023-01-01T00:00Z', '2024-01-01T00:00Z'), kind='yearly')
-        self.assertEqual((8784, 8760, 24), tuple(result[k] for k in ('current_kwh', 'baseline_kwh', 'delta_kwh')))
+        self.assertEqual((8760, 8760, 0), tuple(result[k] for k in ('current_kwh', 'baseline_kwh', 'delta_kwh')))
         self.assertEqual(106, calls)
         # A missing March1 cell must not be paired to February29 after the leap.
         missing = {'current': [('sensor.a', 60*24)], 'baseline': [('sensor.a', 59*24)]}
@@ -87,7 +103,7 @@ class ComparisonStreamTest(unittest.TestCase):
         self.assertEqual((8759, 8759), (result['current_kwh'], result['baseline_kwh']))
         result, _, _ = self.run_pair(('2026-01-01T00:00Z', '2026-02-01T00:00Z'),
             ('2026-02-01T00:00Z', '2026-03-01T00:00Z'), kind='monthly', split=73)
-        self.assertEqual((744, 672), (result['current_kwh'], result['baseline_kwh']))
+        self.assertEqual((672, 672), (result['current_kwh'], result['baseline_kwh']))
 
     def test_rejected_push_does_not_advance_or_poison_retry_and_inputs_detached(self):
         current = ('2026-01-01T00:00Z', '2026-01-01T01:00Z')
@@ -122,7 +138,7 @@ class ComparisonStreamTest(unittest.TestCase):
         result, model, calls = self.run_pair(('2024-01-01T00:00Z', '2025-01-01T00:00Z'),
             ('2023-01-01T00:00Z', '2024-01-01T00:00Z'), kind='yearly',
             sources=tuple(f'sensor.s{i}' for i in range(512)))
-        self.assertEqual(8784*512, result['current_kwh'])
+        self.assertEqual(8760*512, result['current_kwh'])
         self.assertEqual(8760*512, result['baseline_kwh'])
         self.assertEqual(106, calls)
         self.assertLessEqual(model.peak_retained_cells, 2*168*512)
@@ -135,12 +151,13 @@ class ComparisonStreamTest(unittest.TestCase):
         for split in (1, 2, 3, 24, 168):
             with self.subTest(split=split):
                 result, _, _ = self.run_pair(current, baseline, zone='Antarctica/Troll', split=split)
-                self.assertEqual((26, 24), (result['current_kwh'], result['baseline_kwh']))
-                self.assertEqual('calendar_totals', result['comparison_scope'])
+                self.assertEqual((24, 24), (result['current_kwh'], result['baseline_kwh']))
+                self.assertEqual('common_measurements', result['comparison_scope'])
                 result, _, _ = self.run_pair(current, baseline, zone='Antarctica/Troll', split=split,
                                            missing={'current': [('sensor.a', 15)]})
-                # Common23/26 <90%, despite own25/26 and baseline24/24.
-                self.assertEqual('unknown', result['status'])
+                # Compare the actual matched frames, even below 90% coverage.
+                self.assertEqual('ready', result['status'])
+                self.assertEqual((23, 23), (result['current_kwh'], result['baseline_kwh']))
                 self.assertEqual(23/26, result['coverage']['common_current'])
 
     def test_month_chunks_keep_whole_period_origin_for_partial_intersection(self):
@@ -181,8 +198,8 @@ class ProvenComparisonChartTest(unittest.TestCase):
             result, _, _ = self.run_pair(*periods, zone='Europe/Warsaw', values=(1, 2), split=2)
             chart = result['chart']
             self.assertEqual('ready', result['status'])
-            self.assertFalse(chart['reconciles_comparison_energy'])
-            self.assertEqual('partial', chart['status'])
+            self.assertTrue(chart['reconciles_comparison_energy'])
+            self.assertIn(chart['status'], ('ready', 'partial'))
             if periods[0] == current:
                 rows = chart['markers']
                 self.assertEqual(25, len(rows))
@@ -214,16 +231,15 @@ class ProvenComparisonChartTest(unittest.TestCase):
             '2026-01-02T00:00Z', '2026-01-02T10:00Z')
         self.assertIsNone(acc.finish()['chart']['bins'][8]['kwh'])
 
-    def test_disjoint_masks_below_threshold_do_not_publish_equal_zero_totals(self):
+    def test_disjoint_masks_compare_actual_zero_totals(self):
         result, _, _ = self.run_pair(('2026-01-02T00:00Z', '2026-01-02T10:00Z'),
             ('2026-01-01T00:00Z', '2026-01-01T10:00Z'), sources=('sensor.a', 'sensor.b'),
             missing={'current': [('sensor.b', 8), ('sensor.b', 9)],
                      'baseline': [('sensor.a', 0), ('sensor.a', 1)]}, values=(0, 0))
-        self.assertEqual('unknown', result['status'])
-        self.assertEqual('unknown', result['chart']['status'])
-        self.assertFalse(result['chart']['reconciles_comparison_energy'])
-        self.assertTrue(all(row['current_kwh'] is None and row['baseline_kwh'] is None
-                            for row in result['chart']['markers']))
+        self.assertEqual('ready', result['status'])
+        self.assertEqual((0, 0), (result['current_kwh'], result['baseline_kwh']))
+        self.assertIsNone(result['percent'])
+        self.assertTrue(result['chart']['reconciles_comparison_energy'])
 
     def test_leap_zero_coincidence_does_not_prove_month_bijection(self):
         result, model, calls = self.run_pair(('2024-01-01T00:00Z', '2025-01-01T00:00Z'),
@@ -231,11 +247,11 @@ class ProvenComparisonChartTest(unittest.TestCase):
         rows = result['chart']['markers']
         self.assertEqual((0, 0), (result['current_kwh'], result['baseline_kwh']))
         self.assertEqual(12, len(rows)); self.assertEqual(106, calls)
-        self.assertEqual('unknown', rows[1]['status'])
+        self.assertEqual('ready', rows[1]['status'])
         self.assertEqual('ready', rows[2]['status'])
         self.assertEqual(('0', '0'), (rows[2]['current_kwh'], rows[2]['baseline_kwh']))
         self.assertEqual(int(instant('2023-03-01T00:00Z').timestamp()*1000), rows[2]['baseline_from'])
-        self.assertFalse(result['chart']['reconciles_comparison_energy'])
+        self.assertTrue(result['chart']['reconciles_comparison_energy'])
         self.assertLessEqual(model.peak_retained_cells, 2*168)
         self.assertEqual(0, model.retained_cells)
 
@@ -246,7 +262,7 @@ class ProvenComparisonChartTest(unittest.TestCase):
         self.assertEqual(31, len(rows))
         self.assertEqual(('24', '48'), (rows[29]['current_kwh'], rows[29]['baseline_kwh']))
         self.assertEqual('unknown', rows[30]['status'])
-        self.assertFalse(result['chart']['reconciles_comparison_energy'])
+        self.assertTrue(result['chart']['reconciles_comparison_energy'])
         short, _, _ = self.run_pair(('2026-01-01T00:00Z', '2026-01-03T12:00Z'),
             ('2025-12-01T00:00Z', '2025-12-03T12:00Z'), kind='monthly', values=(1, 2), split=7)
         self.assertEqual(('12', '24'), tuple(short['chart']['markers'][2][k]
@@ -256,10 +272,10 @@ class ProvenComparisonChartTest(unittest.TestCase):
     def test_week_day_with_unequal_dst_hours_is_not_full_bin_match(self):
         result, _, _ = self.run_pair(('2026-03-22T23:00Z', '2026-03-29T22:00Z'),
             ('2026-03-15T23:00Z', '2026-03-22T23:00Z'), kind='weekly', zone='Europe/Warsaw')
-        self.assertEqual((167, 168), (result['current_kwh'], result['baseline_kwh']))
+        self.assertEqual((167, 167), (result['current_kwh'], result['baseline_kwh']))
         self.assertEqual(7, len(result['chart']['markers']))
-        self.assertEqual('unknown', result['chart']['markers'][6]['status'])
-        self.assertFalse(result['chart']['reconciles_comparison_energy'])
+        self.assertEqual('ready', result['chart']['markers'][6]['status'])
+        self.assertTrue(result['chart']['reconciles_comparison_energy'])
 
     def test_rejected_chunk_cannot_poison_marker_state(self):
         current = ('2026-01-02T00:00Z', '2026-01-02T01:00Z')
@@ -308,13 +324,12 @@ class ProvenMean7ChartTest(unittest.TestCase):
         self.assertEqual([3600]*7, row['selected_baseline_source_seconds'])
         self.assertTrue(result['chart']['reconciles_comparison_energy'])
 
-    def test_seven_different_missing_patterns_fail_global_gate_without_zero_series(self):
+    def test_seven_different_missing_patterns_use_shared_intersection(self):
         result = self.compare(missing={i: [('sensor.b', i)] for i in range(8)})
-        self.assertEqual('unknown', result['status'])
+        self.assertEqual('ready', result['status'])
         self.assertEqual(.6, result['coverage']['common_current'])
-        self.assertEqual('unknown', result['chart']['status'])
-        self.assertFalse(result['chart']['reconciles_comparison_energy'])
-        self.assertTrue(all(row['baseline_kwh'] is None for row in result['chart']['markers']))
+        self.assertEqual((12, 48), (result['current_kwh'], result['baseline_kwh']))
+        self.assertTrue(result['chart']['reconciles_comparison_energy'])
 
     def test_distributed_missing_patterns_still_publish_only_all_eight_intersection(self):
         # 48 source cells/day; union of four absent cells still passes 90%.

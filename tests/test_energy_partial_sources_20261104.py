@@ -45,7 +45,7 @@ class PartialSources(unittest.TestCase):
                 self.assertEqual(result['totals']['recorded_import_kwh'],subtotal)
                 self.assertEqual(result['coverage']['expected_source_hours'],48)
                 if mode == 'partial':
-                    self.assertIsNone(result['totals']['import_kwh'])
+                    self.assertEqual(result['totals']['import_kwh'],24)
                     self.assertEqual(result['totals']['recorded_usage_cost'],12)
                     self.assertEqual(len(result['coverage']['missing_sources'][0]['ranges']),1)
                 if mode == 'intermittent': self.assertEqual(len(result['coverage']['missing_sources'][0]['ranges']),12)

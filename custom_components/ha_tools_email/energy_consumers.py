@@ -140,7 +140,7 @@ class ConsumerPeriod:
                         'unmeasured': breakdown['unmeasured']['kwh_decimal']})
                 partition = partition and breakdown['status'] == 'ready'
                 issues.update(issue['reason'] for issue in breakdown['issues'])
-                rate = self._rates.resolve_interval(stamp, hour['to']) if self._rates and self._domain == 'grid_import' else None
+                rate = self._rates.resolve_interval(stamp, hour['to']) if self._rates else None
                 hour_amounts = {} if statistics is not None or report is not None else None
                 for sid, cell in {**breakdown['devices'], REMAINDER: breakdown['unmeasured']}.items():
                     state = states[sid]
@@ -232,7 +232,7 @@ class ConsumerPeriod:
             return self._finish(active)
 
     def _finish(self, active):
-        compatible = active is not None and active['compatible'] and self._domain == 'grid_import'
+        compatible = active is not None and active['compatible']
         output = {}
         for sid, state in self._states.items():
             full = state['observations'] == self._hours
@@ -251,7 +251,7 @@ class ConsumerPeriod:
                     row['usage_cost'] = usage
             output[sid] = row
         reconciled = False
-        if compatible and self._partition and active['pricing_complete']:
+        if compatible and self._domain == 'grid_import' and self._partition and active['pricing_complete']:
             allocated = {}
             for key in COMPONENTS:
                 target = active['known_costs'].get(key)
@@ -306,7 +306,7 @@ class ConsumerPeriod:
 
         return {**{key: value for key, value in self._membership.items() if key != 'sources'},
                 'registry_revision': self._membership['revision'],
-                'energy_domain': self._domain, 'partition_complete': self._partition,
+                'energy_domain': self._domain, 'device_cost_basis': 'purchase_price_excluding_pv' if self._domain == 'site_consumption' else 'grid_purchase_price', 'partition_complete': self._partition,
                 'devices': devices, 'areas': {key: aggregate(ids) for key, ids in areas.items()},
                 'floors': {key: aggregate(ids) for key, ids in floors.items()},
                 'unassigned': aggregate(unassigned), 'unmeasured': output[REMAINDER],

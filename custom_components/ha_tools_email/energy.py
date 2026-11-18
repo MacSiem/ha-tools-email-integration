@@ -27,7 +27,8 @@ def measurement_window(now, measurement_timezone):
     """HA-local midnight through the last completed absolute Recorder hour."""
     local = now.astimezone(ZoneInfo(measurement_timezone))
     start = local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
-    end = now.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    from .energy_native_short import cutoff_at
+    end = cutoff_at(now, measurement_timezone).replace(minute=0, second=0, microsecond=0)
     aligned = start.timestamp() % 3600 == 0 and end >= start
     return start, end, aligned
 
@@ -269,7 +270,7 @@ class EnergySnapshotCoordinator:
         # Native entity values end at an actual completed five-minute cutoff.
         if 'entity_facts' in result:
             from .energy_native_short import cutoff_at
-            if result['entity_facts'].get('measurement_through') != cutoff_at(datetime.now(timezone.utc)).isoformat():
+            if result['entity_facts'].get('measurement_through') != cutoff_at(datetime.now(timezone.utc), self.hass.config.time_zone).isoformat():
                 return False
         # Historical price queries have no household measurement calendar.
         if 'today' in result:
@@ -505,7 +506,7 @@ class EnergySnapshotCoordinator:
         rows = await self._async_run_cpu(partial(normalized_cells, merged, metadata, ids, end, cutoff))
         self._check_running()
         await self._async_check_source_access(guard, sensors)
-        accepted = len(rows) == (cutoff - end).total_seconds() // 300 and all(row['kwh'] is not None for row in rows)
+        accepted = len(rows) == (cutoff - end).total_seconds() // 300 and all(row['kwh'] is not None and not row.get('missing_sources') for row in rows)
         self._short_state = {'key': key, 'through': cutoff if accepted else cache['through'],
             'raw': merged if accepted else cache['raw'], 'attempted': cutoff,
             'retry_at': None if accepted else now + timedelta(seconds=NATIVE_SHORT_RETRY_SECONDS), 'rows': rows}
@@ -552,7 +553,7 @@ class EnergySnapshotCoordinator:
                     raise RuntimeError('energy_sources_changed')
                 self._measurement, self._measurement_key, self._measurement_at = measured, key, now
             from .energy_native_short import cutoff_at
-            tail_cutoff = cutoff_at(now)
+            tail_cutoff = cutoff_at(now, tz)
             await self._async_native_short(sensors, metadata, start, end, tail_cutoff, tz, key[3], guard, now=now)
             self._check_running()
             state = await self._async_snapshot_tariff()
@@ -582,7 +583,7 @@ class EnergySnapshotCoordinator:
                     or latest_state['revision'] != state['revision']
                     or getattr(self.storage, 'current_tariff_revision', latest_state['revision']) != state['revision']
                     or (real_time and (measurement_window(datetime.now(timezone.utc), tz)[:2] != (start, end)
-                        or cutoff_at(datetime.now(timezone.utc)) != tail_cutoff))):
+                        or cutoff_at(datetime.now(timezone.utc), tz) != tail_cutoff))):
                 self._invalidate()
                 raise RuntimeError('energy_snapshot_changed')
             self.data = result
