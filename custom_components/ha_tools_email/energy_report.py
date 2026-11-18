@@ -167,6 +167,7 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     if not _raw and snapshot.get('known_totals') and not snapshot.get('coverage', {}).get('complete'):
         snapshot = deepcopy(snapshot)
         snapshot['totals'].update(snapshot['known_totals'])
+        snapshot['totals']['recorded_household_kwh'] = snapshot['known_totals'].get('kwh')
         if snapshot.get('known_chart'):
             snapshot['chart'] = snapshot['known_chart']
         for level in ('devices', 'areas', 'floors'):
@@ -1258,9 +1259,6 @@ def append_partial_model_csv(csv_data, snapshot_id, model, language):
     if coverage.get('complete') is True and not coverage.get('missing_devices'):
         return csv_data
     pl = str(language).lower().startswith('pl')
-    if snapshot is not original:
-        return {**render_energy_analysis(original, language=language, timezone_name=timezone_name, hour_cycle=hour_cycle, date_language=date_language, _raw=True),
-                'html': ''.join(html_parts) + '</td></tr></table></body></html>', 'text': '\n'.join(text_parts) + '\n'}
     output = StringIO(newline='')
     writer = csv.writer(output, lineterminator='\r\n')
     def safe(value):

@@ -454,7 +454,7 @@ def _build_report(inputs):
         recorded_import_kwh=_known_sum(row['recorded_kwh'] for row in hourly if not row['future']),
         recorded_usage_cost=_sum(row['recorded_cost'] for row in source_rows if row['recorded_kwh'] is not None) if has_data else None,
         fixed_share=fixed,
-        total_with_fixed=usage + fixed if usage is not None and fixed is not None else None,
+        total_with_fixed=usage + fixed if usage is not None and fixed is not None and len(observed) == len(source_rows) else None,
         effective_rate=_ratio(usage, imported))
     peak = max(observed, key=lambda row: row['kwh']) if observed else None
     totals.update(peak_hour=peak['hour'] if peak else None, peak_kwh=peak['kwh'] if peak else None)

@@ -306,7 +306,7 @@ class EnergyP1ActualProducerTests(unittest.IsolatedAsyncioTestCase):
         from tests.test_tariff_history import version
         h = Harness(); h.user.is_admin = True; h.now = datetime(2026, 1, 13, 12, tzinfo=UTC)
         h.book['tariffs'][0]['versions'] = [version('2026-01-01', 1, 'first'), version('2026-01-08', 2, 'second')]
-        for now in (datetime(2026, 1, 13, 12, tzinfo=UTC), datetime(2026, 1, 9, 12, tzinfo=UTC)):
+        for now in (datetime(2026, 1, 13, 12, 5, tzinfo=UTC), datetime(2026, 1, 9, 12, 5, tzinfo=UTC)):
             h.now = now
             with h.patches():
                 result = await h.subject.async_get_report('week', 'user', anchor='2026-01-05', language='en', timezone_name='UTC', hour_cycle='24')
