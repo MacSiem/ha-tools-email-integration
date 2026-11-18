@@ -568,7 +568,7 @@ def _build_report(inputs):
         markers = previous_comparison['chart'].get('markers', [])
         mapped = {row['current_from']: _decimal(row.get('baseline_kwh'))
                   for row in markers if row.get('status') == 'ready'}
-        if previous_comparison['chart'].get('grain') == 'hour':
+        if previous_comparison['chart'].get('grain', 'hour' if period['kind'] == 'day' else None) == 'hour':
             for hour in hourly:
                 stamp = int(_instant(hour['start']).timestamp() * 1000)
                 hour['prev_kwh'] = mapped.get(stamp)

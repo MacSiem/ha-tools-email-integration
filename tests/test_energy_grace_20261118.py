@@ -1,9 +1,10 @@
 """Recorder grace remains stable across hour and local-day boundaries."""
 import unittest
 from datetime import datetime, timezone
-from tests.test_energy_measurements import measurements  # Set up the integration package.
-from custom_components.ha_tools_email.energy_native_short import cutoff_at
-from custom_components.ha_tools_email.energy import measurement_window
+from tests.test_build1_energy_native_short import energy, short
+
+cutoff_at = short.cutoff_at
+measurement_window = energy.measurement_window
 
 
 class RecorderGraceTest(unittest.TestCase):
