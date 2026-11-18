@@ -183,7 +183,7 @@ def build_entity_snapshot(state, measurement, *, _legacy_builder=None, _short_ro
             except TariffValidationError:
                 pass
     from .energy_native_short import cutoff_at
-    facts = _today(result, measurement, engine, _short_rows, cutoff_at(kwargs['now']))
+    facts = _today(result, measurement, engine, _short_rows, cutoff_at(kwargs['now'], kwargs.get('measurement_timezone')))
     facts.update(zone_options=list(dict.fromkeys(options)), label=None, next_change=None, next_zone=None)
     if book is not None:
         current = build_current(book, now=kwargs['now'])

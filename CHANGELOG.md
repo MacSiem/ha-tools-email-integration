@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Show available source readings, tariff zones and purchase-price costs consistently across Energy reports and entities, and compare matching source-hours. Keep full residual balances gated on complete measurements.
+- Apply Recorder grace and identify missing sources; device purchase-price costs exclude PV and battery effects.
+
 ## 2.4.6 (2026-11-04)
 
 - Energy reports show available source readings when some sources are missing, with source-hour coverage and missing intervals. Full balances and comparisons remain restricted to complete measurements.

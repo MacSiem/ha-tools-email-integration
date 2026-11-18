@@ -275,7 +275,9 @@ class EnergyAnalysisAccumulator:
         # and its completeness flags intact for residual and compatibility.
         known_rows = [{**row, 'kwh': row.get('recorded_kwh')} for row in self._rows]
         known_active = None
-        if self._book is not None:
+        if complete:
+            known_active = active
+        elif self._book is not None:
             known_pricing = price_book(self._book, known_rows, price_coverage,
                                        include_report_projection=self._include_report_hours)
             known_active = next((row for row in known_pricing['tariffs']

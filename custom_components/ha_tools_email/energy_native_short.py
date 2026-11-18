@@ -8,9 +8,16 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 
-def cutoff_at(now):
+def cutoff_at(now, measurement_timezone=None):
+    """Allow one Recorder cycle before consuming completed statistics."""
+    from zoneinfo import ZoneInfo
+    local = now.astimezone(ZoneInfo(measurement_timezone)) if measurement_timezone else None
     now = now.astimezone(timezone.utc)
-    return now.replace(minute=now.minute // 5 * 5, second=0, microsecond=0)
+    cutoff = now.replace(minute=now.minute // 5 * 5, second=0, microsecond=0) - timedelta(minutes=5)
+    if local is not None:
+        midnight = local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+        cutoff = max(midnight, cutoff)
+    return cutoff
 
 
 async def async_read_short_statistics(hass, start, end, ids):

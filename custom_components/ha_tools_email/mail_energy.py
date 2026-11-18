@@ -208,6 +208,10 @@ class _View:
         return str(c.get('label') or self.tr('previous'))
 
     def coverage_label(self):
+        sources, expected_sources = self.coverage.get('measured_sources'), self.coverage.get('expected_sources')
+        if type(sources) is int and type(expected_sources) is int:
+            return (f'Zmierzone {sources} z {expected_sources} źródeł' if self.lang == 'pl'
+                    else f'Measured {sources} of {expected_sources} sources')
         measured = self.coverage.get('full_hours', self.coverage.get('measured_hours'))
         expected = self.coverage.get('expected_full_hours', self.coverage.get('expected_hours'))
         label = self.tr('full') if self.complete else self.tr('partial')
@@ -646,7 +650,10 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
     if cheap is None:
         cheap = v.zones[0] if len(v.zones)==1 else {}
     zone_label = v.tr('cheap') if len(v.zones) > 1 else f'{v.tr("zone")}: {v.zone_label(cheap)}'
-    pre_parts = [summary, comparison]
+    pre_summary = v.energy(available, 'tile')
+    if _numeric(available_cost):
+        pre_summary += f' · {v.money(available_cost)}'
+    pre_parts = [pre_summary, comparison]
     if cheap and v.complete and _numeric(cheap.get('share')):
         pre_parts.append(f'{zone_label.lower()} {v.share(cheap.get("share"))}')
     rankings = _items(model.get('ranking'))
@@ -662,6 +669,12 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
     subject_prefix = (('niepełne dane urządzeń' if v.lang == 'pl' else 'incomplete device readings') if v.complete and device_gaps else '') or ((v.tr('no_data') if v.coverage.get('status') == 'no_data' or v.coverage.get('status') is None and not _numeric(available) else v.tr('partial')) if not v.complete else '')
     subject_summary = summary if v.complete or _numeric(available) else ''
     subject = f'{v.tr("energy")}: {v.subject_label()} — ' + (subject_prefix + (' — ' if subject_summary else '') if subject_prefix else '') + subject_summary + (f' ({change})' if change else '')
+    measured_sources = v.coverage.get('measured_sources')
+    expected_sources = v.coverage.get('expected_sources')
+    if not v.complete and type(measured_sources) is int and type(expected_sources) is int and _numeric(available):
+        missing_count = max(0, expected_sources - measured_sources)
+        missing_label = (f'bez {missing_count} źródeł' if v.lang == 'pl' else f'{missing_count} missing sources')
+        subject = f'{v.tr("energy")}: {v.subject_label()} — {pre_summary} · {missing_label}'
     kpis = (kpi_cell(partial_label, v.n(available), 'kWh', comparison, 'warn' if _numeric(first.get('delta_kwh')) and first['delta_kwh'] > 0 and change else 'good' if change else 'tx2')
             + '<td class="kpigap" style="width:2%"></td>'
             + kpi_cell(('Koszt znanych odczytów' if v.lang == 'pl' else 'Known readings cost') if not v.complete else v.tr('usage'), v.n(available_cost, 2), 'zł' if v.lang == 'pl' and v.currency == 'PLN' else str(v.currency or ''), '' if not v.complete else v.rate(v.totals.get('effective_rate')))

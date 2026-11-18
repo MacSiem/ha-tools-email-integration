@@ -79,13 +79,14 @@ def _finish(accumulator, context, provenance, comparisons=None, baseline_accumul
                 # structural zero partitions whose old energy totals are full.
                 # Complete calendar groups retain ConsumerPeriod allocation.
                 adjusted_costs = streamed['reconciles_household_cost_delta']
+                use_common = comparison.get('comparison_scope') == 'common_measurements'
                 groups['reconciles_household_cost_delta'] = adjusted_costs
                 for level in ('devices', 'areas', 'floors'):
                     for key, row in groups[level].items():
-                        if adjusted_costs or row['reason'] == 'group_common_measurements_required':
+                        if adjusted_costs or use_common or row['reason'] == 'group_common_measurements_required':
                             groups[level][key] = streamed[level][key]
                 for key in ('unassigned', 'unmeasured'):
-                    if adjusted_costs or groups[key]['reason'] == 'group_common_measurements_required':
+                    if adjusted_costs or use_common or groups[key]['reason'] == 'group_common_measurements_required':
                         groups[key] = streamed[key]
                 if not groups['reconciles_household_delta']:
                     groups['reconciles_household_delta'] = streamed['reconciles_household_delta']

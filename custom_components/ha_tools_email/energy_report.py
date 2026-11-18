@@ -655,6 +655,9 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
     def energy_context(*, compact=False):
         for kind, comparison in (snapshot.get('comparisons') or {}).items():
             if (comparison.get('status') == 'ready' and comparison.get('comparison_scope') == 'common_measurements'
+                    and comparison.get('reason') is None
+                    and number((comparison.get('coverage') or {}).get('common_source_seconds')) not in (None, 0)
+                    and (comparison.get('chart') or {}).get('reconciles_comparison_energy') is True
                     and number(comparison.get('delta_kwh'), signed=True) is not None):
                 value = amount(('comparisons', kind, 'delta_kwh'))
                 if number(comparison.get('percent'), signed=True) is not None:
