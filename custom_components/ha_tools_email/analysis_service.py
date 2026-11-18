@@ -671,6 +671,8 @@ class EnergyAnalysisService:
                         comparison_calendar_kind = {'day': 'daily', 'week': 'weekly', 'month': 'monthly', 'year': 'yearly'}[kind]
                         comparison_period_kind = kind
                     self._assert_current(context)
+                    if not configuration['grid_sensors']:
+                        plan = {**plan, 'status': 'unknown', 'reason': 'no_grid_sources'}
                     comparisons = {}
                     if plan['status'] == 'ready' and comparison != 'mean7':
                         pair = await self._cpu(partial(PairedComparisonAccumulator, period,

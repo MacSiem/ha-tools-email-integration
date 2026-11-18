@@ -62,7 +62,7 @@ class EnergySensor(EnergySnapshotEntity, SensorEntity):
             attributes.update(measurement_through=facts.get('measurement_through'),
                 resolution=facts.get('resolution'), coverage_complete=facts.get('coverage_complete'),
                 measured_sources=facts.get('measured_sources'), expected_sources=facts.get('expected_sources'),
-                missing_sources=facts.get('missing_sources', []),
+                missing_sources_count=facts.get('missing_sources_count'),
                 reason=facts.get('reason'))
         return attributes
 

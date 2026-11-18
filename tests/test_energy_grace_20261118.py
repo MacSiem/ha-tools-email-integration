@@ -23,3 +23,26 @@ class RecorderGraceTest(unittest.TestCase):
         now = datetime.fromisoformat('2026-10-25T01:02:00+00:00')
         self.assertEqual(cutoff_at(now, 'Europe/Warsaw').isoformat(), '2026-10-25T00:55:00+00:00')
         self.assertEqual(measurement_window(now, 'Europe/Warsaw')[1].isoformat(), '2026-10-25T00:00:00+00:00')
+
+
+class EntityPrivacyTest(unittest.IsolatedAsyncioTestCase):
+    async def test_missing_source_ids_are_not_in_snapshot_or_entity_attributes(self):
+        import importlib
+        from tests.test_energy_snapshot import entity_modules
+        from tests.test_build1_energy_entities import NativeSensorTests
+        projection = importlib.import_module(energy.__package__ + '.energy_entity_projection')
+        start = datetime.fromisoformat('2026-01-01T00:00:00+00:00')
+        end = datetime.fromisoformat('2026-01-01T00:05:00+00:00')
+        result = {'today': {'from': start.isoformat(), 'to': start.isoformat(),
+                            'boundary_complete': True}}
+        measurement = {'source_ids': ['sensor.private_a', 'sensor.private_b'], 'hourly_buckets': []}
+        cells = [{'from': start.isoformat(), 'to': end.isoformat(), 'kwh': 1,
+                  'missing_sources': ['sensor.private_b']}]
+        facts = projection._today(result, measurement, None, cells, end)
+        self.assertEqual(1, facts['missing_sources_count'])
+        self.assertNotIn('sensor.private', repr(facts))
+        helper = NativeSensorTests()
+        entities, coordinator = await helper.sensors()
+        coordinator.data['entity_facts'] = facts
+        self.assertNotIn('sensor.private', repr(entities['today'].extra_state_attributes))
+        self.assertEqual(1, entities['today'].extra_state_attributes['missing_sources_count'])

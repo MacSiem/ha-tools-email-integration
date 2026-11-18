@@ -131,7 +131,7 @@ def _today(result, measurement, engine, short_rows, cutoff):
     facts.update(import_kwh=float(total), coverage_complete=complete,
         measured_sources=len(measured_sources) if isinstance(source_ids, list) else None,
         expected_sources=len(source_ids) if isinstance(source_ids, list) else None,
-        missing_sources=sorted(missing_sources),
+        missing_sources_count=len(missing_sources),
         usage_cost=float(usage) if pricing_known and compatible else None,
         cheap_kwh=float(cheap) if classification_known else None,
         cheap_share_pct=float(100 * cheap / total) if classification_known and total else None,
