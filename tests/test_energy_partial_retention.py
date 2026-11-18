@@ -17,7 +17,8 @@ class PartialRetentionTest(unittest.TestCase):
             prefs, {"sensor.complete": {"change": 2}, "sensor.gapped": {"change": 1}},
             gap="sensor.gapped")
         self.assertEqual("partial", summary["status"])
-        self.assertIsNone(summary["total_kwh"])
+        self.assertEqual(71, float(summary["total_kwh"]))
+        self.assertIsNone(summary["totals"]["kwh"])
         self.assertIsNone(summary["total_cost"])
         self.assertEqual(71, sum(row["kwh"] for row in calls["snapshot"]["devices"] if row["kwh"] is not None))
         rows = {row["entity_id"]: row for row in calls["snapshot"]["devices"]}
@@ -53,7 +54,8 @@ class PartialRetentionTest(unittest.TestCase):
                                     for sid in ["sensor.good", "sensor.absent"]]}
         summary, calls = provider.EnergyGridProviderTest().compose(prefs, {"sensor.good": {"change": 2}})
         self.assertEqual("partial", summary["status"])
-        self.assertIsNone(summary["total_kwh"])
+        self.assertEqual(48, float(summary["total_kwh"]))
+        self.assertIsNone(summary["totals"]["kwh"])
         self.assertEqual(48, sum(row["kwh"] for row in calls["snapshot"]["devices"] if row["kwh"] is not None))
         self.assertEqual(["sensor.good"], [r["entity_id"] for r in calls["snapshot"]["devices"]])
         self.assertEqual(1, calls["snapshot"]["coverage"]["unavailable_sources"])
