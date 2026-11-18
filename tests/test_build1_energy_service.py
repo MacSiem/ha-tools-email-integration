@@ -236,6 +236,16 @@ class Build1ServiceTest(unittest.TestCase):
                         self.assertTrue(all(end <= cutoff for _, _, end in h.queries))
         asyncio.run(run())
 
+    def test_year_report_keeps_one_equivalent_previous_and_pairs_once(self):
+        async def run():
+            h = Harness(); h.now = datetime(2026, 1, 4, 12, 5, tzinfo=UTC)
+            paired = {'status': 'unknown', 'reason': 'no_common_measurements', 'chart': {'markers': []}}
+            with h.patches(), patch.object(inputs, '_report_pair', new_callable=AsyncMock, return_value=paired) as pair:
+                result = await h.subject.async_get_build1_model('year', 'user', mode='full')
+            self.assertEqual(['previous_year'], [row['key'] for row in result['report_model']['comparisons']])
+            self.assertEqual(1, pair.await_count)
+        asyncio.run(run())
+
     def test_permission_and_revision_during_extra_history_reads_fail_closed(self):
         async def run():
             for mutate in ('permission', 'revision'):
