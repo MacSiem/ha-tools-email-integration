@@ -6,6 +6,7 @@ from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.setup import async_setup_component
 from homeassistant.helpers import entity_registry as er
 
@@ -155,7 +156,8 @@ async def test_failed_checkpoint_retries_without_duplicate_or_lost_counts(hass, 
     assert 'never persist this content' not in repr(await history.store.async_load())
     await history.async_stop()
 
-async def test_core_shutdown_flushes_tail_before_tick_and_replays_after_restart(hass, hass_storage, freezer):
+@pytest.mark.parametrize("unload_during_stop", [False, True])
+async def test_core_shutdown_flushes_tail_before_tick_and_replays_after_restart(hass, hass_storage, freezer, unload_during_stop):
     """Exercise Core's real STOP -> FINAL_WRITE -> CLOSE, not entry unload."""
     freezer.move_to('2026-10-01T00:00:00Z')
     assert await async_setup_component(hass, 'system_log', {})
@@ -166,6 +168,10 @@ async def test_core_shutdown_flushes_tail_before_tick_and_replays_after_restart(
         'level': 'warning', 'logger': 'qa_sprint_before_restart',
         'message': 'PRIVATE_SHUTDOWN_TAIL_CONTENT'}, blocking=True)
     assert any(row['name'] == 'qa_sprint_before_restart' for row in history._pending)
+    if unload_during_stop:
+        async def unload_in_stop(_event):
+            await history.async_stop()
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, unload_in_stop)
     await hass.async_stop(force=True)
     persisted = hass_storage['ha_tools_email.log_history']['data']
     assert 'qa_sprint_before_restart' in repr(persisted)
@@ -187,3 +193,32 @@ async def test_core_shutdown_flushes_tail_before_tick_and_replays_after_restart(
         assert payload['summary']['logger_counts']['qa_sprint_before_restart'] == 1
         assert payload['summary']['source']['coverage']['complete'] is False
         assert payload['body'].count('Niepełne pokrycie dziennika') == 1
+
+
+async def test_hard_interruption_leaves_unwritten_tail_as_gap(hass, freezer):
+    freezer.move_to('2026-10-01T00:00:00Z')
+    assert await async_setup_component(hass, 'system_log', {})
+    history = LogHistory(hass)
+    await history.async_start()
+    freezer.move_to('2026-10-01T00:05:00Z')
+    await history.async_checkpoint()
+    freezer.move_to('2026-10-01T00:05:30Z')
+    logging.getLogger('fixture.lost_tail').warning('unwritten synthetic')
+    assert any(row['name'] == 'fixture.lost_tail' for row in history._pending)
+    # Simulate process death: remove hooks without invoking final checkpoint.
+    logging.root.removeHandler(history._handler)
+    history._unsub()
+    history._unsub_shutdown()
+    history._since = None
+    freezer.move_to('2026-10-01T00:07:00Z')
+    restored = LogHistory(hass)
+    await restored.async_start()
+    logging.getLogger('fixture.after_restart').warning('after synthetic')
+    freezer.move_to('2026-10-01T00:10:00Z')
+    await restored.async_checkpoint()
+    rows, coverage = await restored.async_query(datetime(2026, 10, 1, tzinfo=UTC),
+                                                 datetime(2026, 10, 1, 0, 10, tzinfo=UTC))
+    assert not any(row['name'] == 'fixture.lost_tail' for row in rows)
+    assert any(row['name'] == 'fixture.after_restart' for row in rows)
+    assert coverage['complete'] is False
+    await restored.async_stop()
