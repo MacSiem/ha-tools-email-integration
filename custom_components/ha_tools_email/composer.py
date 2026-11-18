@@ -1133,8 +1133,15 @@ async def _first_energy_statistics(hass, metadata):
                        if isinstance(item, tuple) and len(item) >= 2 and type(item[0]) is int))
     snapshot = _first_statistics_snapshot.get()
     key = (id(hass), ids)
-    if snapshot is not None and key in snapshot:
-        return snapshot[key].copy()
+    if snapshot is not None:
+        if key in snapshot:
+            return snapshot[key].copy()
+        # A guarded grid-only read can reuse the same request's earlier
+        # grid-plus-consumer snapshot without conflating metadata identities.
+        wanted = set(ids)
+        for (owner, known_ids), known in snapshot.items():
+            if owner == id(hass) and wanted and wanted.issubset(known_ids):
+                return {sid: known[sid] for sid, _ in ids if sid in known}
     first = await _query_first_energy_statistics(hass, metadata)
     # None means Recorder failed or metadata was unavailable; retry it rather
     # than freezing a failure as evidence that configured sources have no data.

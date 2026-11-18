@@ -269,7 +269,7 @@ class EnergyAnalysisServiceTest(unittest.TestCase):
                     else:
                         await h.subject.async_get_build1_model('year', 'user', mode='full')
                         self.assertGreater(len(observed), 2)
-                        self.assertTrue(all(row == {'sensor.grid': 0, 'sensor.device': None} for row in observed))
+                        self.assertTrue(all(row.get('sensor.grid') == 0 and row.get('sensor.device') is None for row in observed))
                         self.assertEqual(1, query.call_count)
                         h.now += timedelta(hours=1)
                         await h.subject.async_get_build1_model('year', 'user', mode='full')
