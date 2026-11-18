@@ -196,7 +196,7 @@ class EnergyAnalysisService:
             raise ValueError('invalid_analysis_purpose')
         self._check_running()
         configuration = self._configuration()
-        if not configuration['grid_sensors']:
+        if not configuration['grid_sensors'] and not configuration['consumers']:
             raise ValueError('energy_analysis_unavailable')
         zone = self.hass.config.time_zone
         if report_model:
@@ -307,7 +307,7 @@ class EnergyAnalysisService:
         period = request.period(now)
         previous = self._report_previous_plan(request, period, now)
         configuration = self._configuration()
-        if not configuration['grid_sensors']:
+        if not configuration['grid_sensors'] and not configuration['consumers']:
             raise ValueError('energy_analysis_unavailable')
         context = {'request_kind':'report_window','access_purpose':purpose,
             'report_request':request.request(),'actor_signature':actor_signature,
@@ -671,6 +671,8 @@ class EnergyAnalysisService:
                         comparison_calendar_kind = {'day': 'daily', 'week': 'weekly', 'month': 'monthly', 'year': 'yearly'}[kind]
                         comparison_period_kind = kind
                     self._assert_current(context)
+                    if not configuration['grid_sensors']:
+                        plan = {**plan, 'status': 'unknown', 'reason': 'no_grid_sources'}
                     comparisons = {}
                     if plan['status'] == 'ready' and comparison != 'mean7':
                         pair = await self._cpu(partial(PairedComparisonAccumulator, period,

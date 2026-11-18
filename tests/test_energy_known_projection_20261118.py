@@ -140,3 +140,28 @@ class ActualComposerKnownProjectionTest(unittest.TestCase):
                     self.assertIn(ids[-1], report['csv'])
                     self.assertFalse(report['summary']['coverage']['complete'])
         asyncio.run(run())
+
+    def test_device_only_real_composer_keeps_device_measurement_without_grid_import(self):
+        import asyncio
+        from datetime import timedelta
+        from tests.helper_composer_schema2 import ComposerFixture
+        prefs = {'energy_sources': [], 'device_consumption': [
+            {'stat_consumption': 'sensor.device', 'name': 'Device'}]}
+        async def run():
+            for lang in ('pl', 'en'):
+                for calendar in (False, True):
+                    fx = ComposerFixture(datetime(2026, 1, 4, 12, tzinfo=timezone.utc),
+                        preferences=prefs, rows={'sensor.device': {'unit': 'kWh'}},
+                        book=book([version(rate=1, monthly=31)]), language=lang)
+                    with fx.patches():
+                        start = datetime(2026, 1, 2, tzinfo=timezone.utc)
+                        report = await fx.compose(start=start if calendar else None,
+                            end=start + timedelta(days=1) if calendar else None, rolling=not calendar)
+                    self.assertIsNone(report['summary']['total_kwh'])
+                    self.assertFalse(report['summary']['coverage']['complete'])
+                    device = report['summary']['groups']['devices']['sensor.device']
+                    self.assertEqual(Decimal(24), Decimal(device['kwh']))
+                    self.assertEqual(Decimal(24), Decimal(device['usage_cost']))
+                    self.assertIn('Device', report['text'])
+                    self.assertIn('Device', report['html'])
+        asyncio.run(run())

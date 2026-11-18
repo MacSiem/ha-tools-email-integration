@@ -11,9 +11,9 @@ MAX_PERIOD_HOURS = 366 * 24
 MAX_EVIDENCE_CELLS = MAX_SOURCES * 7 * 24
 
 
-def validated_source_ids(snapshot):
+def validated_source_ids(snapshot, *, allow_empty=False):
     ids = snapshot.get('source_ids') if isinstance(snapshot, dict) else None
-    if (not isinstance(ids, list) or not 1 <= len(ids) <= MAX_SOURCES
+    if (not isinstance(ids, list) or not (0 if allow_empty else 1) <= len(ids) <= MAX_SOURCES
             or any(not isinstance(sid, str) or not sid for sid in ids)
             or len(set(ids)) != len(ids)):
         raise ValueError('invalid_source_ids')
@@ -96,7 +96,7 @@ def measurement_evidence(snapshot, start, end):
     per_source is internal verified evidence, never a public registry/measurement
     export. A partial source hour cannot become a complete household hour.
     """
-    ids, grid = validated_source_ids(snapshot), hour_grid(start, end)
+    ids, grid = validated_source_ids(snapshot, allow_empty=True), hour_grid(start, end)
     maximum = len(ids) * len(grid)
     if maximum > MAX_EVIDENCE_CELLS:
         raise ValueError('measurement_chunk_too_large')
