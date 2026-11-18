@@ -231,16 +231,15 @@ class ProvenComparisonChartTest(unittest.TestCase):
             '2026-01-02T00:00Z', '2026-01-02T10:00Z')
         self.assertIsNone(acc.finish()['chart']['bins'][8]['kwh'])
 
-    def test_disjoint_masks_below_threshold_do_not_publish_equal_zero_totals(self):
+    def test_disjoint_masks_compare_actual_zero_totals(self):
         result, _, _ = self.run_pair(('2026-01-02T00:00Z', '2026-01-02T10:00Z'),
             ('2026-01-01T00:00Z', '2026-01-01T10:00Z'), sources=('sensor.a', 'sensor.b'),
             missing={'current': [('sensor.b', 8), ('sensor.b', 9)],
                      'baseline': [('sensor.a', 0), ('sensor.a', 1)]}, values=(0, 0))
-        self.assertEqual('unknown', result['status'])
-        self.assertEqual('unknown', result['chart']['status'])
-        self.assertFalse(result['chart']['reconciles_comparison_energy'])
-        self.assertTrue(all(row['current_kwh'] is None and row['baseline_kwh'] is None
-                            for row in result['chart']['markers']))
+        self.assertEqual('ready', result['status'])
+        self.assertEqual((0, 0), (result['current_kwh'], result['baseline_kwh']))
+        self.assertIsNone(result['percent'])
+        self.assertTrue(result['chart']['reconciles_comparison_energy'])
 
     def test_leap_zero_coincidence_does_not_prove_month_bijection(self):
         result, model, calls = self.run_pair(('2024-01-01T00:00Z', '2025-01-01T00:00Z'),
@@ -325,13 +324,12 @@ class ProvenMean7ChartTest(unittest.TestCase):
         self.assertEqual([3600]*7, row['selected_baseline_source_seconds'])
         self.assertTrue(result['chart']['reconciles_comparison_energy'])
 
-    def test_seven_different_missing_patterns_fail_global_gate_without_zero_series(self):
+    def test_seven_different_missing_patterns_use_shared_intersection(self):
         result = self.compare(missing={i: [('sensor.b', i)] for i in range(8)})
-        self.assertEqual('unknown', result['status'])
+        self.assertEqual('ready', result['status'])
         self.assertEqual(.6, result['coverage']['common_current'])
-        self.assertEqual('unknown', result['chart']['status'])
-        self.assertFalse(result['chart']['reconciles_comparison_energy'])
-        self.assertTrue(all(row['baseline_kwh'] is None for row in result['chart']['markers']))
+        self.assertEqual((12, 48), (result['current_kwh'], result['baseline_kwh']))
+        self.assertTrue(result['chart']['reconciles_comparison_energy'])
 
     def test_distributed_missing_patterns_still_publish_only_all_eight_intersection(self):
         # 48 source cells/day; union of four absent cells still passes 90%.
