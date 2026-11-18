@@ -95,6 +95,13 @@ def group_projection_evidence(projection, start, end, *, previous_identity=None,
     grids, grid_provenance = _sources(projection, 'grid')
     identity = {key: deepcopy(projection[key]) for key in _IDENTITY}
     identity['group_membership'] = _membership(projection, consumers)
+    first = projection.get('grid_source_first')
+    if first is not None:
+        if (not isinstance(first, dict) or not set(first) <= grids
+                or any(value is not None and (type(value) not in (int, float) or not isfinite(value))
+                       for value in first.values())):
+            raise ValueError('invalid_grid_source_first')
+        identity['grid_source_first'] = deepcopy(first)
     # Source order is not an identity; detach and normalize it once.
     for key in ('consumer_source_ids', 'grid_source_ids'):
         identity[key].sort()
@@ -144,17 +151,26 @@ def group_projection_evidence(projection, start, end, *, previous_identity=None,
             if (not isinstance(presence, list) or any(not isinstance(sid, str) for sid in presence)
                     or len(presence) != len(set(presence)) or not set(presence) <= grid_provenance):
                 raise ValueError('invalid_grid_source_presence')
+            expected = grids
+            if first is not None:
+                expected = {sid for sid in grids if sid not in first or
+                    first[sid] is not None and stamp >= int(first[sid] // 3600000) * 3600000}
+                declared = hour.get('grid_source_expected')
+                if (not isinstance(declared, list) or any(not isinstance(sid, str) for sid in declared)
+                        or len(declared) != len(set(declared)) or set(declared) != expected
+                        or not set(presence) <= expected):
+                    raise ValueError('invalid_grid_source_expected')
             if 'household_kwh' not in hour:
                 raise ValueError('invalid_group_shape')
             household = _quantity(hour['household_kwh'])
-            if household is not None and set(presence) != grids:
+            if household is not None and (not expected or set(presence) != expected):
                 raise ValueError('partial_grid_cannot_supply_household')
             if (household is None or identity['energy_domain'] != 'grid_import') and values[('unmeasured', None)] is not None:
                 raise ValueError('invalid_unmeasured_projection')
             # A partition claim alone proves nothing about valid evidence.
             # Verify all cells and each alternative slice; never add levels.
             known_partition = (identity['energy_domain'] == 'grid_import'
-                and household is not None and set(presence) == grids
+                and household is not None and bool(expected) and set(presence) == expected
                 and all(value is not None for value in values.values()))
             if hour['partition_complete']:
                 if not known_partition:
@@ -166,9 +182,10 @@ def group_projection_evidence(projection, start, end, *, previous_identity=None,
                     sum((value for (level, _), value in values.items() if level == 'floors'), Decimal(0)) + remainder]
                 if any(value != household for value in partitions):
                     raise ValueError('invalid_group_partition')
-            partition = partition and hour['partition_complete'] and known_partition
+            full_partition = hour['partition_complete'] and known_partition and set(presence) == grids
+            partition = partition and full_partition
             rows.append((stamp, tuple(values[key] for key in keys), frozenset(presence),
-                         hour['partition_complete'] and known_partition))
+                         full_partition))
     return identity, keys, rows, partition
 
 

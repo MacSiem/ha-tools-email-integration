@@ -179,7 +179,112 @@ class Build1ServiceTest(unittest.TestCase):
                 self.assertEqual(7, next(c for c in model['comparisons'] if c['key'] == 'avg_7d')['denominator'])
                 self.assertTrue(h.subject.context_is_current(result))
                 h.now += timedelta(minutes=5)
-                self.assertFalse(h.subject.context_is_current(result))
+                self.assertTrue(h.subject.context_is_current(result))
+        asyncio.run(run())
+
+    def test_report_request_survives_clock_boundary_but_refreshes_and_reauthorizes(self):
+        async def run():
+            h = Harness(); h.now = datetime(2026, 1, 4, 12, 4, 59, tzinfo=UTC)
+            start = h.now
+            async def advance_once(ids, begin, end):
+                if h.now == start:
+                    h.now += timedelta(seconds=2)
+            h.on_read = advance_once
+            async def short(subject, configuration, begin, end, guard):
+                await guard()
+                return {'sensor.grid': '0.7', 'sensor.device': '0.2'}
+            with h.patches(), patch.object(inputs, 'async_short_hour', short):
+                first = await h.subject.async_get_build1_model('year', 'user', mode='full')
+                self.assertEqual('2026-01-04T11:55:00+00:00', first['context']['report_cutoff'])
+                self.assertTrue(await h.subject.async_validate_result(first, 'user'))
+                color_key = h.subject._report_colors[0]
+                h.on_read = None
+                second = await h.subject.async_get_build1_model('year', 'user', mode='full')
+                self.assertEqual('2026-01-04T12:00:00+00:00', second['context']['report_cutoff'])
+                self.assertEqual(color_key, h.subject._report_colors[0])
+                count = len(h.queries)
+                h.now += timedelta(seconds=30)
+                cached = await h.subject.async_get_build1_model('year', 'user', mode='full')
+                self.assertEqual(second['snapshot_id'], cached['snapshot_id'])
+                self.assertEqual(count, len(h.queries))
+                h.storage.current_feature_access_revision += 1
+                self.assertFalse(await h.subject.async_validate_result(second, 'user'))
+        asyncio.run(run())
+
+    def test_report_clock_preserves_midnight_dst_and_explicit_anchor(self):
+        async def run():
+            cases = (
+                (datetime(2026, 1, 11, 23, 59, 59, tzinfo=UTC), 'UTC', None, '2026-01-11'),
+                (datetime(2026, 10, 25, 0, 59, 59, tzinfo=UTC), 'Europe/Warsaw', None, '2026-10-25'),
+                (datetime(2026, 1, 11, 23, 59, 59, tzinfo=UTC), 'UTC', '2026-01-10', '2026-01-10'),
+            )
+            for now, zone, anchor, expected in cases:
+                with self.subTest(zone=zone, anchor=anchor):
+                    h = Harness(); h.now = now; h.hass.config.time_zone = zone
+                    async def advance(ids, begin, end):
+                        if h.now == now:
+                            h.now += timedelta(seconds=2)
+                    h.on_read = advance
+                    async def short(subject, configuration, begin, end, guard):
+                        await guard()
+                        return {'sensor.grid': '0.7', 'sensor.device': '0.2'}
+                    with h.patches(), patch.object(inputs, 'async_short_hour', short):
+                        result = await h.subject.async_get_build1_model('day', 'user', date=anchor, mode='full')
+                        self.assertEqual(expected, result['period']['local_start'][:10])
+                        self.assertTrue(await h.subject.async_validate_result(result, 'user'))
+                        cutoff = datetime.fromisoformat(result['context']['report_cutoff'])
+                        self.assertTrue(all(end <= cutoff for _, _, end in h.queries))
+        asyncio.run(run())
+
+    def test_year_report_keeps_one_equivalent_previous_and_pairs_once(self):
+        async def run():
+            h = Harness(); h.now = datetime(2026, 1, 4, 12, 5, tzinfo=UTC)
+            paired = {'status': 'unknown', 'reason': 'no_common_measurements', 'chart': {'markers': []}}
+            with h.patches(), patch.object(inputs, '_report_pair', new_callable=AsyncMock, return_value=paired) as pair:
+                result = await h.subject.async_get_build1_model('year', 'user', mode='full')
+            self.assertEqual(['previous_year'], [row['key'] for row in result['report_model']['comparisons']])
+            self.assertEqual(1, pair.await_count)
+        asyncio.run(run())
+
+    def test_completed_calendar_year_keeps_one_previous(self):
+        async def run():
+            h = Harness(); h.now = datetime(2026, 1, 4, 12, 5, tzinfo=UTC); h.book = None
+            paired = {'status': 'unknown', 'reason': 'no_common_measurements', 'chart': {'markers': []}}
+            with h.patches(), patch.object(inputs, '_report_pair', new_callable=AsyncMock, return_value=paired) as pair:
+                result = await h.subject.async_get_build1_model('year', 'user', date='2025-01-01', mode='full')
+            self.assertTrue(result['report_model']['period']['complete'])
+            self.assertEqual(['previous_year'], [row['key'] for row in result['report_model']['comparisons']])
+            self.assertEqual(1, pair.await_count)
+        asyncio.run(run())
+
+    def test_annual_dedup_keeps_different_windows_and_leap_dst_identity(self):
+        for instant in (datetime(2024, 2, 29, 12, tzinfo=UTC),
+                        datetime(2024, 10, 27, 1, 30, tzinfo=UTC),
+                        datetime(2025, 3, 30, 1, 30, tzinfo=UTC)):
+            with self.subTest(instant=instant):
+                plans = inputs.resolve_model_periods('year', instant, 'Europe/Warsaw')['comparisons']
+                self.assertTrue(inputs._same_annual_baseline(plans['previous'], plans['year_ago']))
+                different = deepcopy(plans['year_ago'])
+                period = different['baseline_periods'][0]
+                period['end'] = (datetime.fromisoformat(period['end']) - timedelta(hours=1)).isoformat()
+                self.assertFalse(inputs._same_annual_baseline(plans['previous'], different))
+                different = deepcopy(plans['year_ago']); different['status'] = 'unknown'
+                self.assertFalse(inputs._same_annual_baseline(plans['previous'], different))
+
+        async def run():
+            h = Harness(); h.now = datetime(2026, 1, 4, 12, 5, tzinfo=UTC)
+            original = inputs.resolve_model_periods
+            def divergent(*args, **kwargs):
+                resolved = original(*args, **kwargs)
+                period = resolved['comparisons']['year_ago']['baseline_periods'][0]
+                period['end'] = (datetime.fromisoformat(period['end']) - timedelta(hours=1)).isoformat()
+                return resolved
+            paired = {'status': 'unknown', 'reason': 'no_common_measurements', 'chart': {'markers': []}}
+            with h.patches(), patch.object(inputs, 'resolve_model_periods', side_effect=divergent), \
+                    patch.object(inputs, '_report_pair', new_callable=AsyncMock, return_value=paired) as pair:
+                result = await h.subject.async_get_build1_model('year', 'user', mode='full')
+            self.assertEqual(2, len(result['report_model']['comparisons']))
+            self.assertEqual(2, pair.await_count)
         asyncio.run(run())
 
     def test_permission_and_revision_during_extra_history_reads_fail_closed(self):

@@ -244,6 +244,65 @@ class EnergyAnalysisServiceTest(unittest.TestCase):
                         self.assertEqual(53 * 2, len(h.queries))
         asyncio.run(run())
 
+    def test_request_lifecycle_snapshot_is_fresh_and_guards_revocation(self):
+        async def run():
+            for revoke in (False, True):
+                h = Harness(); h.now = datetime(2026, 1, 4, 12, 5, tzinfo=UTC)
+                h.metadata = {sid: (idx, meta) for idx, (sid, meta) in enumerate(h.metadata.items(), 1)}
+                original = h.usage
+                observed = []
+                async def usage(hass, sensors, start, end, cadence, *, metadata):
+                    first = await composer._first_energy_statistics(hass, metadata)
+                    observed.append(first)
+                    return await original(hass, sensors, start, end, cadence, metadata=metadata)
+                h.usage = usage
+                async def first_query(hass, metadata):
+                    if revoke:
+                        h.user.is_active = False
+                    return {'sensor.grid': 0, 'sensor.device': None}
+                with h.patches(), patch.object(composer, '_query_first_energy_statistics', side_effect=first_query) as query:
+                    if revoke:
+                        with self.assertRaises(PermissionError):
+                            await h.subject.async_get_build1_model('year', 'user', mode='full')
+                        self.assertEqual(1, query.call_count)
+                        self.assertIsNone(h.subject._cache)
+                    else:
+                        await h.subject.async_get_build1_model('year', 'user', mode='full')
+                        self.assertGreater(len(observed), 2)
+                        self.assertTrue(all(row.get('sensor.grid') == 0 and row.get('sensor.device') is None for row in observed))
+                        self.assertEqual(1, query.call_count)
+                        h.now += timedelta(hours=1)
+                        await h.subject.async_get_build1_model('year', 'user', mode='full')
+                        self.assertEqual(2, query.call_count)
+        asyncio.run(run())
+
+    def test_lifecycle_snapshot_metadata_identity_unknown_and_task_isolation(self):
+        async def run():
+            hass = object(); one = {'grid': (1, {}), 'device': (2, {})}
+            changed = {'grid': (3, {}), 'device': (2, {})}
+            calls = []
+            async def query(_, metadata):
+                calls.append(tuple(sorted((k, v[0]) for k, v in metadata.items())))
+                return None if len(calls) == 1 else {'grid': 0, 'device': None}
+            with patch.object(composer, '_query_first_energy_statistics', side_effect=query):
+                token = composer._begin_first_statistics_snapshot()
+                try:
+                    self.assertIsNone(await composer._first_energy_statistics(hass, one))
+                    first = await composer._first_energy_statistics(hass, one)
+                    first['grid'] = 42
+                    self.assertEqual(0, (await composer._first_energy_statistics(hass, one))['grid'])
+                    await composer._first_energy_statistics(hass, changed)
+                    self.assertEqual(3, len(calls))
+                finally:
+                    composer._end_first_statistics_snapshot(token)
+                async def separate():
+                    own = composer._begin_first_statistics_snapshot()
+                    try: await composer._first_energy_statistics(hass, one)
+                    finally: composer._end_first_statistics_snapshot(own)
+                await asyncio.gather(separate(), separate())
+                self.assertEqual(5, len(calls))
+        asyncio.run(run())
+
     def test_revision_source_calendar_lifecycle_mutations_during_io_and_cpu_fail_closed(self):
         async def run():
             changes = {

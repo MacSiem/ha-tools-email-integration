@@ -208,9 +208,15 @@ class EnergyAnalysisAccumulator:
         if include_group_hours:
             staged, projection = self._consumers.prepare_chunk_with_projection(
                 consumer_snapshot, evidence['hourly_buckets'], start, end)
-            projection.update(grid_source_ids=list(ids), grid_provenance=deepcopy(provenance))
+            first = snapshot.get('source_first')
+            first = first if isinstance(first, dict) else {}
+            projection.update(grid_source_ids=list(ids), grid_provenance=deepcopy(provenance),
+                              grid_source_first={sid: deepcopy(first[sid]) for sid in ids if sid in first})
             for hour in projection['hours']:
-                hour['grid_source_presence'] = [sid for sid in ids if hour['from'] in evidence['per_source'][sid]]
+                hour['grid_source_expected'] = [sid for sid in ids
+                    if hour['from'] in evidence['expected_per_source'][sid]]
+                hour['grid_source_presence'] = [sid for sid in hour['grid_source_expected']
+                    if hour['from'] in evidence['per_source'][sid]]
         else:
             staged = (self._consumers.prepare_chunk(consumer_snapshot, evidence['hourly_buckets'], start, end)
                       if self._consumers is not None else None)
