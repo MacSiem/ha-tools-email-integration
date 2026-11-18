@@ -1,5 +1,6 @@
 """Durable synthetic log stream across restart and native 24-hour coverage."""
 import logging
+from types import SimpleNamespace
 from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 
@@ -56,6 +57,19 @@ async def test_restart_in_active_hour_report_and_24h_sensors(hass, hass_storage,
         assert payload['summary']['level_counts']['ERROR'] >= 1
         for part in ('body', 'html'):
             assert 'Niepełne pokrycie dziennika' in payload[part]
+        from custom_components.ha_tools_email import websocket_api as ws
+        results = []
+        conn = SimpleNamespace(send_result=lambda _id, value: results.append(value),
+                               send_error=lambda *_args: pytest.fail('preview rejected'))
+        with patch.object(ws, '_utcnow', return_value=end):
+            await ws._ws_preview_log_digest(hass, conn, {'id': 1, 'cadence': cadence, 'timezone': 'UTC'})
+        if cadence == 'daily':
+            result = results[0]
+            assert result['period']['semantics'] == 'previous_completed_calendar_period'
+            assert result['source']['name'] == 'system_log'
+            assert result['source']['coverage']['complete'] is False
+            assert result['logger_counts']['fixture.synthetic'] == payload['summary']['logger_counts']['fixture.synthetic']
+            assert 'PRIVATE_MESSAGE_DO_NOT_PERSIST' not in repr(result)
     native = bucket['email_native']
     await native.async_refresh()
     key = hashlib.sha256(b'stable-schedule').hexdigest()
