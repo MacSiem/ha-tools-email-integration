@@ -61,10 +61,10 @@ class MeanSevenTest(unittest.TestCase):
     def test_separate_ninety_five_percent_days_do_not_hide_union_of_gaps(self):
         missing = [(('sensor.a', i),) for i in range(7)]
         result = comparison.compare_daily_mean7(*self.fixture(baseline_missing=missing), timezone_name='UTC')
-        self.assertEqual('unknown', result['status'])
-        self.assertEqual('incomplete_statistics', result['reason'])
+        self.assertEqual('ready', result['status'])
+        self.assertEqual('common_measurements', result['comparison_scope'])
         self.assertEqual(.65, result['coverage']['common_current'])
-        self.assertIsNone(result['delta_kwh'])
+        self.assertEqual((13, 65, -52), tuple(result[k] for k in ('current_kwh', 'baseline_kwh', 'delta_kwh')))
 
     def test_no_seven_day_mean_without_all_seven_compatible_days(self):
         fixture = self.fixture()
@@ -84,9 +84,10 @@ class MeanSevenTest(unittest.TestCase):
             periods.append({'start': start.isoformat(), 'end': (start + timedelta(hours=24)).isoformat()})
         baselines = [readings(p['start'], p['end'], sources=('sensor.a',)) for p in periods]
         result = comparison.compare_daily_mean7(current, baselines, current_period, periods, timezone_name='Europe/Warsaw')
-        self.assertEqual('calendar_totals', result['comparison_scope'])
-        self.assertEqual((25, 24, 1), tuple(result[k] for k in ('current_kwh', 'baseline_kwh', 'delta_kwh')))
-        self.assertAlmostEqual(100/24, result['percent'])
+        self.assertEqual('common_measurements', result['comparison_scope'])
+        self.assertEqual((24, 24, 0), tuple(result[k] for k in ('current_kwh', 'baseline_kwh', 'delta_kwh')))
+        self.assertEqual((25, 24), (result['full_current_kwh'], result['full_baseline_kwh']))
+        self.assertEqual(0, result['percent'])
 
 
 if __name__ == '__main__':
