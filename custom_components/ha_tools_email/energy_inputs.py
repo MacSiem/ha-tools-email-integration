@@ -321,7 +321,8 @@ async def async_collect_inputs(service, configuration, period, context, accumula
         colors = await service._cpu(partial(identity_colors, totals, expected, as_of), guard)
         await guard()
         service._report_colors = (deepcopy(color_key), deepcopy(colors))
-    resolved = resolve_model_periods(context['period_kind'], now, period['timezone'], anchor=context['period_anchor'])
+    request_clock = datetime.fromisoformat(context['report_clock'])
+    resolved = resolve_model_periods(context['period_kind'], request_clock, period['timezone'], anchor=context['period_anchor'])
     if context.get('request_kind') == 'report_window':
         resolved['comparisons']['previous'] = deepcopy(context['report_comparison_plan'])
     requests, baseline_cache, previous_facts = [], {}, None

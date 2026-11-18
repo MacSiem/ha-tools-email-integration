@@ -179,7 +179,7 @@ class Build1ServiceTest(unittest.TestCase):
                 self.assertEqual(7, next(c for c in model['comparisons'] if c['key'] == 'avg_7d')['denominator'])
                 self.assertTrue(h.subject.context_is_current(result))
                 h.now += timedelta(minutes=5)
-                self.assertFalse(h.subject.context_is_current(result))
+                self.assertTrue(h.subject.context_is_current(result))
         asyncio.run(run())
 
     def test_report_request_survives_clock_boundary_but_refreshes_and_reauthorizes(self):
