@@ -69,6 +69,20 @@ class KnownProjectionTest(unittest.TestCase):
             out = mail.render(result, language=lang, timezone_name='UTC', hour_cycle='24')
             self.assertIn('bez uwzględnienia PV' if lang == 'pl' else 'excluding solar', out['text'])
 
+    def test_source_lifecycle_from_recorder_first_observation(self):
+        from tests.test_energy_measurements import measurements
+        start, end = '2026-01-01T00:00Z', '2026-01-01T02:00Z'
+        data = readings(start, end, sources=('sensor.a', 'sensor.b'), missing=[('sensor.b', 0)])
+        first = int(datetime(2026, 1, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
+        data['source_first'] = {'sensor.a': 0, 'sensor.b': first}
+        evidence = measurements.measurement_evidence(data, start, end)
+        self.assertTrue(evidence['coverage']['complete'])
+        self.assertEqual([1, 2], [row['expected_sources'] for row in evidence['hourly_buckets']])
+        self.assertEqual([1, 2], [row['kwh'] for row in evidence['hourly_buckets']])
+        self.assertEqual(3 * 3600, evidence['coverage']['expected_source_seconds'])
+        data = readings(start, end, sources=('sensor.a',))
+        self.assertEqual(1, len(measurements.measurement_evidence(data, start, end)['source_ids']))
+
     def test_report_cutoff_retains_a_recorder_cycle(self):
         from tests.test_energy_analysis_service import service
         from importlib import import_module

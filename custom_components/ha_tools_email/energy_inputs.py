@@ -162,10 +162,10 @@ async def async_short_hour(service, configuration, start, end, guard):
     return await service._cpu(partial(normalize_short_hour, raw, metadata, ids, start, end), guard)
 
 
-def short_projection(values, configuration, tariff, start, end):
+def short_projection(values, configuration, tariff, start, end, source_first=None):
     def total(ids):
         rows = [values.get(sid) for sid in ids]
-        return str(sum((Decimal(value) for value in rows), Decimal(0))) if all(v is not None for v in rows) else None
+        return str(sum((Decimal(value) for value in rows), Decimal(0))) if rows and all(v is not None for v in rows) else None
     rate = HistoricalTariffRates(tariff).resolve_interval(start.isoformat(), end.isoformat()) if tariff else None
     known = rate and rate['available']
     def costs(value):
@@ -174,6 +174,9 @@ def short_projection(values, configuration, tariff, start, end):
         return {key: str(value) if value is not None else None for key, value in
                 calculate_energy_amounts(Decimal(value), rate['energy_rate'], rate['variable_rate'], rate['rate_semantics']).items()}
     grid_ids = [row['entity_id'] for row in configuration['grid_sensors']]
+    first = source_first if isinstance(source_first, dict) else {}
+    grid_ids = [sid for sid in grid_ids if values.get(sid) is not None or sid not in first or
+                first[sid] is not None and first[sid] <= start.timestamp()*1000]
     full_kwh = total(grid_ids)
     recorded = [Decimal(values[sid]) for sid in grid_ids if values.get(sid) is not None]
     kwh = str(sum(recorded, Decimal(0))) if recorded else None
@@ -238,7 +241,7 @@ async def async_collect_inputs(service, configuration, period, context, accumula
     active = next((row for row in book['tariffs'] if row['id'] == book.get('active_tariff_id')), None) if book else None
     if measured_until > completed:
         values = await async_short_hour(service, configuration, completed, measured_until, guard)
-        cell = await service._cpu(partial(short_projection, values, configuration, active, completed, measured_until), guard)
+        cell = await service._cpu(partial(short_projection, values, configuration, active, completed, measured_until, projection.get('source_first')), guard)
         projection['hours'].append(cell)
         projection['measurement_fingerprint'] = hashlib.sha256(json.dumps(
             {'completed': projection.get('measurement_fingerprint'), 'partial': cell},

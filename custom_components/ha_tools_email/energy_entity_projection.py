@@ -70,7 +70,7 @@ def _today(result, measurement, engine, short_rows, cutoff):
             for sid, cells in evidence['per_source'].items():
                 if cells:
                     measured_sources.add(sid)
-                if len(cells) < len(hourly):
+                if len(set(cells) & evidence['expected_per_source'][sid]) < len(evidence['expected_per_source'][sid]):
                     missing_sources.add(sid)
         except (ValueError, TypeError, KeyError):
             return facts
