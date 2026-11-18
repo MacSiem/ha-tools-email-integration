@@ -229,6 +229,21 @@ async def _report_mean7(service, configuration, current, baselines, zone, guard)
         current, baselines, timezone_name=zone), guard)
 
 
+def _same_annual_baseline(previous, year_ago):
+    """Only suppress a second ready request for the identical Recorder window."""
+    if not isinstance(previous, dict) or not isinstance(year_ago, dict):
+        return False
+    if previous.get('status') != 'ready' or year_ago.get('status') != 'ready':
+        return False
+    left, right = previous.get('baseline_periods'), year_ago.get('baseline_periods')
+    if not isinstance(left, list) or not isinstance(right, list) or len(left) != 1 or len(right) != 1:
+        return False
+    fields = ('start', 'end', 'calendar_end', 'timezone')
+    return (isinstance(left[0], dict) and isinstance(right[0], dict)
+            and all(field in left[0] and field in right[0] and left[0][field] == right[0][field]
+                    for field in fields))
+
+
 async def async_collect_inputs(service, configuration, period, context, accumulator,
                                membership, book, guard, native=None):
     """Caller holds service lock and admission slot throughout all guarded IO."""
@@ -325,6 +340,9 @@ async def async_collect_inputs(service, configuration, period, context, accumula
     resolved = resolve_model_periods(context['period_kind'], request_clock, period['timezone'], anchor=context['period_anchor'])
     if context.get('request_kind') == 'report_window':
         resolved['comparisons']['previous'] = deepcopy(context['report_comparison_plan'])
+    if (context['period_kind'] == 'year' and _same_annual_baseline(
+            resolved['comparisons'].get('previous'), resolved['comparisons'].get('year_ago'))):
+        resolved['comparisons'].pop('year_ago')
     requests, baseline_cache, previous_facts = [], {}, None
     labels = {'previous': {'day':'previous_day','week':'previous_week','month':'previous_month','year':'previous_year'}[context['period_kind']], 'same_weekday': 'same_weekday_last_week', 'mean7': 'avg_7d', 'year_ago': 'same_week_last_year' if context['period_kind']=='week' else 'same_month_last_year' if context['period_kind']=='month' else 'previous_year'}
     for key, plan in resolved['comparisons'].items():
