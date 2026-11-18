@@ -61,6 +61,12 @@ async def test_restart_in_active_hour_report_and_24h_sensors(hass, hass_storage,
     registry = er.async_get(hass)
     entity_id = registry.async_get_entity_id('sensor', DOMAIN, f'{entry.entry_id}_email_{key}_errors_24h')
     assert hass.states.get(entity_id).state == 'unknown'
+    freezer.move_to('2026-10-02T00:26:00Z')
+    await history.async_checkpoint()
+    await native.async_refresh()
+    await hass.async_block_till_done()
+    assert int(hass.states.get(entity_id).state) >= 1
+    assert hass.states.get(entity_id).attributes['coverage']['complete'] is True
     freezer.move_to('2026-10-02T01:25:00Z')
     logging.getLogger('fixture.synthetic').error('new full day')
     freezer.move_to('2026-10-03T01:00:00Z')

@@ -73,7 +73,7 @@ class LogHistory:
                     for row in groups.values():
                         if isinstance(row, dict):
                             for field in tuple(row):
-                                if field not in ('name', 'level', 'count', 'minutes'):
+                                if field not in ('name', 'level', 'count', 'minutes', 'legacy_count'):
                                     row.pop(field)
                                     changed = True
             if changed:
@@ -131,8 +131,14 @@ class LogHistory:
                         continue
                     group[key] = {'name': str(row.get('name') or 'unknown')[:512],
                         'level': str(row.get('level') or 'UNKNOWN')[:32],
-                        'count': 0}
-                group[key]['count'] += 1
+                        'count': 0, 'minutes': {}}
+                item = group[key]
+                if 'minutes' not in item:
+                    item['legacy_count'] = item['count']
+                    item['minutes'] = {}
+                item['count'] += 1
+                minute = str(int(stamp // 60) % 60)
+                item.setdefault('minutes', {})[minute] = item.setdefault('minutes', {}).get(minute, 0) + 1
             if not incomplete and end >= self._since:
                 coverage = candidate['coverage']
                 if coverage and coverage[-1][1] == self._since:
@@ -158,17 +164,41 @@ class LogHistory:
         await self.async_checkpoint()
         start, end = start.timestamp(), end.timestamp()
         rows = []
+        legacy_partial = False
         for hour, groups in self.data['hours'].items():
             stamp = int(hour)
-            if start <= stamp and stamp + 3600 <= end:
-                for key, row in groups.items():
-                    rows.append({**row, 'id': f'{hour}:{key}', 'timestamp': stamp + 3599})
+            if stamp >= end or stamp + 3600 <= start:
+                continue
+            for key, row in groups.items():
+                minutes = row.get('minutes')
+                if isinstance(minutes, dict):
+                    chosen = [(stamp + int(minute) * 60, count) for minute, count in minutes.items()
+                              if start <= stamp + int(minute) * 60 and stamp + (int(minute) + 1) * 60 <= end]
+                    count = sum(value for _, value in chosen)
+                    observed = max((minute + 59 for minute, _ in chosen), default=None)
+                    if row.get('legacy_count'):
+                        if start <= stamp and stamp + 3600 <= end:
+                            count += row['legacy_count']
+                            observed = stamp + 3599
+                        else:
+                            legacy_partial = True
+                elif start <= stamp and stamp + 3600 <= end:
+                    count, observed = row['count'], stamp + 3599
+                else:
+                    legacy_partial = True
+                    continue
+                if count:
+                    # Minute counts allow accurate interval edges while the
+                    # durable identity and retention remain hourly aggregates.
+                    rows.append({'name': row['name'], 'level': row['level'], 'count': count,
+                                 'id': f'{hour}:{key}', 'timestamp': observed})
         covered = sum(max(0, min(end, b) - max(start, a)) for a, b in self.data['coverage'])
-        complete = (end > start and start % 3600 == 0 and end % 3600 == 0
+        complete = (end > start and start % 60 == 0 and end % 60 == 0 and not legacy_partial
                     and covered >= end - start - 0.001)
         return rows, {'complete': complete, 'covered_seconds': round(covered),
                       'requested_seconds': round(max(0, end - start)),
-                      'resolution': 'hour', 'from': _utc(start).isoformat(), 'to': _utc(end).isoformat()}
+                      'resolution': 'minute', 'aggregation': 'hour',
+                      'from': _utc(start).isoformat(), 'to': _utc(end).isoformat()}
 
     async def async_stop(self):
         if self._unsub:

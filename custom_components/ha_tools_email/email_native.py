@@ -113,7 +113,7 @@ class EmailNativeCoordinator:
             self._seen = seen
         history = bucket.get('log_history')
         if history is not None and any(row['kind'] == 'log_digest' for row in result['schedules'].values()):
-            end = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+            end = datetime.now(timezone.utc).replace(second=0, microsecond=0)
             log_rows, coverage = await history.async_query(end - timedelta(hours=24), end)
             for row in result['schedules'].values():
                 if row['kind'] != 'log_digest':
