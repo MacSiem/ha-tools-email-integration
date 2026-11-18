@@ -74,7 +74,7 @@ class RecordedPartialTest(unittest.TestCase):
             'sensor.legacy': {'device_id':'a','has_entity_name':False,'original_name':'Independent name'}},
             'devices': {'a': {'name':'Factory A','name_by_user':'Kitchen plug'}, 'b': {'name':'Office plug'}}}
         result = registry.resolve_membership(list(data['entities']), data, captured_at='now', revision=1)
-        self.assertEqual('Kitchen plug', result['sources']['sensor.a']['name'])
+        self.assertEqual('Kitchen plug Energy', result['sources']['sensor.a']['name'])
         self.assertEqual('Office plug', result['sources']['sensor.b']['name'])
         self.assertEqual('My meter', result['sources']['sensor.explicit']['name'])
         self.assertEqual('Independent name', result['sources']['sensor.legacy']['name'])

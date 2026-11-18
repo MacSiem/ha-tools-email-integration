@@ -215,7 +215,7 @@ class EnergyGridProviderTest(unittest.TestCase):
                 summary, calls = self.compose(prefs, rows, cadence=cadence)
                 self.assertEqual("partial", summary["status"])
                 self.assertEqual([], calls["snapshot"]["devices"])
-                self.assertEqual(24 if cadence == "daily" else 168, float(summary["total_kwh"]))
+                self.assertIsNone(summary["total_kwh"])
                 self.assertIsNone(summary["totals"]["kwh"])
                 self.assertIsNone(summary["total_cost"])
                 self.assertEqual(list(rows), calls["snapshot"]["source_ids"])

@@ -450,7 +450,7 @@ def _build_report(inputs):
     totals = {key: _sum(row[key] for row in observed) for key in COSTS}
     usage = totals['usage_cost']
     fixed = _decimal(projection.get('fixed_share')) if identity_ok else None
-    totals.update(import_kwh=imported,
+    totals.update(cost_scope='known_source_readings', import_kwh=imported,
         recorded_import_kwh=_known_sum(row['recorded_kwh'] for row in hourly if not row['future']),
         recorded_usage_cost=_sum(row['recorded_cost'] for row in source_rows if row['recorded_kwh'] is not None) if has_data else None,
         fixed_share=fixed,

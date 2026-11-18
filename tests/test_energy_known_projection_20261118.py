@@ -139,6 +139,12 @@ class ActualComposerKnownProjectionTest(unittest.TestCase):
                     self.assertIn('1032', report['html'].replace(' ', '').replace('\xa0', '').replace(',', ''))
                     self.assertIn(ids[-1], report['csv'])
                     self.assertFalse(report['summary']['coverage']['complete'])
+                    if calendar:
+                        for part in ('text', 'html'):
+                            body = report[part]
+                            self.assertIn('znane odczyty' if lang == 'pl' else 'known readings', body.lower())
+                            self.assertIn('wspólne odczyty' if lang == 'pl' else 'matched readings', body.lower())
+                            self.assertNotIn('godziny z kompletem źródeł' if lang == 'pl' else 'complete-source hours', body.lower())
         asyncio.run(run())
 
     def test_device_only_real_composer_keeps_device_measurement_without_grid_import(self):
