@@ -25,7 +25,8 @@ from .analysis_provider import (capture_energy_configuration,
                                 async_require_energy_source_access)
 from .native_energy_pricing import NativeCostAccumulator, project_current_prices
 from .native_pricing_provider import async_read_native_cost_chunk
-from .composer import async_get_energy_metadata
+from .composer import (async_get_energy_metadata, _begin_first_statistics_snapshot,
+                       _end_first_statistics_snapshot)
 from .const import DOMAIN
 from .energy import _source_signature
 from .energy_analysis import EnergyAnalysisAccumulator
@@ -588,6 +589,7 @@ class EnergyAnalysisService:
         if self._pending >= MAX_PENDING_ANALYSES:
             raise RuntimeError('energy_analysis_busy')
         self._pending += 1
+        lifecycle_token = _begin_first_statistics_snapshot()
         try:
             async with self._lock:
                 self._check_running()
@@ -797,6 +799,7 @@ class EnergyAnalysisService:
             self._cache = None
             raise
         finally:
+            _end_first_statistics_snapshot(lifecycle_token)
             self._pending -= 1
 
     async def async_get_build1_model(self, kind, user_id, *, date=None, mode='so_far', purpose='analysis'):
