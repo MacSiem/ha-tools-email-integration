@@ -60,7 +60,8 @@ def empty_completed_projection(book, start):
     active = next((row for row in book['tariffs'] if row['id']==book.get('active_tariff_id')),None) if book else None
     version = _version_at(active['versions'],start.timestamp()*1000) if active else None
     profile = version['profile'] if version else {}
-    facts = {'hours':[], 'currency':profile.get('currency'),'price_basis':profile.get('priceBasis'),
+    facts = {'hours':[], 'expected_source_ids': [], 'seen_source_ids': [],
+        'currency':profile.get('currency'),'price_basis':profile.get('priceBasis'),
         'fixed_share':'0' if version else None,'rates':[],'fees':None,'measurement_fingerprint':None}
     return SimpleNamespace(report_projection=lambda:deepcopy(facts))
 

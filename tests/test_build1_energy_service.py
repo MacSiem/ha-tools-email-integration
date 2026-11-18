@@ -234,6 +234,8 @@ class Build1ServiceTest(unittest.TestCase):
                 self.assertEqual(0,result['period']['hours'])
                 self.assertEqual(.7,model['totals']['import_kwh'])
                 self.assertEqual(1,model['coverage']['measured_hours'])
+                self.assertEqual((1, 1), (model['coverage']['expected_sources'],
+                                          model['coverage']['measured_sources']))
                 self.assertTrue(model['hourly'][0]['partial'])
                 self.assertTrue(model['hourly'][1]['future'])
                 self.assertTrue(h.subject.context_is_current(result))
