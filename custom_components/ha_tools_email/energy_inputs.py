@@ -374,7 +374,7 @@ async def async_collect_inputs(service, configuration, period, context, accumula
     # These detached comparison facts are computed from Recorder cells, not
     # from already aggregated hourly totals. The tail is deliberately excluded
     # until both sides can prove a matching completed five-minute mask.
-    if completed > start:
+    if completed > start and configuration['grid_sensors']:
         current_frame = {'start': start.isoformat(), 'end': completed.isoformat()}
         for request in requests:
             if request['key'] == 'avg_7d':
