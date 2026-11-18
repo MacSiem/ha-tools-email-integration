@@ -96,6 +96,7 @@ class AdmissionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_periodic_ticks_coalesce_while_a_refresh_is_pending(self):
         c = coordinator()
+        c.hass.data = {}  # Real Home Assistant always exposes its shared data registry.
         release = asyncio.Event()
         calls = []
         async def blocked():
