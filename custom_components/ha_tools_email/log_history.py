@@ -14,6 +14,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 
 from homeassistant.components.system_log import LogEntry
+from homeassistant.core import callback
 from homeassistant.helpers.event import async_track_time_interval
 
 from .storage import _ConfirmedStore
@@ -74,6 +75,7 @@ class LogHistory:
         self._since = datetime.now(timezone.utc).timestamp()
         self._unsub = async_track_time_interval(self.hass, self._tick, timedelta(seconds=30))
 
+    @callback
     def _tick(self, _now):
         if self._task is None or self._task.done():
             self._task = self.hass.async_create_task(self.async_checkpoint())
