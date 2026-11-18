@@ -25,6 +25,18 @@ class RecorderGraceTest(unittest.TestCase):
         self.assertEqual(measurement_window(now, 'Europe/Warsaw')[1].isoformat(), '2026-10-25T00:00:00+00:00')
 
 
+class IndependentCellsTest(unittest.TestCase):
+    def test_missing_cell_does_not_discard_later_measurement(self):
+        from tests.test_build1_energy_native_short import SID, META, raw_at
+        from tests.test_energy_snapshot import at
+        start = at('2026-10-18T19:00Z')
+        raw = raw_at(start.isoformat(), (1, 2, 3))
+        raw[SID].pop(1)
+        cells = short.normalized_cells(raw, META, [SID], start, at('2026-10-18T19:15Z'))
+        self.assertEqual(['0.001', None, '0.003'], [row['kwh'] for row in cells])
+        self.assertEqual([0, 1, 0], [len(row['missing_sources']) for row in cells])
+
+
 class EntityPrivacyTest(unittest.IsolatedAsyncioTestCase):
     async def test_missing_source_ids_are_not_in_snapshot_or_entity_attributes(self):
         import importlib
