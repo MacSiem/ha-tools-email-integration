@@ -69,7 +69,14 @@ async def test_native_analysis_selected_comparison_chart_and_policy(hass, hass_s
     if missing_source:
         assert result['coverage']['ratio'] == .5
         assert result['totals']['kwh'] is None
-        assert compared['status'] == 'unknown' and compared['delta_kwh'] is None
+        assert compared['status'] == 'ready'
+        assert compared['comparison_scope'] == 'common_measurements'
+        assert (compared['current_kwh'], compared['baseline_kwh'], compared['delta_kwh']) == (12, 12, 0)
+        chart = compared['chart']
+        assert chart['reconciles_comparison_energy']
+        for key, total in (('current_kwh', compared['current_kwh']),
+                           ('baseline_kwh', compared['baseline_kwh'])):
+            assert sum(Decimal(row[key]) for row in chart['markers'] if row['status'] == 'ready') == Decimal(total)
     else:
         assert Decimal(result['totals']['kwh']) == 12
         assert compared['status'] == 'ready'

@@ -180,7 +180,9 @@ class ComparisonChartServiceTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual('unknown', rows[3]['status'])
             self.assertIsNone(rows[3]['baseline_kwh'])
             self.assertEqual('ready', rows[4]['status'])
-            self.assertFalse(compared['chart']['reconciles_comparison_energy'])
+            self.assertTrue(compared['chart']['reconciles_comparison_energy'])
+            for key in ('current_kwh', 'baseline_kwh'):
+                self.assertEqual(compared[key], sum(float(row[key]) for row in rows if row['status'] == 'ready'))
 
     async def test_unsupported_week_baseline_has_explicit_unknown_chart(self):
         h = self.harness()
