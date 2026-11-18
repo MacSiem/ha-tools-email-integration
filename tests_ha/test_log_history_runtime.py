@@ -142,6 +142,10 @@ async def test_failed_checkpoint_retries_without_duplicate_or_lost_counts(hass, 
     with patch.object(history.store, 'async_save_confirmed', side_effect=OSError('synthetic')):
         with pytest.raises(OSError):
             await history.async_checkpoint()
+        old_rows, old_coverage = await history.async_query(datetime(2026, 10, 1, tzinfo=UTC),
+                                                           datetime(2026, 10, 1, 1, tzinfo=UTC))
+        assert not old_coverage['complete']
+        assert not any(row['name'] == 'fixture.retry' for row in old_rows)
     await history.async_checkpoint()
     rows, coverage = await history.async_query(datetime(2026, 10, 1, tzinfo=UTC),
                                                datetime(2026, 10, 1, 1, tzinfo=UTC))

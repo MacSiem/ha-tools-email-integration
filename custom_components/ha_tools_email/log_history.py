@@ -22,6 +22,7 @@ from .storage import _ConfirmedStore
 RETENTION = timedelta(days=33)  # >= 31 calendar days including DST
 MAX_PENDING = 4096
 MAX_GROUPS_PER_HOUR = 128
+_LOGGER = logging.getLogger(__name__)
 
 
 def _utc(value):
@@ -91,6 +92,12 @@ class LogHistory:
     def _tick(self, _now):
         if self._task is None or self._task.done():
             self._task = self.hass.async_create_task(self.async_checkpoint())
+            self._task.add_done_callback(self._checkpoint_done)
+
+    @staticmethod
+    def _checkpoint_done(task):
+        if not task.cancelled() and task.exception() is not None:
+            _LOGGER.warning('Log history checkpoint unavailable; coverage may be incomplete')
 
     def capture(self, entry):
         with self._lock:
@@ -161,7 +168,11 @@ class LogHistory:
             self._since = end
 
     async def async_query(self, start, end):
-        await self.async_checkpoint()
+        try:
+            await self.async_checkpoint()
+        except Exception:
+            # Continue with the last confirmed snapshot, never an unsaved tail.
+            _LOGGER.warning('Log history checkpoint unavailable; coverage may be incomplete')
         start, end = start.timestamp(), end.timestamp()
         rows = []
         legacy_partial = False
@@ -208,6 +219,12 @@ class LogHistory:
             logging.root.removeHandler(self._handler)
             self._handler = None
         if self._task:
-            await self._task
-        await self.async_checkpoint()
+            try:
+                await self._task
+            except Exception:
+                pass  # A final checkpoint below can still save the pending tail.
+        try:
+            await self.async_checkpoint()
+        except Exception:
+            _LOGGER.warning('Log history final checkpoint unavailable; coverage may be incomplete')
         self._since = None
