@@ -300,7 +300,7 @@ async def async_collect_inputs(service, configuration, period, context, accumula
     # the selected historical period and registry ordering. Cache never grants ACL.
     as_of = context['report_color_as_of']
     color_key = {key: value for key, value in context.items() if key not in (
-        'period_kind', 'period_signature', 'period_anchor', 'report_mode', 'report_cutoff',
+        'period_kind', 'period_signature', 'period_anchor', 'report_mode', 'report_cutoff', 'report_clock',
         'actor_signature')}
     cached = service._report_colors
     if cached is not None and cached[0] == color_key:
