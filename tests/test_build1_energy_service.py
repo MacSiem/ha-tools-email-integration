@@ -209,6 +209,31 @@ class Build1ServiceTest(unittest.TestCase):
                 self.assertFalse(await h.subject.async_validate_result(second, 'user'))
         asyncio.run(run())
 
+    def test_report_clock_preserves_midnight_dst_and_explicit_anchor(self):
+        async def run():
+            cases = (
+                (datetime(2026, 1, 11, 23, 59, 59, tzinfo=UTC), 'UTC', None, '2026-01-11'),
+                (datetime(2026, 10, 25, 0, 59, 59, tzinfo=UTC), 'Europe/Warsaw', None, '2026-10-25'),
+                (datetime(2026, 1, 11, 23, 59, 59, tzinfo=UTC), 'UTC', '2026-01-10', '2026-01-10'),
+            )
+            for now, zone, anchor, expected in cases:
+                with self.subTest(zone=zone, anchor=anchor):
+                    h = Harness(); h.now = now; h.hass.config.time_zone = zone
+                    async def advance(ids, begin, end):
+                        if h.now == now:
+                            h.now += timedelta(seconds=2)
+                    h.on_read = advance
+                    async def short(subject, configuration, begin, end, guard):
+                        await guard()
+                        return {'sensor.grid': '0.7', 'sensor.device': '0.2'}
+                    with h.patches(), patch.object(inputs, 'async_short_hour', short):
+                        result = await h.subject.async_get_build1_model('day', 'user', date=anchor, mode='full')
+                        self.assertEqual(expected, result['period']['local_start'][:10])
+                        self.assertTrue(await h.subject.async_validate_result(result, 'user'))
+                        cutoff = datetime.fromisoformat(result['context']['report_cutoff'])
+                        self.assertTrue(all(end <= cutoff for _, _, end in h.queries))
+        asyncio.run(run())
+
     def test_permission_and_revision_during_extra_history_reads_fail_closed(self):
         async def run():
             for mutate in ('permission', 'revision'):
