@@ -51,6 +51,28 @@ class StaleMailTest(unittest.TestCase):
         after_gap['coverage']['missing_devices']=[]
         self.assertIsNone(self.line(after_gap))
 
+    def test_schema2_actual_string_ids_require_full_outage_overlap(self):
+        snapshot=json.loads((Path(__file__).parent/'fixtures/energy-report-schema2-v53.json').read_text())
+        snapshot['coverage']['missing_sources']=['sensor.device']
+        status={'sensor.device':{'stale':True,'since':'2026-10-01T00:00:00+00:00'},
+                'sensor.secret':{'stale':True,'since':'2026-09-01T00:00:00+00:00'}}
+        line=self.line(snapshot,status,language='en')
+        self.assertEqual('Desk — no updates since Oct 1 (48 days)',line)
+        rendered=REPORT.render_energy_analysis(snapshot,language='en',timezone_name='UTC',hour_cycle='24',stale_line=line)
+        self.assertIn(line,rendered['text']);self.assertIn(line,rendered['html'])
+        # A missing bucket elsewhere in the window is not proof that it
+        # overlaps a later outage, even though the ID itself is authorized.
+        status['sensor.device']['since']='2026-10-10T12:00:00+00:00'
+        self.assertIsNone(self.line(snapshot,status,language='en'))
+        status['sensor.device']['since']='2026-10-01T00:00:00+00:00'
+        snapshot['period']['end']='2026-11-19T00:00:00+00:00'
+        self.assertIsNone(self.line(snapshot,status,language='en'))
+        snapshot['period']['end']='2026-10-11T00:00:00+00:00'
+        snapshot['groups']['devices'].pop('sensor.device')
+        self.assertTrue(self.line(snapshot,status,language='en').startswith('sensor.device —'))
+        snapshot['coverage']['missing_sources']=['sensor.other']
+        self.assertIsNone(self.line(snapshot,status,language='en'))
+
     def test_legacy_renderer_uses_same_line_without_csv_change(self):
         snapshot=json.loads((Path(__file__).parent/'fixtures/energy-report-schema2-v53.json').read_text())
         for lang in ('pl','en'):
