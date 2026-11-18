@@ -91,3 +91,22 @@ async def test_retention_prunes_older_than_33_days(hass, freezer):
     await history.async_checkpoint()
     assert not history.data['hours']
     await history.async_stop()
+
+
+async def test_partial_empty_observation_is_not_reported_as_wholly_unavailable(hass, hass_storage, freezer):
+    freezer.move_to('2026-10-01T12:00:00Z')
+    assert await async_setup_component(hass, 'system_log', {})
+    entry, storage = await _setup(hass, hass_storage=hass_storage)
+    history = hass.data[DOMAIN]['log_history']
+    freezer.move_to('2026-10-01T13:00:00Z')
+    await history.async_checkpoint()
+    # Isolate the no-observed-logs case from test infrastructure warnings.
+    history.data['hours'] = {}
+    report = await async_build_log_digest_payload(hass, storage, cadence='daily',
+        now=datetime(2026, 10, 1, 13, tzinfo=UTC),
+        window_start=datetime(2026, 10, 1, tzinfo=UTC),
+        window_end=datetime(2026, 10, 1, 13, tzinfo=UTC), manual_window=True,
+        presentation=_presentation('pl', 'UTC'))
+    assert report['summary']['total'] == 0
+    assert report['summary']['counts_complete'] is False
+    assert 'Niepełne pokrycie dziennika' in report['body']

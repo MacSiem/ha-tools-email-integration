@@ -668,7 +668,7 @@ async def async_build_log_digest_payload(
                       reason=None if coverage['complete'] else 'observation_gap_or_partial_hour')
         payload['summary']['counts_complete'] = coverage['complete']
     payload["summary"]["source"] = source
-    if not payload["summary"]["unique_problems"] and not (coverage and coverage['complete']):
+    if not payload["summary"]["unique_problems"] and not (coverage and coverage['covered_seconds'] > 0):
         # A volatile, bounded buffer cannot prove an empty completed calendar period.
         payload["summary"].update(total=None, counts_complete=False, history_unavailable=True)
         title = _title(KIND_LOG_DIGEST, cadence, presentation)
