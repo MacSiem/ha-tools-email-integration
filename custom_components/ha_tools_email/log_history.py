@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 from homeassistant.components.system_log import LogEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_FINAL_WRITE
-from homeassistant.core import callback
+from homeassistant.core import CoreState, callback
 from homeassistant.helpers.event import async_track_time_interval
 
 from .storage import _ConfirmedStore
@@ -226,15 +226,19 @@ class LogHistory:
     async def async_stop(self):
         # Unload and Core shutdown can overlap. Only one owns the final flush.
         async with self._stop_lock:
-            if self._unsub_shutdown:
-                self._unsub_shutdown()
-                self._unsub_shutdown = None
             if self._unsub:
                 self._unsub()
                 self._unsub = None
             if self._handler:
                 logging.root.removeHandler(self._handler)
                 self._handler = None
+            if self.hass.state is CoreState.stopping and self._unsub_shutdown:
+                # Store deliberately defers writes in STOP. Preserve the tail
+                # and final-write listener even if config-entry unload races it.
+                return
+            if self._unsub_shutdown:
+                self._unsub_shutdown()
+                self._unsub_shutdown = None
             if self._task:
                 # A task cancelled by Core must not cancel the final checkpoint.
                 await asyncio.gather(self._task, return_exceptions=True)
