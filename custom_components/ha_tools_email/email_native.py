@@ -123,10 +123,9 @@ class EmailNativeCoordinator:
                 if identifier in device.identifiers and device.name != name:
                     devices.async_update_device(device.id, name=name)
         # Retire only Energy counters; preserve all other identities and names.
-        registry = er.async_get(self.hass)
-        for key, row in self.data.items():
-            if row['kind'] != 'energy_report':
-                continue
+        energy_keys = [key for key, row in self.data.items() if row['kind'] == 'energy_report']
+        for key in energy_keys:
+            registry = er.async_get(self.hass)
             for field in ('errors_24h', 'warnings_24h'):
                 unique_id = f'{self.entry.entry_id}_email_{key}_{field}'
                 entity_id = registry.async_get_entity_id('sensor', DOMAIN, unique_id)
