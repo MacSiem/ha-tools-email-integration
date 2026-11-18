@@ -246,6 +246,17 @@ class Build1ServiceTest(unittest.TestCase):
             self.assertEqual(1, pair.await_count)
         asyncio.run(run())
 
+    def test_completed_calendar_year_keeps_one_previous(self):
+        async def run():
+            h = Harness(); h.now = datetime(2026, 1, 4, 12, 5, tzinfo=UTC); h.book = None
+            paired = {'status': 'unknown', 'reason': 'no_common_measurements', 'chart': {'markers': []}}
+            with h.patches(), patch.object(inputs, '_report_pair', new_callable=AsyncMock, return_value=paired) as pair:
+                result = await h.subject.async_get_build1_model('year', 'user', date='2025-01-01', mode='full')
+            self.assertTrue(result['report_model']['period']['complete'])
+            self.assertEqual(['previous_year'], [row['key'] for row in result['report_model']['comparisons']])
+            self.assertEqual(1, pair.await_count)
+        asyncio.run(run())
+
     def test_annual_dedup_keeps_different_windows_and_leap_dst_identity(self):
         for instant in (datetime(2024, 2, 29, 12, tzinfo=UTC),
                         datetime(2024, 10, 27, 1, 30, tzinfo=UTC),
