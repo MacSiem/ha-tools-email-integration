@@ -276,7 +276,7 @@ def _daily_rows(hourly, zone):
             'energy_cost':_sum(h['energy_cost'] for h in observed if h['kwh'] is not None),
             'variable_cost':_sum(h['variable_cost'] for h in observed if h['kwh'] is not None),
             'measured_kwh':_known_sum(h['measured_kwh'] for h in observed),
-            'complete':bool(observed) and len(observed)==len(hours) and all(h['kwh'] is not None and not h['partial'] for h in hours),
+            'complete':bool(observed) and len(observed)==len(hours) and all(h['full_kwh'] is not None and not h['partial'] for h in hours),
             'partial':any(h['partial'] for h in hours) or bool(observed) and len(observed)!=len(hours),
             'future':not observed,
             'zones':[{'id':z,'kwh':_known_sum(h['kwh'] for h in observed if h['zone']==z)} for z in zones]})
@@ -341,11 +341,12 @@ def _build_report(inputs):
     for offset in range(period['hours']):
         instant = start + timedelta(hours=offset)
         raw = provided.get(instant, {})
-        kwh = _decimal(raw.get('kwh'))
+        full_kwh = _decimal(raw.get('kwh'))
+        kwh = _decimal(raw.get('recorded_kwh', raw.get('kwh')))
         if kwh is not None and kwh < 0:
             raise ValueError('negative_import')
         eligible = instant < cutoff
-        if eligible and kwh is not None:
+        if eligible and full_kwh is not None:
             measured_hours += 1
         costs = {key: _decimal(raw.get('costs', {}).get(key)) if identity_ok and kwh is not None else None for key in COSTS}
         cells = raw.get('devices', {})
@@ -357,9 +358,9 @@ def _build_report(inputs):
             if quantity is not None and quantity < 0:
                 raise ValueError('negative_consumer')
             device_hours[sid].append({'kwh': quantity,
-                'cost': _decimal(cell.get('costs', {}).get('usage_cost')) if identity_ok and quantity is not None and partitioned else None,
+                'cost': _decimal(cell.get('costs', {}).get('usage_cost')) if identity_ok and quantity is not None else None,
                 'eligible': eligible})
-        residual = kwh - measured if kwh is not None and measured is not None else None
+        residual = full_kwh - measured if full_kwh is not None and measured is not None else None
         if residual is not None and residual < Decimal('-.05'):
             double_counting = True
         elif residual is not None and residual < 0:
@@ -375,7 +376,7 @@ def _build_report(inputs):
             raise ValueError('negative_recorded_import')
         hourly.append({'start': local.isoformat(), 'hour': local.hour, 'fold': local.fold,
             'kwh': kwh, 'zone': raw.get('zone'), 'classification': raw.get('classification'), **costs, 'cost': costs['usage_cost'],
-            'recorded_kwh': recorded, 'recorded_cost': _decimal(raw.get('recorded_cost')) if identity_ok else None, 'measured_sources': raw.get('measured_sources'),
+            'recorded_kwh': recorded, 'full_kwh': full_kwh, 'recorded_cost': _decimal(raw.get('recorded_cost')) if identity_ok else None, 'measured_sources': raw.get('measured_sources'),
             'expected_sources': raw.get('expected_sources'),
             'measured_kwh': measured, 'prev_kwh': previous_value,
             'partial': bool(raw) and _instant(raw['to']) - instant < timedelta(hours=1),
@@ -389,7 +390,7 @@ def _build_report(inputs):
                     for i, row in enumerate(source_rows)), ZERO)
     source_measured = source_hours('measured_sources') if source_counts_known else None
     source_expected = source_hours('expected_sources') if source_counts_known else None
-    full_hours = sum(row['kwh'] is not None and not row['partial'] for row in source_rows)
+    full_hours = sum(row['full_kwh'] is not None and not row['partial'] for row in source_rows)
     expected_full_hours = int((cutoff - start).total_seconds() // 3600)
     has_data = (any(row['recorded_kwh'] is not None for row in source_rows) or
         any(cell['eligible'] and cell['kwh'] is not None for rows in device_hours.values() for cell in rows))
@@ -436,7 +437,7 @@ def _build_report(inputs):
         recorded_import_kwh=_known_sum(row['recorded_kwh'] for row in hourly if not row['future']),
         recorded_usage_cost=_sum(row['recorded_cost'] for row in source_rows if row['recorded_kwh'] is not None) if has_data else None,
         fixed_share=fixed,
-        total_with_fixed=usage + fixed if coverage['complete'] and usage is not None and fixed is not None else None,
+        total_with_fixed=usage + fixed if usage is not None and fixed is not None else None,
         effective_rate=_ratio(usage, imported))
     peak = max(observed, key=lambda row: row['kwh']) if observed else None
     totals.update(peak_hour=peak['hour'] if peak else None, peak_kwh=peak['kwh'] if peak else None)
@@ -460,7 +461,7 @@ def _build_report(inputs):
             all_devices[parent]['children'].append(all_devices[sid])
     devices = sorted((all_devices[sid] for sid in roots), key=lambda row: (-(row['kwh'] or ZERO), row['id']))
     measured = _sum((row['kwh'] for row in devices), empty=ZERO) if partitioned and (devices or imported is not None) else None
-    remainder = _known_sum(residuals)
+    remainder = _known_sum(residuals) if all(value is not None for value in residuals) else None
     if double_counting:
         remainder = None
         issues.append({'code': 'double_counting', 'severity': 'warning', 'data': {}})
@@ -492,7 +493,7 @@ def _build_report(inputs):
         ranking.append({'id': '_other_measured', 'name': 'Pozostałe zmierzone', 'kwh': quantity,
             'recorded_kwh': _known_sum(row['kwh'] for row in other),
             'measurement_complete': all(row['measurement_complete'] for row in other),
-            'share': share(quantity) if all(row['measurement_complete'] for row in other) else None, 'cost': _sum(row['cost'] for row in other),
+            'share': share(quantity) if all(row['measurement_complete'] for row in other) else None, 'cost': _known_sum(row['cost'] for row in other),
             'color': 'other', 'count': len(other), 'children': deepcopy(other)})
     ranking.append({'id': '_unmeasured', 'name': 'Niezmierzone', **unmeasured, 'color': 'unmeasured'})
 
@@ -513,7 +514,7 @@ def _build_report(inputs):
                 continue
             result.append({**group, 'kwh': quantity, 'recorded_kwh': _known_sum(row['kwh'] for row in members),
                 'measurement_complete': all(row['measurement_complete'] for row in members), 'share': share(quantity) if all(row['measurement_complete'] for row in members) else None,
-                'cost': _sum(row['cost'] for row in members), 'devices': len(members)})
+                'cost': _known_sum(row['cost'] for row in members), 'devices': len(members)})
         result.sort(key=lambda row: (-(row['kwh'] or ZERO), row['name']))
         result.append({level + '_id': '_unmeasured', 'name': 'Niezmierzone', **unmeasured})
         return result

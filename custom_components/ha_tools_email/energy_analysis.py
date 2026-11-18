@@ -17,7 +17,7 @@ from .energy_period_summary import build_period_summary
 from .energy_patterns_periods import resolve_patterns_window
 from .energy_patterns import build_patterns_projection
 from .energy_measurements import hour_grid, measurement_evidence
-from .tariff_history import _bounded, calculate_energy_amounts, price_book, validate_tariff_book
+from .tariff_history import _bounded, _money, calculate_energy_amounts, price_book, validate_tariff_book
 
 
 def _stamp(value):
@@ -259,8 +259,17 @@ class EnergyAnalysisAccumulator:
             fingerprint = pricing['measurement_fingerprint']
             active = next((row for row in pricing['tariffs']
                            if row['tariff_id'] == pricing['active_tariff_id']), None)
+        # Price the actual subtotal separately; keep the strict household bill
+        # and its completeness flags intact for residual and compatibility.
+        known_rows = [{**row, 'kwh': row.get('recorded_kwh')} for row in self._rows]
+        known_active = None
+        if self._book is not None:
+            known_pricing = price_book(self._book, known_rows, price_coverage,
+                                       include_report_projection=self._include_report_hours)
+            known_active = next((row for row in known_pricing['tariffs']
+                if row['tariff_id'] == known_pricing['active_tariff_id']), None)
         if self._include_report_hours:
-            self._report_pricing = deepcopy(active)
+            self._report_pricing = deepcopy(known_active)
         cost_keys = ('energy_cost', 'variable_cost', 'legacy_combined_cost', 'usage_cost',
                      'fixed_cost', 'total_cost', 'effective_price', 'currency', 'price_basis')
         totals = {key: active.get(key) if active is not None else None for key in cost_keys}
@@ -311,6 +320,41 @@ class EnergyAnalysisAccumulator:
                   'rounding': deepcopy(pricing['rounding']) if pricing is not None else None,
                   'issues': list(self._issues)}
         result['chart'] = build_chart_bins(self._rows, self._period, active)
+        known_chart = build_chart_bins(known_rows, self._period, known_active)
+        known_chart['coverage_kind'] = 'known_source_readings'
+        for index, (known_bin, full_bin) in enumerate(zip(known_chart['bins'], result['chart']['bins'])):
+            known_bin['complete'] = full_bin['complete']
+            if known_chart['grain'] == 'hour':
+                known_bin['measured_sources'] = self._rows[index].get('measured_sources')
+                known_bin['expected_sources'] = self._rows[index].get('expected_sources')
+        measured_rows = [(row, known_active['rows'][i]) for i, row in enumerate(known_rows)
+                         if row['kwh'] is not None] if known_active else []
+        priced = bool(measured_rows) and all(price.get('available') for _, price in measured_rows)
+        compatible = bool(known_active and known_active['compatible'])
+        amounts = {}
+        for key in ('energy_cost', 'variable_cost', 'legacy_combined_cost'):
+            parts = [price.get('costs', {}).get(key) for _, price in measured_rows]
+            amounts[key] = (_money(sum((Decimal(value) for value in parts), Decimal(0)))
+                            if priced and compatible and all(value is not None for value in parts) else None)
+        usage_parts = []
+        for _, price in measured_rows:
+            costs = price.get('costs', {})
+            keys = ('energy_cost', 'variable_cost') if price.get('rate_semantics') == 'components' else ('legacy_combined_cost',)
+            if any(costs.get(key) is None for key in keys):
+                priced = False
+                break
+            usage_parts.extend(Decimal(costs[key]) for key in keys)
+        usage = _money(sum(usage_parts, Decimal(0))) if priced and compatible else None
+        quantity = sum((Decimal(str(row['kwh'])) for row in known_rows if row['kwh'] is not None), Decimal(0))
+        has_known = any(row['kwh'] is not None for row in known_rows)
+        fixed = known_active.get('fixed_cost') if compatible else None
+        total = _money(Decimal(usage) + Decimal(fixed)) if usage is not None and fixed is not None else None
+        result['known_totals'] = {**amounts, 'kwh': str(quantity) if has_known else None,
+            'usage_cost': usage, 'fixed_cost': fixed, 'total_cost': total,
+            'effective_price': _money(Decimal(usage) / quantity) if usage is not None and quantity else None,
+            'currency': known_active.get('currency') if compatible else None,
+            'price_basis': known_active.get('price_basis') if compatible else None}
+        result['known_chart'] = known_chart
         result['period_summary'] = build_period_summary(self._rows, self._period, active, totals)
         if self._consumers is not None:
             result['groups'] = self._consumers.finish(active)

@@ -228,6 +228,8 @@ class _View:
             return self.tr('no_data')
         if self.start and self.end and start.timestamp() == self.start.timestamp() and end.timestamp() == self.end.timestamp():
             return 'cały okres' if self.lang == 'pl' else 'entire period'
+        if self.kind == 'day' and start.utcoffset() == end.utcoffset():
+            return f'{self.clock(start)}–{self.clock(end, end=True)}'
         return f'{self.date(start)} {self.clock(start, offset=True)} – {self.date(end)} {self.clock(end, end=True, offset=True)}'
 
     def zone_label(self, zone, tariff=None):
@@ -417,7 +419,7 @@ class _View:
             labels.append((idx, axis_label)) if visible else None
             zone = next((z for z in self.zones if z.get('id') == p.get('zone')), None)
             name = self.zone_label(zone) if zone else ''
-            self.lines.append(f'- {tip}{"*" if p.get("zone") == "cheap" else ""} · {name} · {self.tr("previous")}: {self.energy(previous)}')
+            self.lines.append(' · '.join(part for part in (f'- {tip}{"*" if p.get("zone") == "cheap" else ""}', name, f'{self.tr("previous")}: {self.energy(previous)}') if part))
         # Whitespace between inline groups remains a line-break opportunity;
         # each marker and its label/date travel together in mail clients.
         legend_groups = []
@@ -476,7 +478,7 @@ class _View:
                 text_color = 'tx2' if idx == 1 else 'tx'
                 cells += f'<td class="{text_color} bd zone-value" align="right" style="padding:8px 0;border-top:1px solid {L["bd"]};font:{700 if idx == 0 else 400} 14px/20px {FONT};color:{L[text_color]}">{E(value)}</td>'
             rows.append('<tr>' + cells + '</tr>')
-            self.lines.append(f'- {label} ({hours}): {" · ".join(values)}')
+            self.lines.append(f'- {label}' + (f' ({hours})' if hours else '') + f': {" · ".join(values)}')
         gap = '<td width="4" style="width:4px;line-height:0;font-size:0">&nbsp;</td>'
         bar = f'<table role="presentation" width="100%" style="border-radius:6px"><tr>{gap.join(segments)}</tr></table>' if segments else ''
         table_class = ' class="energy-zones-en"' if self.lang == 'en' else ''
@@ -682,7 +684,8 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
     missing_note = (('Brakujące źródła: ' if v.lang == 'pl' else 'Missing sources: ') + '; '.join(missing_lines)) if missing_lines else ''
     if missing_note:
         v.lines.append(missing_note)
-    device_lines = [str(source.get('name') or source.get('id') or '') + ': ' + ', '.join(v.missing_range(r) for r in _items(source.get('ranges'))) for source in device_gaps]
+    missing_ids = {source.get('id') for source in _items(v.coverage.get('missing_sources'))}
+    device_lines = [str(source.get('name') or source.get('id') or '') + ': ' + ', '.join(v.missing_range(r) for r in _items(source.get('ranges'))) for source in device_gaps if source.get('id') not in missing_ids]
     device_note = (('Brakujące odczyty urządzeń: ' if v.lang == 'pl' else 'Missing device readings: ') + '; '.join(device_lines)) if device_lines else ''
     if device_note:
         v.lines.append(device_note)

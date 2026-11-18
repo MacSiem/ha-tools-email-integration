@@ -172,9 +172,10 @@ def short_projection(values, configuration, tariff, start, end):
         return {key: str(value) if value is not None else None for key, value in
                 calculate_energy_amounts(Decimal(value), rate['energy_rate'], rate['variable_rate'], rate['rate_semantics']).items()}
     grid_ids = [row['entity_id'] for row in configuration['grid_sensors']]
-    kwh = total(grid_ids)
+    full_kwh = total(grid_ids)
     recorded = [Decimal(values[sid]) for sid in grid_ids if values.get(sid) is not None]
-    return {'from': start.isoformat(), 'to': end.isoformat(), 'kwh': kwh,
+    kwh = str(sum(recorded, Decimal(0))) if recorded else None
+    return {'from': start.isoformat(), 'to': end.isoformat(), 'kwh': full_kwh,
         'recorded_kwh': str(sum(recorded, Decimal(0))) if recorded else None,
         'measured_sources': len(recorded), 'expected_sources': len(grid_ids),
         'missing_sources': [sid for sid in grid_ids if values.get(sid) is None],
@@ -184,7 +185,7 @@ def short_projection(values, configuration, tariff, start, end):
         'zone': rate.get('zone') if known and rate.get('zone_attribution') == 'single' else None,
         'costs': costs(kwh), 'devices': {row['stat_consumption']: {
             'kwh': values.get(row['stat_consumption']),
-            'costs': costs(values.get(row['stat_consumption'])) if configuration['consumer_domain'] == 'grid_import' else {}}
+            'costs': costs(values.get(row['stat_consumption']))}
             for row in configuration['consumers']}}
 
 
