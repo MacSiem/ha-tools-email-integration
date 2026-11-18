@@ -37,14 +37,30 @@ def stale_mail_line(snapshot, statuses, *, language, timezone_name, now):
         if not isinstance(rows, list):
             continue
         for row in rows:
-            if not isinstance(row, dict) or not isinstance(row.get('id'), str):
+            if isinstance(row, str):
+                sid = row
+            elif isinstance(row, dict) and isinstance(row.get('id'), str):
+                sid = row['id']
+            else:
                 continue
-            sid = row['id']
             fact = statuses.get(sid)
             if not isinstance(fact, dict) or fact.get('stale') is not True:
                 continue
             since = _instant(fact.get('since') or fact.get('last_reading'))
             if since is None or since > now - timedelta(hours=24):
+                continue
+            if isinstance(row, str):
+                # Schema 2 only proves a source was missing somewhere in the
+                # period. Without an exact range, require the *whole* period
+                # to fall inside the independently confirmed outage.
+                if since <= start and end <= now:
+                    groups = snapshot.get('groups') or {}
+                    devices = groups.get('devices') if isinstance(groups, dict) else {}
+                    device = devices.get(sid) if isinstance(devices, dict) else None
+                    name = device.get('name') if isinstance(device, dict) else None
+                    name = name if isinstance(name, str) and name.strip() else sid
+                    if sid:
+                        candidates.append((since, sid, name))
                 continue
             ranges = row.get('ranges')
             if not isinstance(ranges, list):
