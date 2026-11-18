@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from calendar import monthrange
+from contextvars import ContextVar
 import ast
 from datetime import datetime, timedelta, timezone
 from html import escape
@@ -1113,7 +1114,36 @@ async def async_get_energy_metadata(hass: Any, ids: list[str]) -> dict[str, Any]
         return {}
 
 
+# The value belongs to one async analysis request, never to the service or host.
+_first_statistics_snapshot = ContextVar('energy_first_statistics_snapshot', default=None)
+
+
+def _begin_first_statistics_snapshot():
+    return _first_statistics_snapshot.set({})
+
+
+def _end_first_statistics_snapshot(token):
+    _first_statistics_snapshot.reset(token)
+
+
 async def _first_energy_statistics(hass, metadata):
+    if not isinstance(metadata, dict):
+        return None
+    ids = tuple(sorted((sid, item[0]) for sid, item in metadata.items()
+                       if isinstance(item, tuple) and len(item) >= 2 and type(item[0]) is int))
+    snapshot = _first_statistics_snapshot.get()
+    key = (id(hass), ids)
+    if snapshot is not None and key in snapshot:
+        return snapshot[key].copy()
+    first = await _query_first_energy_statistics(hass, metadata)
+    # None means Recorder failed or metadata was unavailable; retry it rather
+    # than freezing a failure as evidence that configured sources have no data.
+    if snapshot is not None and first is not None:
+        snapshot[key] = first.copy()
+    return first
+
+
+async def _query_first_energy_statistics(hass, metadata):
     """Read first retained long-term statistic per configured source locally.
 
     An unavailable Recorder/schema is distinct from a source with no history:
