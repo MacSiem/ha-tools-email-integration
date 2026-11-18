@@ -244,8 +244,9 @@ class ComparisonCostsTest(unittest.TestCase):
         for split in (1, 7, 168):
             result, _ = self.run_pair(tariff(version(energy=.5, variable=.2)), bounds,
                                       zone='Europe/Warsaw', split=split)
-            self.assertEqual((25, 24), (result['current_kwh'], result['baseline_kwh']))
-            self.assertEqual(('17.50', '16.80', '0.70'),
+            self.assertEqual((24, 24), (result['current_kwh'], result['baseline_kwh']))
+            self.assertEqual((25, 24), (result['full_current_kwh'], result['full_baseline_kwh']))
+            self.assertEqual(('16.80', '16.80', '0.00'),
                 (result['costs']['current']['usage_cost'], result['costs']['baseline']['usage_cost'],
                  result['costs']['delta_cost']))
         bounds = (('2026-01-02T00:00Z', '2026-01-02T10:00Z'),
@@ -253,9 +254,10 @@ class ComparisonCostsTest(unittest.TestCase):
         missing = {side: [('sensor.a', int(datetime.fromisoformat(bounds[i][0]).timestamp()*1000)
                           + i*3600000)] for i, side in enumerate(('current', 'baseline'))}
         result, _ = self.run_pair(tariff(), bounds, missing=missing)
-        self.assertEqual('unknown', result['status'])
-        self.assertIsNone(result['costs']['delta_cost'])
-        self.assertIsNone(result['costs']['current']['usage_cost'])
+        self.assertEqual('ready', result['status'])
+        self.assertEqual('common_measurements', result['comparison_scope'])
+        self.assertIsNotNone(result['costs']['delta_cost'])
+        self.assertIsNotNone(result['costs']['current']['usage_cost'])
         self.assertEqual(8*3600, result['costs']['current']['mask_source_seconds'])
 
     def test_year_stream_with_costs_keeps_two_week_source_bound(self):
@@ -264,9 +266,10 @@ class ComparisonCostsTest(unittest.TestCase):
         sources = tuple(f'sensor.s{i}' for i in range(512))
         result, model = self.run_pair(tariff(version('2023-01-01', energy=.5, variable=.2)),
                                       bounds, kind='yearly', sources=sources)
-        self.assertEqual((8784*512, 8760*512), (result['current_kwh'], result['baseline_kwh']))
-        self.assertEqual('3148185.60', result['costs']['current']['usage_cost'])
-        self.assertEqual(8784*512*3600, result['costs']['current']['priced_source_seconds']['usage_cost'])
+        self.assertEqual((8760*512, 8760*512), (result['current_kwh'], result['baseline_kwh']))
+        self.assertEqual((8784*512, 8760*512), (result['full_current_kwh'], result['full_baseline_kwh']))
+        self.assertEqual('3139584.00', result['costs']['current']['usage_cost'])
+        self.assertEqual(8760*512*3600, result['costs']['current']['priced_source_seconds']['usage_cost'])
         self.assertLessEqual(model.peak_retained_cells, 2*168*512)
         self.assertEqual(0, model.retained_cells)
 

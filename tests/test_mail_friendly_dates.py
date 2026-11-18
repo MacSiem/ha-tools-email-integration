@@ -30,7 +30,7 @@ class FriendlyEnergyMailDatesTest(unittest.TestCase):
             return {'sensor.grid':rows,
                 'sensor.category':[{'start':(a+timedelta(hours=i)).timestamp(),'change':0}
                     for i in range(int((b-a).total_seconds()/3600))]}
-        fx=ComposerFixture(end,measurement_zone=report if partial else display,
+        fx=ComposerFixture(end + timedelta(minutes=5) if partial else end,measurement_zone=report if partial else display,
             language=language,display_zone=display,points=points,
             rows={'sensor.grid':{},'sensor.category':{}},preferences={
                 'energy_sources':[{'type':'grid','stat_energy_from':'sensor.grid'}],
@@ -62,7 +62,8 @@ class FriendlyEnergyMailDatesTest(unittest.TestCase):
                 authoritative=snapshot['comparisons']['previous']
                 self.assertEqual(169,snapshot['period']['hours'])
                 self.assertEqual(168,authoritative['baseline_periods'][0]['hours'])
-                self.assertEqual((145,144,1),(authoritative['current_kwh'],authoritative['baseline_kwh'],authoritative['delta_kwh']))
+                self.assertEqual((144,144,0),(authoritative['current_kwh'],authoritative['baseline_kwh'],authoritative['delta_kwh']))
+                self.assertEqual((145,144),(authoritative['full_current_kwh'],authoritative['full_baseline_kwh']))
                 comparison=payload['summary']['comparison'] # report70 structural aliases.
                 self.assertEqual('2026-10-11T22:00:00+00:00',comparison['previous_start'])
                 self.assertEqual('2026-10-18T22:00:00+00:00',comparison['previous_end'])

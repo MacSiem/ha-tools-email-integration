@@ -92,7 +92,7 @@ class GroupStreamTest(unittest.TestCase):
     def test_four_ratios_reject_different_masks_and_ignore_unrelated_missing_room(self):
         current = (self.current[0], '2026-01-02T10:00Z')
         baseline = (self.baseline[0], '2026-01-01T10:00Z')
-        for same, expected in ((True, 'ready'), (False, 'unknown')):
+        for same, expected in ((True, 'ready'), (False, 'ready')):
             result, _ = self.run_pair(current, baseline, count=2, split=3,
                 missing={'current': {(0, 0)}, 'baseline': {(0, 0 if same else 1)}})
             row = result['areas']['area0']
@@ -102,8 +102,9 @@ class GroupStreamTest(unittest.TestCase):
             self.assertEqual('ready', result['areas']['area1']['status'])
             self.assertEqual('40', result['areas']['area1']['current_kwh'])
             if not same:
-                self.assertIsNone(row['current_kwh'])
-                self.assertIsNone(row['delta_kwh'])
+                self.assertEqual('common_measurements', row['comparison_scope'])
+                self.assertEqual(Decimal(32), Decimal(row['current_kwh']))
+                self.assertIsNotNone(row['delta_kwh'])
 
     def test_zero_unknown_and_nonfinite_percent(self):
         result, _ = self.run_pair(values=('1', '0'))
@@ -132,8 +133,9 @@ class GroupStreamTest(unittest.TestCase):
             for split in (1, 73, 168):
                 result, _ = self.run_pair(current, baseline, kind=kind, zone=zone, split=split, values=('1', '1'))
                 row = result['areas']['area0']
-                self.assertEqual('per_group_calendar_totals', row['comparison_scope'])
-                self.assertEqual(expected, tuple(Decimal(row[key]) for key in ('current_kwh', 'baseline_kwh')))
+                self.assertEqual('common_measurements', row['comparison_scope'])
+                self.assertEqual((min(expected), min(expected)), tuple(Decimal(row[key]) for key in ('current_kwh', 'baseline_kwh')))
+                self.assertEqual(expected, tuple(Decimal(row[key]) for key in ('full_current_kwh', 'full_baseline_kwh')))
 
     def test_hierarchy_from_real_projection_and_missing_child_preserves_known_remainder(self):
         fixtures = projection_fixtures.GroupProjectionTest()
@@ -146,7 +148,8 @@ class GroupStreamTest(unittest.TestCase):
         for side in ('current', 'baseline'):
             model.push(side, projected, fixtures.start, fixtures.end)
         result = model.finish()
-        self.assertEqual('unknown', result['devices']['sensor.parent']['status'])
+        self.assertEqual('ready', result['devices']['sensor.parent']['status'])
+        self.assertEqual('common_measurements', result['devices']['sensor.parent']['comparison_scope'])
         self.assertEqual('6', result['devices']['sensor.parent']['own_current_kwh'])
         self.assertEqual(Decimal(4), Decimal(result['unmeasured']['current_kwh']))
         self.assertFalse(result['reconciles_household_delta'])
