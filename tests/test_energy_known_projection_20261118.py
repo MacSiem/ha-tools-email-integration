@@ -135,18 +135,23 @@ class ActualComposerKnownProjectionTest(unittest.TestCase):
                           for i in range(int((end-start).total_seconds()/3600))]
                     for sid in selected if sid != ids[-1]}
         async def run():
+            cases = [('daily', None, 24),
+                     ('daily', datetime(2026, 2, 5, tzinfo=timezone.utc), 24),
+                     ('weekly', datetime(2026, 2, 2, tzinfo=timezone.utc), 168),
+                     ('monthly', datetime(2026, 2, 1, tzinfo=timezone.utc), 28*24)]
             for lang in ('pl', 'en'):
-                for calendar in (False, True):
-                    fx = ComposerFixture(datetime(2026, 1, 4, 12, tzinfo=timezone.utc),
+                for cadence, start, hours in cases:
+                    calendar = start is not None
+                    fx = ComposerFixture(datetime(2026, 4, 5, 12, tzinfo=timezone.utc),
                         preferences=prefs, rows=rows, points=points,
                         book=book([version(rate=1, monthly=31)]), language=lang)
                     with fx.patches():
-                        start = datetime(2026, 1, 2, tzinfo=timezone.utc)
-                        report = await fx.compose(start=start if calendar else None,
-                            end=start + timedelta(days=1) if calendar else None, rolling=not calendar)
-                    self.assertEqual(1032, float(report['summary']['total_kwh']))
-                    self.assertIn('1032', report['text'].replace(' ', '').replace('\xa0', '').replace(',', ''))
-                    self.assertIn('1032', report['html'].replace(' ', '').replace('\xa0', '').replace(',', ''))
+                        report = await fx.compose(cadence=cadence, start=start,
+                            end=start + timedelta(hours=hours) if calendar else None, rolling=not calendar)
+                    expected = 43 * hours
+                    self.assertEqual(expected, float(report['summary']['total_kwh']))
+                    self.assertIn(str(expected), report['text'].replace(' ', '').replace('\xa0', '').replace(',', ''))
+                    self.assertIn(str(expected), report['html'].replace(' ', '').replace('\xa0', '').replace(',', ''))
                     self.assertIn(ids[-1], report['csv'])
                     self.assertFalse(report['summary']['coverage']['complete'])
                     if calendar:
