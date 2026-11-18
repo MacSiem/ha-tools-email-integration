@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.4.8 (2026-11-18)
+
+- Keep monthly previews and comparisons available when meters begin reporting partway through a period.
+- Keep long annual reads available when Recorder advances to the next sample window.
+
 ## 2.4.7 (2026-11-18)
 
 - Show available source readings, tariff zones and purchase-price costs consistently across Energy reports and entities, and compare matching source-hours. Keep full residual balances gated on complete measurements.
