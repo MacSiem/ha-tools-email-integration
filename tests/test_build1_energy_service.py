@@ -197,9 +197,11 @@ class Build1ServiceTest(unittest.TestCase):
                 first = await h.subject.async_get_build1_model('year', 'user', mode='full')
                 self.assertEqual('2026-01-04T11:55:00+00:00', first['context']['report_cutoff'])
                 self.assertTrue(await h.subject.async_validate_result(first, 'user'))
+                color_key = h.subject._report_colors[0]
                 h.on_read = None
                 second = await h.subject.async_get_build1_model('year', 'user', mode='full')
                 self.assertEqual('2026-01-04T12:00:00+00:00', second['context']['report_cutoff'])
+                self.assertEqual(color_key, h.subject._report_colors[0])
                 count = len(h.queries)
                 h.now += timedelta(seconds=30)
                 cached = await h.subject.async_get_build1_model('year', 'user', mode='full')
