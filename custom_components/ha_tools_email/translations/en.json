@@ -83,12 +83,16 @@
       "description": "A report attempt failed, was partially accepted, or its outcome is unknown. Check report status and integration settings before sending again. An unknown outcome can mean that a message was already accepted: do not replay it automatically. This notice clears after a later report is accepted by SMTP or a notification service. Acceptance does not confirm delivery to the recipient."
     },
     "energy_stale_source": {
-      "title": "Energy source {name} has not reported since {since}",
-      "description": "Source [{name}]({link}) has no new energy statistics since {since}. Check the device and its connection. This notice clears after readings return."
+      "title": "No updates from energy source {name} since {since}",
+      "description": "Home Assistant has not received a current state from [{name}]({link}) since {since}. Check its state and connection. This notice clears when updates return."
     },
     "energy_grid_is_devices": {
       "title": "Grid import is the sum of devices",
       "description": "Grid import sources are the same entities as devices. Unmeasured consumption cannot be calculated, and device estimates count as grid import. Review [Energy settings](/config/energy)."
+    },
+    "energy_stale_external": {
+      "title": "No statistics for energy source {name} since {since}",
+      "description": "Recorder has not received new statistics for {name} since {since}. This alone does not establish that a device has failed. Check [Energy settings]({link}) and the statistics provider."
     }
   },
   "entity": {

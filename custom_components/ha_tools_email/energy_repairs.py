@@ -166,19 +166,46 @@ async def async_publish_stale_sources(coordinator):
             if not stamps:
                 continue
             latest = max(stamps)
-            status[sid] = {'stale': now - latest >= timedelta(hours=24), 'last_reading': latest.isoformat()}
+            state = coordinator.hass.states.get(sid)
+            # Core compiles repeated statistics from the last state even when no
+            # new device update happened. last_reported advances on every HA
+            # state report, including an unchanged numeric value (such as zero).
+            # An unavailable/unknown report is not a measurement: use the time
+            # that state began and never clear an existing issue from it.
+            external = ':' in sid
+            if external:
+                since, basis = latest, 'external_statistics'
+            elif state is None:
+                continue
+            elif state.state in ('unavailable', 'unknown'):
+                since, basis = state.last_changed, 'unavailable_state'
+            else:
+                try:
+                    value = float(state.state)
+                    if not math.isfinite(value):
+                        continue
+                    since, basis = state.last_reported, 'entity_report'
+                except (ValueError, TypeError, AttributeError):
+                    continue
+            if not isinstance(since, datetime) or since.utcoffset() is None:
+                continue
+            since = since.astimezone(timezone.utc)
+            if since > now:
+                continue
+            stale = now - since >= timedelta(hours=24)
+            status[sid] = {'stale': stale, 'last_reading': since.isoformat() if basis != 'unavailable_state' else None,
+                           'since': since.isoformat(), 'basis': basis}
             issue_id = _stale_id(sid)
             old = registry.async_get_issue(DOMAIN, issue_id)
-            if now - latest >= timedelta(hours=24):
+            if stale:
                 if old is None:
-                    state = coordinator.hass.states.get(sid)
                     name = state.name if state is not None else sid
-                    link = f'/config/entities/entity/{sid}' if '.' in sid else '/config/energy'
+                    link = f'/config/entities/entity/{sid}' if not external else '/config/energy'
                     ir.async_create_issue(coordinator.hass, DOMAIN, issue_id,
                         is_fixable=False, is_persistent=False, severity=ir.IssueSeverity.WARNING,
-                        translation_key='energy_stale_source', translation_placeholders={
-                            'name': name, 'since': latest.date().isoformat(), 'link': link})
-            elif old is not None:
+                        translation_key='energy_stale_external' if external else 'energy_stale_source',
+                        translation_placeholders={'name': name, 'since': since.date().isoformat(), 'link': link})
+            elif old is not None and basis != 'unavailable_state':
                 ir.async_delete_issue(coordinator.hass, DOMAIN, issue_id)
         coordinator.stale_sources = status
         coordinator._energy_repairs_active = True
