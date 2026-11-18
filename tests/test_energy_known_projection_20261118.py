@@ -34,13 +34,49 @@ class KnownProjectionTest(unittest.TestCase):
             'projection': projection, 'consumers': [], 'membership': {}})
         self.assertEqual(86, report['totals']['import_kwh'])
         self.assertEqual(86, report['totals']['usage_cost'])
-        self.assertEqual(86.08, report['totals']['total_with_fixed'])
+        self.assertAlmostEqual(86 + 1/12, report['totals']['total_with_fixed'])
         self.assertIsNone(report['unmeasured']['kwh'])
         self.assertEqual(86, report['zones'][0]['kwh'])
         for lang in ('pl', 'en'):
             out = mail.render(report, language=lang, timezone_name='UTC', hour_cycle='24')
             self.assertIn('86', out['text'])
             self.assertNotIn(' ·  · ', out['text'])
+
+    def test_comparison_uses_paired_source_mask_and_matching_chart(self):
+        data = sample(mode='partial')
+        start = data['period']['start']
+        from datetime import datetime
+        stamp = int(datetime.fromisoformat(start).timestamp() * 1000)
+        paired = {'status': 'ready', 'comparison_scope': 'common_measurements',
+            'current_kwh': 24, 'baseline_kwh': 12, 'coverage': {'common_current': .5},
+            'chart': {'markers': [{'status': 'ready', 'current_from': stamp, 'baseline_kwh': '0.5'}]}}
+        data['comparisons'] = [{'key': 'previous_day', 'paired': paired}]
+        result = model.build_report(data)
+        self.assertEqual(100, result['comparisons'][0]['delta_pct'])
+        self.assertEqual(.5, result['hourly'][0]['prev_kwh'])
+        self.assertIsNone(result['hourly'][1]['prev_kwh'])
+
+    def test_device_purchase_price_is_not_a_grid_residual(self):
+        data = sample(mode='full')
+        data['consumer_domain'] = 'site_consumption'
+        for row in data['projection']['hours']:
+            row['devices']['a']['costs'] = {'usage_cost': '.5'}
+        result = model.build_report(data)
+        self.assertEqual('purchase_price_excluding_pv', result['device_cost_basis'])
+        self.assertEqual(12, next(row for row in result['devices'] if row['id'] == 'a')['cost'])
+        self.assertIsNone(result['unmeasured']['kwh'])
+        for lang in ('pl', 'en'):
+            out = mail.render(result, language=lang, timezone_name='UTC', hour_cycle='24')
+            self.assertIn('bez uwzględnienia PV' if lang == 'pl' else 'excluding solar', out['text'])
+
+    def test_report_cutoff_retains_a_recorder_cycle(self):
+        from tests.test_energy_analysis_service import service
+        from importlib import import_module
+        inputs = import_module(service.__package__ + '.energy_inputs')
+        self.assertEqual('2026-01-01T11:00:00+00:00',
+            inputs.report_clock(datetime(2026, 1, 1, 11, 5, tzinfo=timezone.utc), 'UTC')['cutoff'])
+        self.assertEqual('2026-01-01T00:00:00+00:00',
+            inputs.report_clock(datetime(2026, 1, 1, 0, 2, tzinfo=timezone.utc), 'UTC')['cutoff'])
 
     def test_no_observations_and_measured_zero_are_distinct(self):
         start, end = '2026-01-01T00:00Z', '2026-01-01T02:00Z'
