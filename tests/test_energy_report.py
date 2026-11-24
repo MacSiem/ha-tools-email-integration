@@ -343,6 +343,19 @@ class EnergyReportTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.render(date_language=invalid)
 
+    def test_matched_comparison_summary_does_not_depend_on_chart_reconciliation(self):
+        pair = self.snapshot['comparisons']['previous']
+        pair.update(status='ready', reason=None, comparison_scope='common_measurements', delta_kwh='3', percent=12)
+        pair['coverage']['common_source_seconds'] = 3600
+        pair['chart'] = {'reconciles_comparison_energy': False}
+        output = self.render()
+        for surface in ('text', 'html'):
+            self.assertIn('matched readings', output[surface])
+        pair['coverage']['common_source_seconds'] = 0
+        output = self.render()
+        for surface in ('text', 'html'):
+            self.assertNotIn('matched readings', output[surface])
+
     def test_only_actual_comparison_and_scope_are_presented(self):
         pair = self.snapshot['comparisons'].pop('previous')
         pair['comparison_scope'] = 'common_measurements'

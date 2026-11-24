@@ -61,9 +61,12 @@ class Mail136Test(unittest.TestCase):
         comparison.update(status='partial', reason='missing_measurement')
         comparison['coverage'].update(current=0.5, baseline=0.8)
         for output in (self.section(self.render(), 'comparisons').text(), self.render()['text']):
-            self.assertIn('50%', output)
-            self.assertIn('80%', output)
-            self.assertIn('Missing measurement', output)
+            self.assertIn('No comparable percentage', output)
+            self.assertIn('Incomplete data', output)
+            self.assertIn('250.0 kWh', output)
+            self.assertIn('200.0 kWh', output)
+            self.assertIn('49.20 EUR', output)
+            self.assertNotIn('50% / 80%', output)
 
     def test_new_style_spec_formats_readable_numbers_without_changing_csv(self):
         self.s['totals'].update(kwh='12345.6789', total_cost='98765.4321')
@@ -98,7 +101,7 @@ class Mail136Test(unittest.TestCase):
     def test_mail136_kpi_rejects_partial_masked_and_unrelated_comparisons(self):
         self.s = json.loads((fixture.ROOT / 'tests/fixtures/energy-report-schema2-v53.json').read_text())
         base = copy.deepcopy(self.s['comparisons']['previous'])
-        for change in ({'status': 'partial'}, {'comparison_scope': 'common_measurements'},
+        for change in ({'status': 'partial'},
                        {'current_kwh': '239'}, {'full_current_kwh': '239'},
                        {'coverage': {'current': 1, 'baseline': 0.9}}):
             with self.subTest(change=change):

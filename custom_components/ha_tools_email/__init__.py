@@ -191,6 +191,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up HA Tools Email from a config entry."""
     await _async_ensure_setup(hass)
+    from .energy_repairs import clear_legacy_issues
+    clear_legacy_issues(hass)
     from .energy import EnergySnapshotCoordinator
     from .log_history import LogHistory
     from .email_native import EmailNativeCoordinator

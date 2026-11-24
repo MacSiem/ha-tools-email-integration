@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.4.9 (2026-11-24)
+
+- Show missing Energy readings and configuration facts in reports without creating Repairs; remove the integration’s retired Energy Repairs on setup. Preserve comparisons over valid common measurements.
+
 ## 2.4.8 (2026-11-18)
 
 - Keep monthly previews and comparisons available when meters begin reporting partway through a period.

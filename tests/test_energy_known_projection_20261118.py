@@ -61,7 +61,9 @@ class KnownProjectionTest(unittest.TestCase):
         report['coverage'].update(measured_sources=2, expected_sources=2)
         for lang in ('pl', 'en'):
             result = mail.render(report, language=lang, timezone_name='UTC', hour_cycle='24')
-            self.assertIn('niepełne pokrycie' if lang == 'pl' else 'partial coverage', result['subject'])
+            self.assertNotIn('niepełne pokrycie' if lang == 'pl' else 'partial coverage', result['subject'])
+            self.assertIn('36', result['subject'])
+            self.assertIn('Brakujące źródła' if lang == 'pl' else 'Missing sources', result['text'])
             self.assertNotIn('bez 0' if lang == 'pl' else '0 missing', result['subject'])
 
     def test_device_purchase_price_is_not_a_grid_residual(self):

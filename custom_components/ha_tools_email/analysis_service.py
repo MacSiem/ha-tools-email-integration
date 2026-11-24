@@ -655,7 +655,12 @@ class EnergyAnalysisService:
                         if context.get('native_access') else None)
                     model = await async_collect_inputs(self,configuration,period,context,initial,
                         membership,state['book'],guard,native=native)
-                    result = {'schema':2,'period':deepcopy(period),'context':deepcopy(context),'report_model':model}
+                    grid_ids = {row['entity_id'] for row in configuration['grid_sensors']}
+                    device_ids = {row['stat_consumption'] for row in configuration['consumers']}
+                    facts = {'grid_is_devices': bool(grid_ids) and grid_ids == device_ids, 'grid_missing': configuration['grid_import_absence_confirmed']}
+                    model['configuration_facts'] = deepcopy(facts)
+                    result = {'schema':2,'period':deepcopy(period),'context':deepcopy(context),
+                              'configuration_facts': facts, 'report_model':model}
                     result['snapshot_id'] = _digest(result)
                     self._assert_current(context)
                     self._cache = (key,monotonic(),deepcopy(result))
@@ -774,6 +779,9 @@ class EnergyAnalysisService:
                         cursor = stop
                     result = await self._cpu(partial(_finish_native, result, cost, native,
                         deepcopy(self._native_states), self._clock()), guard)
+                grid_ids = {row['entity_id'] for row in configuration['grid_sensors']}
+                device_ids = {row['stat_consumption'] for row in configuration['consumers']}
+                result['configuration_facts'] = {'grid_is_devices': bool(grid_ids) and grid_ids == device_ids, 'grid_missing': configuration['grid_import_absence_confirmed']}
                 if _report_model:
                     from .energy_inputs import async_collect_inputs
                     # The collector receives calendar model kind while the guard
@@ -783,15 +791,11 @@ class EnergyAnalysisService:
                     result['report_model'] = await async_collect_inputs(self, configuration,
                         model_period, context, accumulator, membership, state['book'], guard,
                         native=cost if context.get('native_access') else None)
+                    result['report_model']['configuration_facts'] = deepcopy(result['configuration_facts'])
                     result['context'] = deepcopy(context)
-                    # Include the opt-in flag and detached model in the final hash;
-                    # preserve the legacy period for all validation consumers.
-                    result['snapshot_id'] = _digest({k: v for k, v in result.items() if k != 'snapshot_id'})
-                # No await between this final check, Repair publication, caching and return.
+                result['snapshot_id'] = _digest({k: v for k, v in result.items() if k != 'snapshot_id'})
+                # No await between this final check, caching and return.
                 self._assert_current(context)
-                if self._energy_repairs_realtime:
-                    from .energy_repairs import publish_analysis
-                    publish_analysis(self, result)
                 self._cache = (key, monotonic(), deepcopy(result))
                 return deepcopy(result)
         except BaseException:
@@ -981,14 +985,15 @@ class EnergyAnalysisService:
             raise ValueError('no_completed_interval')
         # The legacy exporter walks arbitrary new fields. Do not add the model
         # as a new CSV section; retain identity and every legacy fact unchanged.
-        export_view = {key: value for key, value in snapshot.items() if key != 'report_model'}
+        export_view = {key: value for key, value in snapshot.items() if key not in ('report_model', 'configuration_facts')}
         from .energy_stale_mail import stale_mail_line
         statuses = getattr(self.coordinator, 'stale_sources', None)
         if statuses is None and isinstance(getattr(self.coordinator, 'data', None), dict):
             statuses = self.coordinator.data.get('stale_sources')
         line = stale_mail_line(snapshot, statuses, language=options.get('language'),
                                timezone_name=options.get('timezone_name'), now=datetime.now(timezone.utc))
-        render_options = {**options, **({'stale_line': line} if line else {})}
+        render_options = {**options, **({'stale_line': line} if line else {}),
+                          'configuration_facts': snapshot.get('configuration_facts', {})}
         report = await self.coordinator._async_run_cpu(partial(render_energy_analysis, export_view, **render_options))
         if 'report_model' in snapshot:
             if not await self.async_validate_result(snapshot, actor):

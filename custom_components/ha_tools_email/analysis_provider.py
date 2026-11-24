@@ -40,6 +40,24 @@ def _consumer_display_names(devices):
     return view
 
 
+def _grid_import_absence_confirmed(preferences):
+    """Malformed Energy preferences cannot establish an absent grid import."""
+    for row in preferences.get('energy_sources', []):
+        if not isinstance(row, dict) or row.get('type') not in ('grid', 'solar', 'battery', 'gas', 'water'):
+            return False
+        if row['type'] != 'grid':
+            continue
+        flat = row.get('stat_energy_from')
+        if flat is not None and (not isinstance(flat, str) or not flat.strip()):
+            return False
+        flows = row.get('flow_from', [])
+        if not isinstance(flows, list) or any(not isinstance(flow, dict)
+                or not isinstance(flow.get('stat_energy_from'), str)
+                or not flow['stat_energy_from'].strip() for flow in flows):
+            return False
+    return True
+
+
 def capture_energy_configuration(preferences, *, currency=None, cost_sensors=None):
     """Detach only operational fields from actual HA Energy preferences.
 
@@ -97,7 +115,8 @@ def capture_energy_configuration(preferences, *, currency=None, cost_sensors=Non
     result = {'grid_sensors': [{'entity_id': sid, 'name': sid} for sid in ids], 'consumers': consumers,
               'consumer_domain': domain, 'domain_provenance': ('ha_energy_grid_only_configuration'
                   if domain == 'grid_import' else 'ha_energy_mixed_or_unproven_configuration'),
-              'electricity_configuration': projection}
+              'electricity_configuration': projection,
+              'grid_import_absence_confirmed': not ids and _grid_import_absence_confirmed(preferences)}
     from .native_energy_pricing import capture_native_pricing
     native = capture_native_pricing(preferences, ids, currency)
     # This is Core's explicit energy/info mapping; never infer an entity suffix.

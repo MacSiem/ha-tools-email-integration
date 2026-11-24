@@ -29,6 +29,15 @@ def prefs():
 
 
 class AnalysisProviderTest(unittest.TestCase):
+    def test_absent_import_requires_well_formed_configuration(self):
+        valid = {'energy_sources': [], 'device_consumption': []}
+        malformed = {'energy_sources': [{'type': 'grid', 'flow_from': [{}]}], 'device_consumption': []}
+        a = provider.capture_energy_configuration(valid)
+        b = provider.capture_energy_configuration(malformed)
+        self.assertTrue(a['grid_import_absence_confirmed'])
+        self.assertFalse(b['grid_import_absence_confirmed'])
+        self.assertNotEqual(a['source_signature'], b['source_signature'])
+
     def test_grid_imports_are_not_consumers_and_both_ha_schema_generations_work(self):
         source = prefs(); source['energy_sources'].append({'type': 'grid', 'flow_from': [
             {'stat_energy_from': 'utility:external'}, {'stat_energy_from': 'sensor.grid'}]})

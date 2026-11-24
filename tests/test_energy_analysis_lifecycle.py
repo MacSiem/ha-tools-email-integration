@@ -124,7 +124,9 @@ class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
         functions = [node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)
                      and node.name in ('async_setup_entry', 'async_unload_entry')]
         exec(compile(ast.Module(body=functions, type_ignores=[]), str(ROOT / '__init__.py'), 'exec'), namespace)
-        mods = {}
+        repairs = types.ModuleType('lifecycle_fixture.energy_repairs')
+        repairs.clear_legacy_issues = lambda hass: events.append(('legacy_energy_issues_cleared', {}))
+        mods = {repairs.__name__: repairs}
         for filename, name, cls in [('log_history', 'LogHistory', LogHistory),
                                     ('energy', 'EnergySnapshotCoordinator', Coordinator),
                                     ('registry_adapter', 'RegistryMembership', Registry),
@@ -147,7 +149,7 @@ class AnalysisLifecycleTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(association.running)
             self.assertEqual(3, len(association._unsubscribers))
             self.assertTrue(all(made['platforms'].values()))
-            self.assertEqual([('scheduler_reloaded', {})], events)
+            self.assertEqual([('legacy_energy_issues_cleared', {}), ('scheduler_reloaded', {})], events)
             events.clear()
             registry.on_change(7)
             self.assertEqual([('ha_tools_email_energy_analysis_updated', {'registry_revision': 7})], events)
