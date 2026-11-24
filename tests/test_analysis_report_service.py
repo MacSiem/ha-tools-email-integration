@@ -42,7 +42,8 @@ class AnalysisReportServiceTest(unittest.IsolatedAsyncioTestCase):
             result=await h.subject.async_get_report('day','user',language='pl',timezone_name='Europe/Warsaw',hour_cycle='24')
             self.assertEqual('report_read',result['context']['access_purpose'])
             self.assertEqual(calls[0][0]['snapshot_id'],result['snapshot_id'])
-            self.assertEqual({'language':'pl','timezone_name':'Europe/Warsaw','hour_cycle':'24'},calls[0][1])
+            self.assertEqual({'language':'pl','timezone_name':'Europe/Warsaw','hour_cycle':'24',
+                              'configuration_facts': {'grid_is_devices': False, 'grid_missing': False}}, calls[0][1])
             self.assertEqual({'language':'pl','timezone':'Europe/Warsaw','hour_cycle':'24'},result['display'])
             self.assertTrue(await h.subject.async_validate_result(result,'user'))
             self.assertTrue(h.subject.context_is_current(result))
