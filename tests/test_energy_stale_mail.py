@@ -30,8 +30,8 @@ class StaleMailTest(unittest.TestCase):
             self.assertEqual(expected,line)
             out=mail.render(self.report,language=lang,timezone_name='UTC',hour_cycle='24',stale_line=line)
             self.assertEqual(1,out['text'].count(line))
-            self.assertLess(out['text'].index(line),out['text'].index(missing))
-            self.assertLess(out['html'].index('data-role="stale-source"'),out['html'].index(missing))
+            self.assertLess(out['text'].index(missing),out['text'].index(line))
+            self.assertEqual(1, out['html'].count('data-section="diagnostics"'))
             self.assertIn('&lt;script&gt;B&lt;/script&gt;',out['html'])
             self.assertNotIn('<script>B</script>',out['html'])
 
@@ -82,7 +82,7 @@ class StaleMailTest(unittest.TestCase):
             alert=REPORT.render_energy_analysis(snapshot,stale_line=line,**opts)
             self.assertEqual(plain['csv'],alert['csv'])
             self.assertEqual(1,alert['text'].count(line))
-            self.assertIn('data-role="stale-source"',alert['html'])
+            self.assertIn('data-section="diagnostics"',alert['html'])
             self.assertIn('&lt;script&gt;B&lt;/script&gt;',alert['html'])
 
 class BridgeTest(unittest.IsolatedAsyncioTestCase):

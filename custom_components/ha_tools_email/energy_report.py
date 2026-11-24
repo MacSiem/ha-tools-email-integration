@@ -147,7 +147,7 @@ def _finite_decimal(value):
         return False
 
 
-def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, date_language=None, stale_line=None, _raw=False):
+def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, date_language=None, stale_line=None, configuration_facts=None, _raw=False):
     """Return snapshot_id/html/text/csv without IO, mutation, activation or pricing.
 
     language is exactly pl/en; hour_cycle is exactly the string '12'/'24'.
@@ -337,9 +337,29 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                   '<title>' + escape(heading) + '</title><style>' + _CSS + '</style></head><body>',
                   '<table class="report" role="presentation" width="100%"><tr><td>',
                   '<table role="presentation"><tr><th class="header">' + escape(heading) + '</th></tr></table>']
+    diagnostics = []
+    if not original.get('coverage', {}).get('complete') and original.get('known_totals'):
+        coverage = original.get('coverage') or {}
+        measured, expected = coverage.get('measured_sources'), coverage.get('expected_sources')
+        missing = coverage.get('missing_sources') or []
+        if type(measured) is int and type(expected) is int and measured < expected:
+            scope = (f'Zmierzone {measured} z {expected} źródeł' if pl else f'Measured {measured} of {expected} sources')
+        else:
+            scope = 'Niepełne pomiary w tym okresie' if pl else 'Incomplete measurements in this period'
+        if missing:
+            scope += (' · brak: ' if pl else ' · missing: ') + ', '.join(str(sid) for sid in missing)
+        diagnostics.append(scope)
     if isinstance(stale_line, str) and stale_line:
-        text_parts.append(stale_line)
-        html_parts.append('<p data-role="stale-source"><strong>' + escape(stale_line) + '</strong></p>')
+        diagnostics.append(stale_line)
+    if isinstance(configuration_facts, Mapping) and configuration_facts.get('grid_missing') is True:
+        diagnostics.append('Brak skonfigurowanego źródła poboru z sieci.' if pl else 'No grid import source is configured.')
+    if any(reason in ('consumption_exceeds_grid_import', 'children_exceed_parent') for reason in (original.get('groups', {}).get('issues') or [])):
+        diagnostics.append('Pomiary urządzeń nakładają się lub przekraczają pobór z sieci.' if pl else 'Device measurements overlap or exceed grid import.')
+    if isinstance(configuration_facts, Mapping) and configuration_facts.get('grid_is_devices') is True:
+        diagnostics.append('Źródła sieci są tymi samymi licznikami co urządzenia.' if pl else 'Grid sources are the same meters as the devices.')
+    if diagnostics:
+        text_parts.extend(diagnostics)
+        html_parts.append('<div data-section="diagnostics" class="note">' + '<br>'.join(escape(line) for line in diagnostics) + '</div>')
 
     def tr(pl_text, en_text):
         return pl_text if pl else en_text
@@ -696,16 +716,6 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
                 return (brief + '\n' + comparison_names[kind]) if compact else result
         return tr('Brak porównywalnego pełnego okresu bazowego', 'No comparable full-period baseline')
 
-    if not original.get('coverage', {}).get('complete') and original.get('known_totals'):
-        coverage = original.get('coverage') or {}
-        measured, expected = coverage.get('measured_sources'), coverage.get('expected_sources')
-        missing = coverage.get('missing_sources') or []
-        scope = (f'Zmierzone {measured} z {expected} źródeł' if pl else f'Measured {measured} of {expected} sources')
-        if missing:
-            scope += (' · brak: ' if pl else ' · missing: ') + ', '.join(str(sid) for sid in missing)
-        text_parts.append(scope)
-        html_parts.append('<p class="note">' + escape(scope) + '</p>')
-
     kpis = []
     for metric, caption in (('kwh', tr('Zmierzona energia', 'Measured energy')),
                             ('total_cost', tr('Koszt okresu', 'Period cost')),
@@ -1052,11 +1062,6 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
             return compact_number(ratio * 100, unknown, 0) + '%' if ratio is not None and ratio <= 1 else unknown
         baseline_coverage = [number(value) for value in covered[1:]]
         baseline_minimum = min(baseline_coverage) if baseline_coverage and None not in baseline_coverage else None
-        if not comparable:
-            change += ' · ' + tr('Pokrycie bieżące/bazowe: ', 'Current/baseline coverage: ')
-            change += coverage_percent(coverage.get('current')) + ' / ' + coverage_percent(baseline_minimum)
-            if comparison.get('reason') is not None:
-                change += ' · ' + exact((*cp, 'reason'))
         text_parts.append(change)
         html_parts.append('<tr><td colspan="3" class="note">' + escape(change + ' · ' + scope) + '</td></tr>')
         costs = comparison.get('costs') or {}

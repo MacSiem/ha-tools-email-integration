@@ -174,3 +174,51 @@ class PartialSources(unittest.TestCase):
             self.assertEqual(result['coverage']['expected_source_hours'],2*n)
             self.assertEqual(result['coverage']['measured_source_hours'],n)
             self.assertEqual(result['coverage']['status'],'partial')
+
+class DiagnosticMailTests(unittest.TestCase):
+    def test_diagnostics_do_not_change_metrics_or_valid_common_pairs(self):
+        for mode in ('full', 'partial', 'zero', 'none'):
+            base = model.build_report(sample(mode=mode))
+            base['comparisons'] = [{'key': 'previous_day', 'coverage_ok': True,
+                'comparison_scope': 'common_measurements', 'delta_kwh': 2,
+                'delta_pct': 20, 'compared_current_kwh': 12, 'compared_baseline_kwh': 10,
+                'kwh': 10}]
+            diagnostic = copy.deepcopy(base)
+            diagnostic['configuration_facts'] = {'grid_is_devices': True, 'grid_missing': False}
+            for lang in ('pl', 'en'):
+                options = dict(language=lang, timezone_name='UTC', hour_cycle='24')
+                before, after = mail.render(base, **options), mail.render(diagnostic, **options)
+                self.assertEqual(before['subject'], after['subject'])
+                self.assertIn('+20', after['text'])
+                self.assertEqual(1, after['html'].count('data-section="diagnostics"'))
+                self.assertIn('tymi samymi licznikami' if lang == 'pl' else 'same meters', after['text'])
+                self.assertEqual(base['totals'], diagnostic['totals'])
+                self.assertEqual(base['comparisons'], diagnostic['comparisons'])
+            diagnostic['comparisons'][0].update(coverage_ok=False, comparison_scope=None,
+                delta_kwh=None, delta_pct=None, compared_current_kwh=None, compared_baseline_kwh=None)
+            out = mail.render(diagnostic, language='en', timezone_name='UTC', hour_cycle='24')
+            self.assertNotIn('+20%', out['text'])
+
+    def test_time_gap_with_all_sources_never_claims_complete_source_coverage(self):
+        report = model.build_report(sample(mode='partial'))
+        report['coverage'].update(measured_sources=44, expected_sources=44)
+        for lang in ('pl', 'en'):
+            rendered = mail.render(report, language=lang, timezone_name='UTC', hour_cycle='24')
+            for key in ('html', 'text'):
+                self.assertNotIn('44 of 44', rendered[key])
+                self.assertNotIn('44 z 44', rendered[key])
+            self.assertEqual(1, rendered['html'].count('data-section="diagnostics"'))
+
+    def test_no_grid_overlap_and_stale_fallback_are_localized_once(self):
+        report = model.build_report(sample())
+        report['configuration_facts'] = {'grid_missing': True, 'grid_is_devices': False}
+        report['issues'].append({'code': 'double_counting'})
+        for lang, no_grid, overlap in [('pl', 'Brak skonfigurowanego', 'nakładają się'),
+                                       ('en', 'No grid import source', 'overlap')]:
+            stale = 'Renamed meter — no updates since Nov 1 (17 days)'
+            out = mail.render(report, language=lang, timezone_name='UTC', hour_cycle='24', stale_line=stale)
+            for fmt in ('text', 'html'):
+                self.assertIn(no_grid, out[fmt])
+                self.assertIn(overlap, out[fmt])
+                self.assertEqual(1, out[fmt].count(stale))
+            self.assertEqual(1, out['html'].count('data-section="diagnostics"'))

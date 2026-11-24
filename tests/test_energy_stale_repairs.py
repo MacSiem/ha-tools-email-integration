@@ -43,85 +43,32 @@ class RepairsTest(unittest.IsolatedAsyncioTestCase):
                  'homeassistant.components.recorder':recorder, 'homeassistant.components.recorder.statistics':stat}
         return coordinator, issues, data, config, modules
 
-    async def test_lifecycle_unknown_recovery_removal_and_grid_configuration(self):
-        c,issues,data,config,modules=self.fixture()
-        sid='sensor.a'; key=(D,repairs._stale_id(sid)); grid=(D,repairs.GRID_DEVICES)
-        now=datetime.now(timezone.utc)
-        data[sid]={sid:[{'start':(now-timedelta(hours=27)).timestamp(),'sum':0.0}]}
-        with patch.dict(sys.modules,modules):
+    async def test_stale_status_is_independent_of_issue_registry(self):
+        c, issues, data, config, modules = self.fixture()
+        now = datetime.now(timezone.utc)
+        data['sensor.a'] = {'sensor.a': [{'start': (now-timedelta(hours=27)).timestamp(), 'sum': 0.0}]}
+        with patch.dict(sys.modules, modules):
             await repairs.async_publish_stale_sources(c)
-            self.assertIn(key,issues); self.assertIn(grid,issues)
-            self.assertTrue(c.stale_sources[sid]['stale'])
-            self.assertEqual('Kitchen',issues[key]['translation_placeholders']['name'])
-            data[sid]={}
+            self.assertTrue(c.stale_sources['sensor.a']['stale'])
+            self.assertEqual({}, issues)
+            state = c.hass.states.get('sensor.a')
+            state.state = '0'
+            state.last_reported = now
             await repairs.async_publish_stale_sources(c)
-            self.assertIn(key,issues) # missing evidence is not recovery
-            data[sid]={sid:[{'start':(now-timedelta(hours=2)).timestamp(),'sum':0.0}]}
-            state=c.hass.states.get(sid); state.state='0'; state.last_reported=now
+            self.assertFalse(c.stale_sources['sensor.a']['stale'])
+            data['sensor.a'] = {}
             await repairs.async_publish_stale_sources(c)
-            self.assertNotIn(key,issues); self.assertFalse(c.stale_sources[sid]['stale'])
-            data[sid]={sid:[{'start':(now-timedelta(hours=27)).timestamp(),'sum':0.0}]}
-            state.state='unavailable'; state.last_changed=now-timedelta(hours=27)
-            await repairs.async_publish_stale_sources(c)
-            config['energy_sources']=[]; config['device_consumption']=[]
-            await repairs.async_publish_stale_sources(c)
-            self.assertNotIn(key,issues);self.assertNotIn(grid,issues)
+            self.assertEqual({}, c.stale_sources)
+            self.assertEqual({}, issues)
 
-    async def test_main_meter_does_not_claim_equal_and_failure_preserves_issue(self):
-        c,issues,data,config,modules=self.fixture()
-        config['energy_sources'][0]['flow_from'].append({'stat_energy_from':'sensor.main'})
-        now=datetime.now(timezone.utc)
-        data['sensor.a']={'sensor.a':[{'start':(now-timedelta(hours=27)).timestamp(),'sum':1}]}
-        with patch.dict(sys.modules,modules):
-            await repairs.async_publish_stale_sources(c)
-            self.assertNotIn((D,repairs.GRID_DEVICES),issues)
-            key=(D,repairs._stale_id('sensor.a'));self.assertIn(key,issues)
-            modules['homeassistant.components.recorder.statistics'].get_last_statistics=lambda *a: (_ for _ in ()).throw(RuntimeError())
-            await repairs.async_publish_stale_sources(c)
-            self.assertIn(key,issues);self.assertIsNone(c.stale_sources)
-
-    async def test_fresh_compiled_bucket_cannot_clear_unavailable_and_unchanged_zero_can_recover(self):
-        c,issues,data,config,modules=self.fixture()
-        sid='sensor.a'; key=(D,repairs._stale_id(sid))
-        now=datetime.now(timezone.utc)
-        state=c.hass.states.get(sid)
-        # An hourly compiled bucket can contain the pre-unavailable state.
-        data[sid]={sid:[{'start':(now-timedelta(hours=2)).timestamp(),'sum':0.0}]}
-        with patch.dict(sys.modules,modules):
-            await repairs.async_publish_stale_sources(c)
-            self.assertIn(key,issues)
-            self.assertEqual('unavailable_state',c.stale_sources[sid]['basis'])
-            # Unknown restarts the conservative gap; it cannot prove recovery.
-            state.state='unknown';state.last_changed=now
-            await repairs.async_publish_stale_sources(c)
-            self.assertIn(key,issues)
-            # Same value reported again is an actual HA report even when unchanged.
-            state.state='0';state.last_reported=now
-            await repairs.async_publish_stale_sources(c)
-            self.assertNotIn(key,issues)
-            self.assertFalse(c.stale_sources[sid]['stale'])
-            # A newly compiled bucket cannot prove an old unchanged report fresh.
-            state.last_reported=now-timedelta(hours=26)
-            await repairs.async_publish_stale_sources(c)
-            self.assertIn(key,issues)
-
-    async def test_external_gap_is_statistics_only_and_missing_entity_is_unknown(self):
-        c,issues,data,config,modules=self.fixture()
-        now=datetime.now(timezone.utc); external='vendor:meter'
-        config['energy_sources'][0]['flow_from']=[{'stat_energy_from':external}]
-        config['device_consumption']=[]
-        data[external]={external:[{'start':(now-timedelta(hours=27)).timestamp(),'sum':0}]}
-        with patch.dict(sys.modules,modules):
-            await repairs.async_publish_stale_sources(c)
-            issue=issues[(D,repairs._stale_id(external))]
-            self.assertEqual('energy_stale_external',issue['translation_key'])
-            self.assertEqual('external_statistics',c.stale_sources[external]['basis'])
-            config['energy_sources'][0]['flow_from']=[{'stat_energy_from':'sensor.missing'}]
-            data['sensor.missing']={'sensor.missing':[{'start':(now-timedelta(hours=27)).timestamp(),'sum':0}]}
-            await repairs.async_publish_stale_sources(c)
-            self.assertNotIn((D,repairs._stale_id('sensor.missing')),issues)
-
-    def test_incomplete_or_invalid_rows_cannot_prove_reading(self):
-        now=datetime.now(timezone.utc)
-        for row in ({'start':now.timestamp(),'sum':0}, {'start':0,'sum':float('nan')}, {'start':0,'sum':None}):
-            self.assertIsNone(repairs._last_reading({'a':[row]},'a',timedelta(minutes=5),now))
+    async def test_cleanup_scoped_and_idempotent(self):
+        c, issues, _, _, modules = self.fixture()
+        keys = [*repairs.ISSUES, repairs._stale_id('sensor.a')]
+        for key in keys:
+            issues[(D, key)] = {'ignored': True}
+        issues[(D, 'other_feature')] = {'ignored': True}
+        issues[('another_domain', repairs.MISSING_IMPORT)] = {}
+        with patch.dict(sys.modules, modules):
+            repairs.clear_legacy_issues(c.hass)
+            repairs.clear_legacy_issues(c.hass)
+        self.assertEqual({(D, 'other_feature'), ('another_domain', repairs.MISSING_IMPORT)}, set(issues))

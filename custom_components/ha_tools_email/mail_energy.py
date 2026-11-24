@@ -210,7 +210,7 @@ class _View:
 
     def coverage_label(self):
         sources, expected_sources = self.coverage.get('measured_sources'), self.coverage.get('expected_sources')
-        if type(sources) is int and type(expected_sources) is int:
+        if type(sources) is int and type(expected_sources) is int and sources < expected_sources:
             unit = fmt.plural(expected_sources, 'źródła', 'źródeł', 'źródeł', language='pl')
             return (f'Zmierzone {sources} z {expected_sources} {unit}' if self.lang == 'pl'
                     else f'Measured {sources} of {expected_sources} sources')
@@ -390,7 +390,7 @@ class _View:
             current, previous = (p.get('recorded_kwh') if _numeric(p.get('recorded_kwh')) else p.get('kwh')), p.get('prev_kwh')
             b = min(H, max(0, round(H * current / maximum))) if _numeric(current) else 0
             marker = min(H - 2, max(0, round(H * previous / maximum) - 1)) if _numeric(previous) else None
-            pixels = ['grid' if not _numeric(current) else None] * H
+            pixels = [None] * H  # A missing reading is a gap, never a filled column.
             if daily and _items(p.get('zones')) and p.get('kwh') == current:
                 cursor = H
                 for z in _items(p.get('zones')):
@@ -634,14 +634,14 @@ class _View:
         return section('<table role="presentation" width="100%">' + ''.join(rows) + '</table><table role="presentation" width="100%" style="margin-top:8px">' + ''.join(rate_rows) + '</table>' + extras)
 
 
-def render(model, *, language, timezone_name, hour_cycle, date_language=None, external_url=None, stale_line=None):
+def render(model, *, language, timezone_name, hour_cycle, date_language=None, external_url=None, stale_line=None, configuration_facts=None):
     """Return subject/preheader/html/text/notify; render only backend-provided facts."""
     if not isinstance(model, dict) or model.get('schema') != 'ha_tools.energy_report/1':
         raise ValueError('Expected ha_tools.energy_report/1')
     v = _View(model, language, timezone_name, hour_cycle, date_language)
     title = f'{v.tr("energy")} — {v.period_label()}'
     report_label = _REPORTS.get(v.kind, _REPORTS['day'])[v.lang == 'en']
-    subtitle = f'{v.clock(v.start)}–{v.clock(v.end, end=True)} · {v.tr("tariff")} {v.tariff.get("name") or v.tr("no_data")} · {v.coverage_label()}'
+    subtitle = f'{v.clock(v.start)}–{v.clock(v.end, end=True)} · {v.tr("tariff")} {v.tariff.get("name") or v.tr("no_data")}'
     available = (v.totals.get('recorded_import_kwh') if _numeric(v.totals.get('recorded_import_kwh')) else v.totals.get('import_kwh')) if not v.complete else v.totals.get('import_kwh')
     available_cost = v.totals.get('recorded_usage_cost') if not v.complete else v.totals.get('usage_cost')
     measured_devices = sorted((item for item in _items(model.get('devices')) if _numeric(item.get('kwh'))), key=lambda item: (-item['kwh'], str(item.get('id') or '')))
@@ -656,7 +656,7 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
         summary += f' · {v.money(available_cost)}'
     first = v.comparisons[0] if v.comparisons else {}
     change = v.change(first)
-    comparison = f'{change} vs {v.comparison_label(first)}' if change else v.coverage_label() if not v.complete else ''
+    comparison = f'{change} vs {v.comparison_label(first)}' if change else ''
     cheap = next((z for z in v.zones if z.get('classification') == 'cheap' or
         'classification' not in z and z.get('id') == 'cheap'), None)
     if cheap is None:
@@ -672,10 +672,6 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
     top = next((i for i in rankings if not v.is_unmeasured(i) and i.get('color') != 'other'), None)
     if top:
         pre_parts.append(f'{v.tr("top")}: {v.item_name(top)} {v.energy(top.get("kwh"), "tile")}')
-    if not v.complete and v.coverage_label() not in pre_parts:
-        pre_parts.append(v.coverage_label())
-    if v.double:
-        pre_parts.append(v.tr('double'))
     preheader = ' · '.join(p for p in pre_parts if p)
     device_gaps = _items(v.coverage.get('missing_devices'))
     subject_prefix = (('niepełne dane urządzeń' if v.lang == 'pl' else 'incomplete device readings') if v.complete and device_gaps else '') or ((v.tr('no_data') if v.coverage.get('status') == 'no_data' or v.coverage.get('status') is None and not _numeric(available) else v.tr('partial')) if not v.complete else '')
@@ -704,25 +700,42 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
         recorded_note = (('Zarejestrowano ze źródeł: ' if v.lang == 'pl' else 'Recorded from sources: ') +
             v.energy(recorded) + ('. Częściowa suma, nie pełny bilans.' if v.lang == 'pl' else '. Partial subtotal, not a complete balance.'))
         v.lines.append(recorded_note)
-    if isinstance(stale_line, str) and stale_line:
-        v.lines.append(stale_line)
     missing_lines = []
+    missing_ids = set()
     for source in _items(v.coverage.get('missing_sources')):
+        missing_ids.add(source.get('id'))
+        name = str(source.get('name') or source.get('id') or '')
         ranges = ', '.join(v.missing_range(r) for r in _items(source.get('ranges')))
-        missing_lines.append(str(source.get('name') or source.get('id') or '') + ': ' + ranges)
-    missing_note = (('Brakujące źródła: ' if v.lang == 'pl' else 'Missing sources: ') + '; '.join(missing_lines)) if missing_lines else ''
-    if missing_note:
-        v.lines.append(missing_note)
-    missing_ids = {source.get('id') for source in _items(v.coverage.get('missing_sources'))}
-    device_lines = [str(source.get('name') or source.get('id') or '') + ': ' + ', '.join(v.missing_range(r) for r in _items(source.get('ranges'))) for source in device_gaps if source.get('id') not in missing_ids]
-    device_note = (('Brakujące odczyty urządzeń: ' if v.lang == 'pl' else 'Missing device readings: ') + '; '.join(device_lines)) if device_lines else ''
-    if device_note:
-        v.lines.append(device_note)
+        detail = stale_line if isinstance(stale_line, str) and stale_line.startswith(name + ' — ') else name
+        missing_lines.append(detail + (': ' + ranges if ranges else ''))
+    device_lines = []
+    for source in device_gaps:
+        if source.get('id') in missing_ids:
+            continue
+        name = str(source.get('name') or source.get('id') or '')
+        ranges = ', '.join(v.missing_range(r) for r in _items(source.get('ranges')))
+        detail = stale_line if isinstance(stale_line, str) and stale_line.startswith(name + ' — ') else name
+        device_lines.append(detail + (': ' + ranges if ranges else ''))
+    diagnostics = []
+    if not v.complete:
+        diagnostics.append(v.coverage_label())
+    if isinstance(stale_line, str) and stale_line and not any(stale_line in line for line in missing_lines + device_lines):
+        diagnostics.append(stale_line)
+    if missing_lines:
+        diagnostics.append(('Brakujące źródła: ' if v.lang == 'pl' else 'Missing sources: ') + '; '.join(missing_lines))
+    if device_lines:
+        diagnostics.append(('Brakujące odczyty urządzeń: ' if v.lang == 'pl' else 'Missing device readings: ') + '; '.join(device_lines))
+    facts = configuration_facts if isinstance(configuration_facts, dict) else model.get('configuration_facts', {})
+    if isinstance(facts, dict) and facts.get('grid_missing') is True:
+        diagnostics.append('Brak skonfigurowanego źródła poboru z sieci.' if v.lang == 'pl' else 'No grid import source is configured.')
+    if any(issue.get('code') == 'double_counting' for issue in _items(model.get('issues'))):
+        diagnostics.append('Pomiary urządzeń nakładają się lub przekraczają pobór z sieci.' if v.lang == 'pl' else 'Device measurements overlap or exceed grid import.')
+    if isinstance(facts, dict) and facts.get('grid_is_devices') is True:
+        diagnostics.append('Źródła sieci są tymi samymi licznikami co urządzenia.' if v.lang == 'pl' else 'Grid sources are the same meters as the devices.')
+    v.lines.extend(diagnostics)
+    diagnostic_html = ('<div data-section="diagnostics">' + ''.join(paragraph(note, margin='8px 0 0') for note in diagnostics) + '</div>') if diagnostics else ''
     blocks = ['<!-- block:3 -->' + section('<table role="presentation" width="100%"><tr>' + kpis + '</tr></table>' +
-        (paragraph(recorded_note, margin='8px 0 0') if recorded_note else '') +
-        ('<p data-role="stale-source" style="margin:8px 0 0"><strong>' + E(stale_line) + '</strong></p>' if isinstance(stale_line, str) and stale_line else '') +
-        (paragraph(missing_note, margin='8px 0 0') if missing_note else '') +
-        (paragraph(device_note, margin='8px 0 0') if device_note else ''), padding='16px 24px 0')]
+        (paragraph(recorded_note, margin='8px 0 0') if recorded_note else '') + diagnostic_html, padding='16px 24px 0')]
     if model.get('device_cost_basis') == 'purchase_price_excluding_pv':
         note = ('Koszty urządzeń są szacunkowe: według ceny zakupu, bez uwzględnienia PV i baterii.' if v.lang == 'pl'
                 else 'Device costs are estimates based on the purchase price, excluding solar and battery effects.')
@@ -739,8 +752,6 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
         note_text = v.chart_note() if note == 'chart_note' else v.tr(note) if note else ''
         blocks.append(f'<!-- block:{index} -->' + h2(v.tr(heading), note_text) + renderer())
     explanation = f'{v.tr("explain")} {v.tr("timezone")}: {timezone_name}.'
-    if v.double:
-        explanation += ' ' + v.tr('double') + '.'
     safe_url = safe_external_url(external_url)
     reading_note = (f'<p class="tx2" style="margin:12px 0 0;font:400 12px/18px {FONT};color:{L["tx2"]}">'
                     f'<b>{E(v.tr("read"))}</b> {E(explanation)}</p>')

@@ -193,7 +193,7 @@ class Build1MailEnergyTests(unittest.TestCase):
         self.model['coverage'].update(expected_hours=25, measured_hours=25)
         self.model['hourly'] = [dict(start='2026-10-25T02:00:00+02:00', hour=2, kwh=.2, prev_kwh=.1, zone='cheap'), dict(start='2026-10-25T02:00:00+01:00', hour=2, kwh=.3, prev_kwh=.2, zone='cheap')]
         result = self.render()
-        self.assertIn('(25/25 h)', result['text'])
+        self.assertNotIn('(25/25 h)', result['text'])
         self.assertIn('02:00 UTC+02:00', result['text'])
         self.assertIn('02:00 UTC+01:00', result['text'])
         self.assertEqual(result['html'].count('data-energy-bar='), 2)
@@ -275,7 +275,10 @@ class EnergyP1PresentationTests(Build1MailEnergyTests):
             for language in ('pl', 'en'):
                 result = self.render(language=language)
                 for output in (result['html'], result['text']):
-                    self.assertIn('23/24 h' if missing else '24/24 h', output)
+                    if missing:
+                        self.assertIn('23/24 h', output)
+                    else:
+                        self.assertNotIn('24/24 h', output)
                     if missing:
                         self.assertIn('Zarejestrowano ze źródeł' if language == 'pl' else 'Recorded from sources', output)
                     self.assertIn('Całodobowa' if language == 'pl' else 'All-day', output)
