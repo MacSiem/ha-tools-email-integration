@@ -67,7 +67,7 @@ class PartialSources(unittest.TestCase):
             if mode == 'partial': data['period']['kind'] = 'week'
             result = model.build_report(data)
             out = mail.render(result, language='en', timezone_name='UTC', hour_cycle='24')
-            self.assertEqual('partial data' in out['subject'], mode in ('partial','zero'))
+            self.assertNotIn('partial data', out['subject'])
             self.assertEqual('No data' in out['subject'], mode == 'none')
             if mode == 'partial':
                 self.assertEqual(result['daily'][0]['recorded_kwh'],24)
@@ -94,7 +94,7 @@ class PartialSources(unittest.TestCase):
         self.assertTrue(any(row['field']=='report_model.coverage.missing_devices.0.ranges.0.end' for row in rows))
         for lang in ('pl','en'):
             out = mail.render(result, language=lang, timezone_name='UTC', hour_cycle='24')
-            self.assertIn('niepełne dane urządzeń' if lang == 'pl' else 'incomplete device readings', out['subject'])
+            self.assertNotIn('niepełne dane urządzeń' if lang == 'pl' else 'incomplete device readings', out['subject'])
             self.assertIn('Brakujące odczyty urządzeń' if lang == 'pl' else 'Missing device readings', out['text'])
             self.assertIn('&lt;script&gt;B&lt;/script&gt;',out['html'])
 
@@ -122,7 +122,7 @@ class PartialSources(unittest.TestCase):
         result['devices'].insert(0, {'id':'other','name':'Smaller','kwh':2})
         for lang in ('pl','en'):
             out = mail.render(result, language=lang, timezone_name='UTC', hour_cycle='24')
-            self.assertIn('dane niepełne' if lang == 'pl' else 'partial data', out['subject'])
+            self.assertNotIn('dane niepełne' if lang == 'pl' else 'partial data', out['subject'])
             self.assertNotIn('Brak danych' if lang == 'pl' else 'No data', out['subject'])
             self.assertIn(('Urządzenie: A' if lang == 'pl' else 'Device: A'), out['subject'])
             self.assertIn('24', out['subject'])
@@ -198,6 +198,24 @@ class DiagnosticMailTests(unittest.TestCase):
                 delta_kwh=None, delta_pct=None, compared_current_kwh=None, compared_baseline_kwh=None)
             out = mail.render(diagnostic, language='en', timezone_name='UTC', hour_cycle='24')
             self.assertNotIn('+20%', out['text'])
+
+    def test_subject_preserves_comparison_and_leaves_gaps_in_body(self):
+        report = model.build_report(sample())
+        report['coverage'].update(measured_sources=43, expected_sources=44)
+        report['comparisons'] = [{'key': 'previous_day', 'coverage_ok': True,
+            'comparison_scope': 'common_measurements', 'delta_kwh': 2,
+            'delta_pct': 20, 'compared_current_kwh': 12, 'compared_baseline_kwh': 10, 'kwh': 10}]
+        for lang in ('pl', 'en'):
+            out = mail.render(report, language=lang, timezone_name='UTC', hour_cycle='24')
+            self.assertIn('+20', out['subject'])
+            self.assertIn('+20', out['preheader'])
+            for field in ('subject', 'preheader'):
+                self.assertNotIn('43', out[field])
+                self.assertNotIn('44', out[field])
+                self.assertNotIn('partial data', out[field])
+                self.assertNotIn('dane niepełne', out[field])
+            self.assertEqual(1, out['html'].count('data-section="diagnostics"'))
+            self.assertIn('43', out['text'])
 
     def test_time_gap_with_all_sources_never_claims_complete_source_coverage(self):
         report = model.build_report(sample(mode='partial'))

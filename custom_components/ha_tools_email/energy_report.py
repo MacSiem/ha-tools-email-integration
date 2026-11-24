@@ -680,7 +680,6 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
             if (comparison.get('status') == 'ready' and comparison.get('comparison_scope') == 'common_measurements'
                     and comparison.get('reason') is None
                     and number((comparison.get('coverage') or {}).get('common_source_seconds')) not in (None, 0)
-                    and (comparison.get('chart') or {}).get('reconciles_comparison_energy') is True
                     and number(comparison.get('delta_kwh'), signed=True) is not None):
                 value = amount(('comparisons', kind, 'delta_kwh'))
                 if number(comparison.get('percent'), signed=True) is not None:
@@ -1047,8 +1046,6 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
             tr('Wzrost', 'Increase') if delta is not None and delta > 0 else
             tr('Bez zmian', 'No change') if delta == 0 else tr('Zmiana', 'Change'))
         change = direction + ': ' + amount((*cp, 'delta_kwh'))
-        coverage = comparison.get('coverage') or {}
-        covered = [coverage.get('current'), *(coverage.get('baselines') or [coverage.get('baseline')])]
         comparable = (comparison.get('status') == 'ready' and comparison.get('reason') is None
             and comparison.get('comparison_scope') in ('calendar_totals', 'common_measurements'))
         if comparable and number(comparison.get('percent'), signed=True) is not None:
@@ -1057,11 +1054,6 @@ def render_energy_analysis(snapshot, *, language, timezone_name, hour_cycle, dat
             change += ' · ' + tr('Brak porównywalnego procentu', 'No comparable percentage')
         if comparison.get('status') != 'ready':
             change += ' · ' + exact((*cp, 'status'))
-        def coverage_percent(value):
-            ratio = number(value)
-            return compact_number(ratio * 100, unknown, 0) + '%' if ratio is not None and ratio <= 1 else unknown
-        baseline_coverage = [number(value) for value in covered[1:]]
-        baseline_minimum = min(baseline_coverage) if baseline_coverage and None not in baseline_coverage else None
         text_parts.append(change)
         html_parts.append('<tr><td colspan="3" class="note">' + escape(change + ' · ' + scope) + '</td></tr>')
         costs = comparison.get('costs') or {}

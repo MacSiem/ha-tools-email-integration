@@ -158,7 +158,7 @@ class _View:
 
     def change(self, comparison):
         value = comparison.get('delta_pct')
-        if (self.complete or comparison.get('comparison_scope') == 'common_measurements') and comparison.get('coverage_ok') is True and _numeric(value):
+        if (self.complete or comparison.get('comparison_scope') in ('calendar_totals', 'common_measurements')) and comparison.get('coverage_ok') is True and _numeric(value):
             return fmt.percent(value, role='change', language=self.lang)
         return None
 
@@ -340,7 +340,7 @@ class _View:
             cls = 'warn' if known and delta > 0 else 'good' if known and delta < 0 else 'tx2'
             arrow = '▲ ' if known and delta > 0 else '▼ ' if known and delta < 0 else ''
             change = self.change(c)
-            change_text = f' ({change})' if change else f' ({self.tr("partial")})' if not c.get('coverage_ok') or not self.complete else ' (—)'
+            change_text = f' ({change})' if change else f' ({self.tr("partial")})' if not c.get('coverage_ok') else ' (—)'
             quantity = self.n(delta, 2 if self.kind == 'day' else 1, signed=True) + ' kWh' if known else '—'
             value = arrow + quantity + change_text
             description = f'vs {self.comparison_label(c)}'
@@ -674,17 +674,10 @@ def render(model, *, language, timezone_name, hour_cycle, date_language=None, ex
         pre_parts.append(f'{v.tr("top")}: {v.item_name(top)} {v.energy(top.get("kwh"), "tile")}')
     preheader = ' · '.join(p for p in pre_parts if p)
     device_gaps = _items(v.coverage.get('missing_devices'))
-    subject_prefix = (('niepełne dane urządzeń' if v.lang == 'pl' else 'incomplete device readings') if v.complete and device_gaps else '') or ((v.tr('no_data') if v.coverage.get('status') == 'no_data' or v.coverage.get('status') is None and not _numeric(available) else v.tr('partial')) if not v.complete else '')
-    subject_summary = summary if v.complete or _numeric(available) else ''
-    subject = f'{v.tr("energy")}: {v.subject_label()} — ' + (subject_prefix + (' — ' if subject_summary else '') if subject_prefix else '') + subject_summary + (f' ({change})' if change else '')
-    measured_sources = v.coverage.get('measured_sources')
-    expected_sources = v.coverage.get('expected_sources')
-    if not v.complete and type(measured_sources) is int and type(expected_sources) is int and _numeric(available):
-        missing_count = max(0, expected_sources - measured_sources)
-        unit = fmt.plural(missing_count, 'źródła', 'źródeł', 'źródeł', language='pl')
-        missing_label = ((f'bez {missing_count} {unit}' if v.lang == 'pl' else f'{missing_count} missing {"source" if missing_count == 1 else "sources"}')
-                         if missing_count else ('niepełne pokrycie' if v.lang == 'pl' else 'partial coverage'))
-        subject = f'{v.tr("energy")}: {v.subject_label()} — {pre_summary} · {missing_label}'
+    # Keep the subject about available numbers; report gaps once in diagnostics.
+    # If no readings exist, give the recipient a useful natural fallback.
+    subject_summary = summary if _numeric(available) else v.tr('no_data')
+    subject = f'{v.tr("energy")}: {v.subject_label()} — {subject_summary}' + (f' ({change})' if change else '')
     kpis = (kpi_cell(partial_label, v.n(available), 'kWh', comparison, 'warn' if _numeric(first.get('delta_kwh')) and first['delta_kwh'] > 0 and change else 'good' if change else 'tx2')
             + '<td class="kpigap" style="width:2%"></td>'
             + kpi_cell(('Koszt znanych odczytów' if v.lang == 'pl' else 'Known readings cost') if not v.complete else v.tr('usage'), v.n(available_cost, 2), 'zł' if v.lang == 'pl' and v.currency == 'PLN' else str(v.currency or ''), '' if not v.complete else v.rate(v.totals.get('effective_rate')))
